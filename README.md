@@ -1,49 +1,76 @@
-# Tidal Mini-Player & DJ Audio Booster (Chrome Extension)
+# Universal Mini-Player & DJ Bass Booster (Chrome extension, MV3)
 
-A Chrome extension for **Tidal Web Player** (`listen.tidal.com`) and any music tab in Google Chrome, featuring:
-1. **macOS Always-On-Top Floating Mini-Player**: Uses Chrome's native **Document Picture-in-Picture API** (`documentPictureInPicture`). Floats over all macOS applications with live artwork, scrub bar, and transport controls.
-2. **DJ-Grade Audio Engine**:
-   - **Punchy Bass Boost** (Low-shelf @ 100Hz + Sub-peak @ 65Hz) with warm analog-style soft limiting.
-   - **HPF (High-Pass Filter / Anti-Distortion)**: Just like the DJ extension you use, nudge this slider to the right (e.g. 50–80Hz) to cut out sub-audible rumble and immediately eliminate speaker distortion/buzzing when the bass is cranked!
-   - **Vocals (Mid) & Sparkle (High)**: Dedicated knobs to bring out vocal presence and crisp high frequencies.
-   - **Auto-Balancing (Smart Leveler)**: One-click dynamic range compression that automatically levels out loud vs quiet tracks so you never have to adjust volume between songs or tweak complex compressor ratios/attacks.
-   - **Volume Booster**: Up to 400% gain with zero digital harshness.
-   - **Pitch / Speed Slider**: DJ-style tempo adjustment.
-3. **Saved States & Presets**:
-   - Built-in presets: *Punchy Bass & Clarity*, *Deep Bass Head*, *Clean DJ (Anti-Distortion)*, *Vocal Focus*, *Flat (Bypass)*.
-   - **+ Save State**: Save your own custom configurations by name with a single click.
-4. **Smart Playlist Manager**:
-   - Lists your Tidal playlists.
-   - **Pre-checkmarks** any playlist that already contains the currently playing song to prevent duplicate additions.
-   - Check or uncheck a playlist to instantly add or remove the track.
+A Tidal-first mini-player and tab-audio enhancer for Google Chrome on macOS.
 
----
+- **Audio EQ**: captures one tab's audio and runs it through anti-distortion HPF → bass low-shelf (120 Hz) → mid (1 kHz) → high-shelf (5 kHz) → optional Auto-Balancing compressor → master gain (50–250 %) → limiter → −0.3 dBFS output ceiling. It includes presets (8 factory + your own), a true-bypass *Flat* preset, and per-stage A/B bypass in the Physics drawer.
+- **Player controls** for Tidal (read from Tidal's bottom player bar) or any tab's audio/video: play/pause, previous/next, favorite, seek bar with 25 % ticks, −25 %/+25 % skip, page volume, and Pitch/Speed.
+- **Mini-player surfaces**: toolbar popup, Micro mode, Wide mode, an undocked window, an in-page floating button (off by default), and a Document Picture-in-Picture window opened from that button.
+- **Playlists / Playlist Lab** (Tidal): set operations across playlists (only-in-A, overlap, either-but-not-both, all unique) and “Create New Playlist in Tidal”.
 
-## 🚀 How to Install in Chrome on macOS
+Current status, evidence and known gaps: [REVIEW_READY.md](REVIEW_READY.md) and [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md).
 
-1. Open Google Chrome.
-2. In the URL bar, go to: `chrome://extensions`
-3. Toggle on **Developer mode** in the top-right corner.
-4. Click **Load unpacked** in the top-left corner.
-5. Select this folder:
-   `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension`
-6. Pin the extension to your Chrome toolbar for quick access!
+## Folders
 
----
+| Path | What it is |
+|---|---|
+| repo root | **Source**. It also loads as an unpacked extension, but that isn't the review path. |
+| `build/review-unpacked/` | **The build to load in Chrome for review** (gitignored). Contains `BUILD_INFO.json` with source commit and fingerprint. |
+| `tools/build.mjs` | Copies only runtime files into a build folder and writes `BUILD_INFO.json`. |
+| `tests/` | Test harness (own `package.json`; nothing here ships). |
+| `docs/` | Assessment, plan and acceptance, design decisions, design review map. |
+| `FINAL_HANDOFF.md`, `SESSION_HANDOFF.md` | **Historical** handoffs from the old project. Their paths under `…/T3 Code/t3-nightly-toy/` are historical. |
 
-## 🎧 How to Use
+Old location (reference only, never edited): `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension`. Your everyday Chrome install still points there.
 
-### 1. Launching the Mini-Player
-* **Option A (From Tidal)**: Open [listen.tidal.com](https://listen.tidal.com). You will see a floating **"🎛️ Mini-Player"** button in the bottom-right corner. Click it to launch the native macOS always-on-top floating window!
-* **Option B (From Chrome Toolbar)**: Click the extension icon in Chrome's toolbar, then click **"🎛️ Pop Out Mini-Player"**.
+## Build
 
-### 2. DJ Audio & Bass Boost
-* **Bass Boost**: Increase to add deep, warm sub-bass punch.
-* **HPF (Anti-Distortion Filter)**: If you crank the bass and hear rattle, buzz, or distortion from your headphones/speakers, **nudge the HPF slider to the right**. This filters out extreme subsonic frequencies and tightens up the kick!
-* **Auto-Balancing**: Toggle this switch to automatically equalize volume levels between different tracks.
-* **Save State**: Click **"+ Save State"** in the popup to name and store your favorite settings.
+No dependencies are needed to build.
 
-### 3. Playlist Management
-* Inside the Mini-Player, switch to the **"📂 MY PLAYLISTS"** tab.
-* Any playlist that already contains the song will have a checkmark and an **"Already Added"** badge.
-* Click any checkbox to add or remove the song instantly.
+```bash
+cd ~/Documents/ChatGPT/tidal-miniplayer-extension
+node tools/build.mjs build/review-unpacked     # refresh the review build from the current source
+```
+
+Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome is using. After rebuilding, click **Reload** on the extension's card in `chrome://extensions`. A source change never reloads Chrome by itself.
+
+## Load for review (recommended: a separate Chrome profile)
+
+1. In Chrome, open the profile menu, choose **Add**, then **Continue without an account**, and name it *Extension Review*.
+2. In that profile's window, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose
+   `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`.
+3. Check the card shows version **1.1.1** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
+
+Why a separate profile: an unpacked extension's ID comes from its folder, so the review build is a **different extension** from your live 1.1.0 install. It has its own empty settings, and your custom presets are *not* copied. In the same profile, both copies would inject into every page. Chrome also lets only one of them capture a given tab. For Tidal features in the review profile, sign in to Tidal there.
+
+## Everyday use
+
+- **Turn the EQ on**: go to the tab that is playing, click the extension icon, and switch **AUDIO EQ** on. Chrome only lets the extension capture a tab you opened it on. If it refuses, the message tells you which tab to switch to.
+- **Stop**: switch **AUDIO EQ** off, or close the tab. The tab's normal audio returns.
+- **Shortcuts** (change them at `chrome://extensions/shortcuts`): **Alt+M** shows or hides the standalone mini-player window. **Alt+E** toggles the EQ.
+- **Always-on-top PiP**: Chrome only opens Document Picture-in-Picture from a click *inside the page*. Turn on **Floating Button** and click it on the Tidal page. The popup's 📌 button and Alt+M open the standalone window instead.
+- **Double-click** any value (e.g. `+5.0 dB`) to snap it to neutral; double-click again to restore it. Use the **− / +** buttons to nudge, and **Shift**-click for 5× finer steps.
+
+## Tests (isolated, synthetic, no network)
+
+```bash
+cd tests && npm install --ignore-scripts   # one-time: playwright-core only (no install scripts)
+npm test                                    # static checks: manifest, commands, permissions, syntax
+node ../tools/build.mjs /tmp/tme-build && node browser/run.mjs /tmp/tme-build --label local
+```
+
+The browser harness uses Playwright's *Chrome for Testing* with a **fresh temporary profile**. It blocks every hostname except its own localhost fixture server, **mutes audio output**, and plays only generated sine tones and a fake Tidal page. It never touches your Chrome profile or Tidal. Tab capture is authorised with `--allowlisted-extension-id`, which stands in for the toolbar click that automation can't perform. Results go to `tests/results/<label>/` (gitignored).
+
+**Safe manual listening test**: keep system and headphone volume where they already are. Use a quiet YouTube or Tidal track, start from the *Flat (Bypass)* preset, then raise Bass gradually.
+
+## Permissions and privacy
+
+- `tabCapture`, `offscreen`: EQ processing of the tab you choose. Audio stays in Chrome and is never recorded or uploaded.
+- `tabs`, `activeTab`, `scripting`, `<all_urls>`: find the media tab, read the track shown on the page, and re-inject controls into tabs opened before an update.
+- `storage`: `chrome.storage.local` only (no sync). Keys: `presets`, `currentPreset`, `currentParams`, `showFloatingButton*`, `visualTheme`, `capturedTabId`, `isAudioCapturing`.
+- **Tidal**: the Playlist features use your existing Tidal page session, read from the Tidal tab. Requests go only to Tidal. No other network endpoints exist.
+
+## Recovery
+
+- Everyday install: unchanged; it still loads from the old folder.
+- Extraction baseline: git tag `v1.1.0-extraction-baseline` (`1b7bedb`). A checksummed backup is under `…/t3-nightly-toy/backups/pre-extraction-backup/`.
+- To drop the review copy: remove it from the *Extension Review* profile (or delete that profile). Nothing else is affected.

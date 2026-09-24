@@ -496,7 +496,28 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     if (typeof isCapturing === 'boolean') {
       this.isCapturing = isCapturing;
     }
+    this.syncStageButtons();
     this.updateReadout();
+  }
+
+  // Reflect saved A/B bypass state on the stage buttons (e.g. when the popup is reopened).
+  syncStageButtons() {
+    if (!this.drawer) return;
+    const bypass = this.currentParams.stageBypass || {};
+    [['toggle-stage-hpf', 'hpf'], ['toggle-stage-eq', 'eq'], ['toggle-stage-comp', 'comp'], ['toggle-stage-gain', 'gain']]
+      .forEach(([btnId, key]) => {
+        const btn = this.drawer.querySelector(`#${btnId}`);
+        if (!btn) return;
+        if (bypass[key]) {
+          btn.className = 'stage-toggle-btn bypassed';
+          btn.textContent = '○ BYPASS';
+          btn.title = 'Stage bypassed. Click to enable.';
+        } else {
+          btn.className = 'stage-toggle-btn active';
+          btn.textContent = '● ON';
+          btn.title = 'Stage active. Click to bypass for A/B testing.';
+        }
+      });
   }
 
   updateReadout() {
@@ -508,7 +529,7 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     const midStr = bypass.eq ? '<span style="color:#777">Flat</span>' : `<span>${(p.mid >= 0 ? '+' : '') + parseFloat(p.mid || 0).toFixed(1)} dB</span>`;
     const highStr = bypass.eq ? '<span style="color:#777">Flat</span>' : `<span>${(p.high >= 0 ? '+' : '') + parseFloat(p.high || 0).toFixed(1)} dB</span>`;
 
-    this.readoutEl.innerHTML = `HPF: ${hpfStr} | Bass: ${bassStr} @ 65Hz | Mid: ${midStr} | High: ${highStr}`;
+    this.readoutEl.innerHTML = `HPF: ${hpfStr} | Bass: ${bassStr} @ 120 Hz | Mid: ${midStr} | High: ${highStr}`;
   }
 
   toggle() {

@@ -1,0 +1,13 @@
+{
+  "name": "tidal-miniplayer-extension-tests",
+  "private": true,
+  "type": "module",
+  "description": "Isolated browser/unit test harness. Not part of the extension build.",
+  "scripts": {
+    "test": "node --test unit/",
+    "test:browser": "node browser/run.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.63.0"
+  }
+}

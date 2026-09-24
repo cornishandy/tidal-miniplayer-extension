@@ -82,7 +82,6 @@ const labCountRes = document.getElementById('lab-count-res');
 const labTableBody = document.getElementById('lab-table-body');
 const labNewPlName = document.getElementById('lab-new-pl-name');
 const labBtnCreate = document.getElementById('lab-btn-create');
-const labBtnTrackCount = document.getElementById('lab-btn-track-count');
 
 // EQ Sliders
 const sliderBass = document.getElementById('slider-bass');
@@ -128,9 +127,15 @@ if (btnSizeToggle) {
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
 let currentThemeIndex = 0;
 
+// Swap only the theme class so layout classes (size-wide, micro-mode) survive.
+function applyTheme(theme) {
+  document.body.classList.remove(...THEMES);
+  document.body.classList.add(theme);
+}
+
 chrome.storage.local.get('visualTheme', (data) => {
   if (data.visualTheme) {
-    document.body.className = data.visualTheme;
+    applyTheme(data.visualTheme);
     currentThemeIndex = THEMES.indexOf(data.visualTheme);
     if (currentThemeIndex === -1) currentThemeIndex = 0;
   }
@@ -139,7 +144,7 @@ chrome.storage.local.get('visualTheme', (data) => {
 btnThemeToggle.onclick = () => {
   currentThemeIndex = (currentThemeIndex + 1) % THEMES.length;
   const newTheme = THEMES[currentThemeIndex];
-  document.body.className = newTheme;
+  applyTheme(newTheme);
   chrome.storage.local.set({ visualTheme: newTheme });
 };
 
@@ -440,6 +445,23 @@ tabBtnLab.onclick = () => {
   initPlaylistLab();
 };
 
+// Where playlist data came from, in plain words. Empty string = real Tidal data, nothing to flag.
+function describeSource(source) {
+  if (source === 'demo') return 'DEMO DATA: sample playlists, not your Tidal library. Open Tidal in a tab to use your own.';
+  if (source === 'page-links') return 'Playlist names were read from the Tidal page. Track counts are not available.';
+  return '';
+}
+
+function showNotice(el, text, isError = false) {
+  if (!el) return;
+  el.textContent = text || '';
+  el.style.display = text ? 'block' : 'none';
+  el.classList.toggle('is-error', !!isError);
+}
+
+const plDataNotice = document.getElementById('pl-data-notice');
+const labDataNotice = document.getElementById('lab-data-notice');
+
 // 7. Playlists Manager
 async function loadPlaylists() {
   popupPlaylistContainer.innerHTML = `
@@ -453,6 +475,7 @@ async function loadPlaylists() {
     command: { type: 'FETCH_USER_PLAYLISTS' }
   }, async (res) => {
     if (!res || !res.playlists || res.playlists.length === 0) {
+      showNotice(plDataNotice, res?.error || '', !!res?.error);
       popupPlaylistContainer.innerHTML = `
         <div style="text-align: center; color: var(--text-muted, #777); font-size: 11px; padding: 25px 10px; line-height: 1.5;">
           No Tidal playlists detected.<br>
@@ -463,6 +486,7 @@ async function loadPlaylists() {
     }
 
     const playlists = res.playlists;
+    showNotice(plDataNotice, describeSource(res.source));
     popupPlaylistContainer.innerHTML = '';
 
     playlists.forEach(pl => {
@@ -470,13 +494,18 @@ async function loadPlaylists() {
       item.className = 'playlist-item';
       item.innerHTML = `
         <div>
-          <div class="pl-title">${pl.title || 'Untitled Playlist'}</div>
-          <div class="pl-count">${pl.numberOfTracks || 0} tracks</div>
+          <div class="pl-title"></div>
+          <div class="pl-count"></div>
         </div>
-        <input type="checkbox" class="pl-checkbox" data-uuid="${pl.uuid}">
+        <input type="checkbox" class="pl-checkbox">
       `;
+      // Titles come from Tidal/page data: always insert as text.
+      item.querySelector('.pl-title').textContent = pl.title || 'Untitled Playlist';
+      item.querySelector('.pl-count').textContent =
+        typeof pl.numberOfTracks === 'number' ? `${pl.numberOfTracks} tracks` : 'track count unknown';
 
       const cb = item.querySelector('.pl-checkbox');
+      cb.dataset.uuid = pl.uuid;
 
       chrome.runtime.sendMessage({
         type: 'FORWARD_PLAYER_COMMAND',
@@ -500,9 +529,15 @@ async function loadPlaylists() {
             type: willAdd ? 'ADD_TO_PLAYLIST' : 'REMOVE_FROM_PLAYLIST',
             playlistUuid: pl.uuid
           }
-        }, () => {
+        }, (addRes) => {
           cb.disabled = false;
-          loadPlaylists();
+          if (addRes?.success) {
+            loadPlaylists();
+          } else {
+            // Nothing changed in Tidal: put the checkbox back and say why.
+            cb.checked = !willAdd;
+            showNotice(plDataNotice, addRes?.error || 'Tidal did not confirm the change.', true);
+          }
         });
       };
 
@@ -521,14 +556,21 @@ let labTracksC = [];
 let labComputedTracks = [];
 let labCurrentOp = 'diff'; // 'diff', 'intersect', 'disunion', 'union'
 let labCurrentSort = { col: 'idx', asc: true };
+let labSourceNote = '';
+const labKey = (t) => t.id || (t.title || '').toLowerCase();
 
 async function initPlaylistLab() {
   chrome.runtime.sendMessage({
     type: 'FORWARD_PLAYER_COMMAND',
     command: { type: 'FETCH_USER_PLAYLISTS' }
   }, (res) => {
-    if (!res || !res.playlists) return;
+    if (!res || !res.playlists || res.playlists.length === 0) {
+      showNotice(labDataNotice, res?.error || 'No Tidal playlists detected. Open Tidal in a tab and try again.', true);
+      return;
+    }
     labAllPlaylists = res.playlists;
+    labSourceNote = describeSource(res.source);
+    showNotice(labDataNotice, labSourceNote);
 
     populateLabDropdown(labSelectA, 'Select Base Playlist (A)', 'A+');
     populateLabDropdown(labSelectB, 'Select Filter Playlist (B)', 'Super A+');
@@ -543,15 +585,21 @@ function populateLabDropdown(selectEl, defaultText, autoSelectName) {
   selectEl.innerHTML = `<option value="">${defaultText}</option>`;
   let matchUuid = '';
 
+  const wanted = (autoSelectName || '').toLowerCase();
   labAllPlaylists.forEach(pl => {
     const opt = document.createElement('option');
     opt.value = pl.uuid;
-    opt.textContent = `${pl.title} (${pl.numberOfTracks || 0} tracks)`;
-    if (autoSelectName && pl.title.toLowerCase().includes(autoSelectName.toLowerCase())) {
-      matchUuid = pl.uuid;
-    }
+    const count = typeof pl.numberOfTracks === 'number' ? `${pl.numberOfTracks} tracks` : 'count unknown';
+    opt.textContent = `${pl.title} (${count})`;
     selectEl.appendChild(opt);
   });
+
+  // Exact title match first ("A+" must not pick "Super A+"), then the first partial match.
+  if (wanted) {
+    const exact = labAllPlaylists.find(pl => (pl.title || '').toLowerCase() === wanted);
+    const partial = labAllPlaylists.find(pl => (pl.title || '').toLowerCase().includes(wanted));
+    matchUuid = (exact || partial)?.uuid || '';
+  }
 
   if (matchUuid) selectEl.value = matchUuid;
 }
@@ -591,6 +639,8 @@ function setupLabListeners() {
   labBtnCreate.onclick = handleCreateLabPlaylist;
 }
 
+let labTrackErrors = [];
+
 async function fetchTracksForUuid(uuid) {
   if (!uuid) return [];
   return new Promise((resolve) => {
@@ -598,6 +648,7 @@ async function fetchTracksForUuid(uuid) {
       type: 'FORWARD_PLAYER_COMMAND',
       command: { type: 'FETCH_PLAYLIST_TRACKS', playlistUuid: uuid }
     }, (res) => {
+      if (res?.error) labTrackErrors.push(res.error);
       resolve(res?.tracks || []);
     });
   });
@@ -608,34 +659,39 @@ async function recalculateLab() {
   const uuidB = labSelectB.value;
   const uuidC = labSelectC.value;
 
+  labTrackErrors = [];
   labTracksA = await fetchTracksForUuid(uuidA);
   labTracksB = await fetchTracksForUuid(uuidB);
   labTracksC = await fetchTracksForUuid(uuidC);
 
+  const trackError = [...new Set(labTrackErrors)].join(' ');
+  showNotice(labDataNotice, trackError || labSourceNote, !!trackError);
+
   labCountA.textContent = labTracksA.length;
   labCountB.textContent = labTracksB.length;
 
-  const setBIds = new Set(labTracksB.map(t => t.id || t.title.toLowerCase()));
-  const setCIds = new Set(labTracksC.map(t => t.id || t.title.toLowerCase()));
+  const setBIds = new Set(labTracksB.map(labKey));
+  const setCIds = new Set(labTracksC.map(labKey));
 
   const nameA = labSelectA.options[labSelectA.selectedIndex]?.text.split(' (')[0] || 'A';
   const nameB = labSelectB.options[labSelectB.selectedIndex]?.text.split(' (')[0] || 'B';
 
   if (labCurrentOp === 'diff') {
-    labComputedTracks = labTracksA.filter(t => !setBIds.has(t.id || t.title.toLowerCase()) && !setCIds.has(t.id || t.title.toLowerCase()));
+    labComputedTracks = labTracksA.filter(t => !setBIds.has(labKey(t)) && !setCIds.has(labKey(t)));
     labNewPlName.value = `Only ${nameA} (not in ${nameB})`;
   } else if (labCurrentOp === 'intersect') {
-    labComputedTracks = labTracksA.filter(t => setBIds.has(t.id || t.title.toLowerCase()));
+    labComputedTracks = labTracksA.filter(t => setBIds.has(labKey(t)));
     labNewPlName.value = `Common (${nameA} ∩ ${nameB})`;
   } else if (labCurrentOp === 'disunion') {
-    const onlyA = labTracksA.filter(t => !setBIds.has(t.id || t.title.toLowerCase()));
-    const onlyB = labTracksB.filter(t => !new Set(labTracksA.map(a => a.id || a.title.toLowerCase())).has(t.id || t.title.toLowerCase()));
+    const setAIds = new Set(labTracksA.map(labKey));
+    const onlyA = labTracksA.filter(t => !setBIds.has(labKey(t)));
+    const onlyB = labTracksB.filter(t => !setAIds.has(labKey(t)));
     labComputedTracks = [...onlyA, ...onlyB];
     labNewPlName.value = `Exclusive (${nameA} Δ ${nameB})`;
   } else if (labCurrentOp === 'union') {
     const map = new Map();
     [...labTracksA, ...labTracksB, ...labTracksC].forEach(t => {
-      const key = t.id || t.title.toLowerCase();
+      const key = labKey(t);
       if (!map.has(key)) map.set(key, t);
     });
     labComputedTracks = Array.from(map.values());
@@ -643,7 +699,8 @@ async function recalculateLab() {
   }
 
   labCountRes.textContent = labComputedTracks.length;
-  labBtnTrackCount.textContent = labComputedTracks.length;
+  // Look the span up each time: the Create button rebuilds its contents after use.
+  document.getElementById('lab-btn-track-count').textContent = labComputedTracks.length;
 
   renderLabTable();
 }
@@ -686,14 +743,22 @@ function renderLabTable() {
   labTableBody.innerHTML = '';
   sorted.forEach((track, idx) => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `
-      <td style="color:#666;">${idx + 1}</td>
-      <td style="font-weight:600; color:#fff;" title="${track.title}">${track.title}</td>
-      <td style="color:#aaa;" title="${track.artist}">${track.artist}</td>
-      <td style="color:var(--accent, #00e5ff); font-weight:700;">${track.bpm || '-'}</td>
-      <td style="color:#ffcc00; font-weight:700;">${track.key || '-'}</td>
-      <td style="color:#777;">${(track.dateAdded || '').slice(0, 10)}</td>
-    `;
+    // Track data comes from Tidal: build cells as text, never as HTML.
+    const cells = [
+      [String(idx + 1), 'color:#666;'],
+      [track.title || '', 'font-weight:600; color:#fff;', true],
+      [track.artist || '', 'color:#aaa;', true],
+      [track.bpm ? String(track.bpm) : '-', 'color:var(--accent, #00e5ff); font-weight:700;'],
+      [track.key || '-', 'color:#ffcc00; font-weight:700;'],
+      [(track.dateAdded || '').slice(0, 10) || '-', 'color:#777;']
+    ];
+    cells.forEach(([text, style, withTitle]) => {
+      const td = document.createElement('td');
+      td.style.cssText = style;
+      td.textContent = text;
+      if (withTitle) td.title = text;
+      tr.appendChild(td);
+    });
     labTableBody.appendChild(tr);
   });
 }
@@ -722,12 +787,16 @@ function handleCreateLabPlaylist() {
     }
   }, (res) => {
     labBtnCreate.disabled = false;
-    labBtnCreate.innerHTML = `✨ Create New Playlist in Tidal (<span id="lab-btn-track-count">${labComputedTracks.length}</span> tracks)`;
+    labBtnCreate.textContent = '✨ Create New Playlist in Tidal (';
+    const countSpan = document.createElement('span');
+    countSpan.id = 'lab-btn-track-count';
+    countSpan.textContent = labComputedTracks.length;
+    labBtnCreate.append(countSpan, ' tracks)');
 
     if (res?.success) {
-      alert(`🎉 Successfully created brand new playlist "${name}" with ${labComputedTracks.length} tracks in your Tidal library!\n\n(Original playlists were completely untouched).`);
+      alert(`Created playlist "${name}" with ${trackIds.length} tracks in your Tidal library.\n\n(Original playlists were not changed.)`);
     } else {
-      alert(`Could not create playlist: ${res?.error || 'Unknown error'}`);
+      alert(`Nothing was created. ${res?.error || 'Tidal did not confirm the playlist.'}`);
     }
   });
 }
@@ -934,7 +1003,11 @@ btnDeletePreset.onclick = () => {
 };
 
 btnResetDefaults.onclick = () => {
-  if (confirm(`Restore default factory settings for "${currentPresetName}"?`)) {
+  const isFactory = factoryPresetNames.includes(currentPresetName);
+  const question = isFactory
+    ? `Restore default factory settings for "${currentPresetName}"?`
+    : `Discard unsaved changes and go back to the saved values of "${currentPresetName}"?\n\n(Your custom presets are kept.)`;
+  if (confirm(question)) {
     chrome.runtime.sendMessage({
       type: 'RESET_DEFAULT_PRESETS',
       currentPreset: currentPresetName
@@ -994,7 +1067,9 @@ function getParamsFromUI() {
     gain: parseFloat(sliderGain.value),
     pitch: parseFloat(sliderPitch.value),
     autoBalance: toggleAutoBalance.checked,
-    bypass: isBypass
+    bypass: isBypass,
+    // Keep the Physics drawer's A/B stage bypass with every save so it is not silently dropped.
+    stageBypass: { ...routerVisualizer.currentParams.stageBypass }
   };
 }
 

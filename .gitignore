@@ -28,3 +28,6 @@ build/
 *.key
 *.pub
 .env*
+
+# Test harness output (screenshots, JSON results)
+tests/results/

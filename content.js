@@ -237,17 +237,24 @@
   }
 
   // 2. Playlists Automation & Set-Theory Track Engine
+  //
+  // Every response carries `source` so the UI can say where data came from:
+  //   'tidal-api'  - read from Tidal with the page's own session
+  //   'page-links' - playlist titles scraped from links on the Tidal page (no track counts)
+  //   'demo'       - built-in sample data, shown only when no Tidal tab is available
+  //   'none'       - nothing could be read (with `error`)
+  // Nothing is ever invented for a real Tidal playlist.
+  const DEMO_PLAYLISTS = [
+    { uuid: 'pl-a-plus', title: 'A+', numberOfTracks: 7 },
+    { uuid: 'pl-super-a', title: 'Super A+', numberOfTracks: 4 },
+    { uuid: 'pl-andy', title: 'Andy', numberOfTracks: 3 },
+    { uuid: 'pl-showcase', title: 'Showcase', numberOfTracks: 2 }
+  ];
+  const isDemoUuid = (uuid) => DEMO_PLAYLISTS.some(p => p.uuid === uuid);
+
   async function fetchUserPlaylists() {
     if (!isTidal) {
-      // Demo / Fallback playlists if not on Tidal
-      return {
-        playlists: [
-          { uuid: 'pl-a-plus', title: 'A+', numberOfTracks: 42 },
-          { uuid: 'pl-super-a', title: 'Super A+', numberOfTracks: 28 },
-          { uuid: 'pl-andy', title: 'Andy', numberOfTracks: 35 },
-          { uuid: 'pl-showcase', title: 'Showcase', numberOfTracks: 19 }
-        ]
-      };
+      return { playlists: DEMO_PLAYLISTS, source: 'demo' };
     }
 
     const session = getTidalSession();
@@ -260,6 +267,7 @@
           const data = await resp.json();
           if (data.items) {
             return {
+              source: 'tidal-api',
               playlists: data.items.map(p => ({
                 uuid: p.uuid,
                 title: p.title,
@@ -285,22 +293,21 @@
         const uuid = match[1];
         const title = a.textContent.trim() || 'Playlist';
         if (!map.has(uuid) && title.length > 0 && !title.includes('Create Playlist')) {
-          map.set(uuid, { uuid, title, numberOfTracks: 0 });
+          map.set(uuid, { uuid, title, numberOfTracks: null });
         }
       }
     });
 
     const list = Array.from(map.values());
     if (list.length === 0) {
-      list.push(
-        { uuid: 'pl-a-plus', title: 'A+', numberOfTracks: 42 },
-        { uuid: 'pl-super-a', title: 'Super A+', numberOfTracks: 28 },
-        { uuid: 'pl-andy', title: 'Andy', numberOfTracks: 35 },
-        { uuid: 'pl-showcase', title: 'Showcase', numberOfTracks: 19 }
-      );
+      return {
+        playlists: [],
+        source: 'none',
+        error: 'No playlists could be read from Tidal. Make sure you are signed in and your playlists are visible in the Tidal sidebar.'
+      };
     }
 
-    return { playlists: list };
+    return { playlists: list, source: 'page-links' };
   }
 
   // Fetch tracks for a specific playlist
@@ -315,7 +322,8 @@
           const data = await resp.json();
           if (data.items) {
             return {
-              tracks: data.items.map((item, idx) => {
+              source: 'tidal-api',
+              tracks: data.items.map((item) => {
                 const t = item.item || item;
                 return {
                   id: t.id,
@@ -323,9 +331,9 @@
                   artist: t.artist?.name || (t.artists && t.artists[0]?.name) || 'Unknown Artist',
                   album: t.album?.title || '',
                   duration: t.duration || 0,
-                  bpm: t.bpm || (120 + ((t.id || idx) % 12)),
-                  key: t.key || ['8A', '11B', '4A', '5B', '9A', '2B'][(t.id || idx) % 6],
-                  dateAdded: item.dateAdded || new Date().toISOString()
+                  bpm: t.bpm || null,
+                  key: t.key || null,
+                  dateAdded: item.dateAdded || null
                 };
               })
             };
@@ -334,7 +342,15 @@
       } catch (e) {}
     }
 
-    // Realistic mock track database for playlist set operations
+    if (!isDemoUuid(uuid)) {
+      return {
+        tracks: [],
+        source: 'none',
+        error: 'Could not read this playlist\'s tracks from Tidal. Nothing is shown rather than guessing.'
+      };
+    }
+
+    // Built-in sample tracks for the demo playlists only
     const mockDb = {
       'pl-a-plus': [
         { id: 101, title: 'Midnight City', artist: 'M83', bpm: 105, key: '11B', dateAdded: '2026-03-12', duration: 243 },
@@ -362,71 +378,70 @@
       ]
     };
 
-    const tracks = mockDb[uuid] || [
-      { id: 201, title: 'Deep Tech Groove', artist: 'DJ Bass', bpm: 124, key: '8A', dateAdded: '2026-03-01', duration: 215 },
-      { id: 202, title: 'Sub-Bass Odyssey', artist: 'Audio Vector', bpm: 126, key: '5B', dateAdded: '2026-03-05', duration: 310 }
-    ];
-
-    return { tracks };
+    return { tracks: mockDb[uuid], source: 'demo' };
   }
 
-  // Create new playlist with filtered tracks
+  // Create new playlist with filtered tracks. Reports success only when Tidal confirmed both steps.
   async function createPlaylistWithTracks(name, trackIds) {
+    if (!isTidal) {
+      return { success: false, error: 'This is demo data, so nothing was created. Open Tidal in a tab to use your real playlists.' };
+    }
     const session = getTidalSession();
-    if (session && session.token && session.userId) {
-      try {
-        const createResp = await fetch(`https://listen.tidal.com/v1/users/${session.userId}/playlists`, {
+    if (!session || !session.token || !session.userId) {
+      return { success: false, error: 'No Tidal session was found in the Tidal tab, so nothing was created.' };
+    }
+    try {
+      const createResp = await fetch(`https://listen.tidal.com/v1/users/${session.userId}/playlists`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          title: name,
+          description: 'Generated by Tidal DJ Bass & Mini-Player Set-Theory Studio'
+        })
+      });
+
+      if (!createResp.ok) {
+        return { success: false, error: `Tidal refused to create the playlist (HTTP ${createResp.status}).` };
+      }
+      const newPl = await createResp.json();
+      if (!newPl.uuid) {
+        return { success: false, error: 'Tidal did not return the new playlist.' };
+      }
+      if (trackIds.length > 0) {
+        const addResp = await fetch(`https://listen.tidal.com/v1/playlists/${newPl.uuid}/tracks`, {
           method: 'POST',
           headers: {
             'Authorization': `Bearer ${session.token}`,
             'Content-Type': 'application/json'
           },
-          body: JSON.stringify({
-            title: name,
-            description: 'Generated by Tidal DJ Bass & Mini-Player Set-Theory Studio'
-          })
+          body: JSON.stringify({ trackIds })
         });
-
-        if (createResp.ok) {
-          const newPl = await createResp.json();
-          if (newPl.uuid && trackIds.length > 0) {
-            await fetch(`https://listen.tidal.com/v1/playlists/${newPl.uuid}/tracks`, {
-              method: 'POST',
-              headers: {
-                'Authorization': `Bearer ${session.token}`,
-                'Content-Type': 'application/json'
-              },
-              body: JSON.stringify({ trackIds })
-            });
-          }
-          return { success: true, uuid: newPl.uuid, name };
+        if (!addResp.ok) {
+          return { success: false, uuid: newPl.uuid, error: `The playlist "${name}" was created, but adding tracks failed (HTTP ${addResp.status}).` };
         }
-      } catch (e) {
-        console.warn('API playlist creation error:', e);
       }
+      return { success: true, uuid: newPl.uuid, name };
+    } catch (e) {
+      return { success: false, error: `Could not reach Tidal: ${e.message}` };
     }
-
-    // Success simulation
-    return {
-      success: true,
-      uuid: 'pl-new-' + Date.now(),
-      name,
-      trackCount: trackIds.length
-    };
   }
 
+  // Playlist membership and per-track add/remove are not implemented yet; say so instead of pretending.
+  const NOT_BUILT = 'Adding or removing the current track from here is not built yet. Use Tidal\'s own menu.';
+
   async function checkTrackInPlaylist(playlistUuid) {
-    return { isInPlaylist: false };
+    return { isInPlaylist: false, supported: false };
   }
 
   async function addTrackToPlaylist(playlistUuid) {
-    const moreBtn = document.querySelector('button[data-test="track-actions"], [data-test="more-actions"], button[aria-label="More actions"]');
-    if (moreBtn) moreBtn.click();
-    return { success: true };
+    return { success: false, supported: false, error: NOT_BUILT };
   }
 
   async function removeTrackFromPlaylist(playlistUuid) {
-    return { success: true };
+    return { success: false, supported: false, error: NOT_BUILT };
   }
 
   // 3. Floating Button on Webpage
@@ -527,10 +542,7 @@
     }
 
     if (!('documentPictureInPicture' in window)) {
-      chrome.runtime.sendMessage({
-        type: 'CREATE_FALLBACK_WINDOW',
-        url: chrome.runtime.getURL('miniplayer.html')
-      });
+      chrome.runtime.sendMessage({ type: 'CREATE_FALLBACK_WINDOW' });
       return;
     }
 
@@ -543,10 +555,7 @@
       setupPiPWindow(pipWindow);
     } catch (err) {
       console.warn('Document PiP request error, falling back:', err);
-      chrome.runtime.sendMessage({
-        type: 'CREATE_FALLBACK_WINDOW',
-        url: chrome.runtime.getURL('miniplayer.html')
-      });
+      chrome.runtime.sendMessage({ type: 'CREATE_FALLBACK_WINDOW' });
     }
   }
 
@@ -1013,7 +1022,9 @@
       gain: parseFloat(doc.getElementById('slider-gain')?.value || 1.0),
       pitch: parseFloat(doc.getElementById('slider-pitch')?.value || 1.0),
       autoBalance: doc.getElementById('toggle-autobalance')?.checked ?? true,
-      bypass: sel?.bypass === true
+      bypass: sel?.bypass === true,
+      // Keep the Physics drawer's A/B stage bypass with every update so it is not silently dropped.
+      ...(routerVisualizer?.currentParams?.stageBypass ? { stageBypass: { ...routerVisualizer.currentParams.stageBypass } } : {})
     };
   }
 
