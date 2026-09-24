@@ -1,8 +1,9 @@
 // background.js - Service Worker for Tab Audio Capture, Routing, and Mini-Player
 
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
+// Standalone mini-player window. Used when Document PiP is unavailable (PiP needs a click inside the page).
+const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
 let capturedTabId = null;
-let standaloneWindowId = null;
 
 // Built-in presets
 const FACTORY_PRESETS = {
@@ -81,10 +82,7 @@ const FACTORY_PRESETS = {
   }
 };
 
-const FACTORY_PRESET_NAMES = [
-  ...Object.keys(FACTORY_PRESETS),
-  "Clean DJ (Anti-Distortion)"
-];
+const FACTORY_PRESET_NAMES = Object.keys(FACTORY_PRESETS);
 const DEFAULT_PRESETS = { ...FACTORY_PRESETS };
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -197,6 +195,22 @@ async function getActualCaptureStatus() {
       }
     });
   });
+}
+
+// Translate Chrome's tabCapture errors into something actionable.
+function explainCaptureError(err, tab) {
+  const msg = err?.message || String(err);
+  const name = tab?.title ? `"${tab.title}"` : 'the tab that is playing';
+  if (/invoked|activeTab/i.test(msg)) {
+    return `Chrome only lets the EQ attach to a tab after you open this extension on that tab. Switch to ${name}, click the extension icon there, then turn Audio EQ on.`;
+  }
+  if (/active stream/i.test(msg)) {
+    return `${name} is already being captured, possibly by another copy of this extension or another audio extension. Turn that one off first.`;
+  }
+  if (/Chrome pages cannot be captured/i.test(msg)) {
+    return 'Chrome system pages cannot be captured. Switch to a music or video tab.';
+  }
+  return msg;
 }
 
 async function startAudioCapture(tabId) {
@@ -339,37 +353,68 @@ async function findAudioCaptureTab(preferredTabId = null) {
   return activeTab || null;
 }
 
-// Clean up when tabs close
+// Clean up when tabs close. The in-memory id is lost when the worker restarts, so fall back to storage.
 chrome.tabs.onRemoved.addListener(async (tabId) => {
+  if (!capturedTabId) {
+    capturedTabId = (await chrome.storage.local.get('capturedTabId')).capturedTabId || null;
+  }
   if (tabId === capturedTabId) {
     await stopAudioCapture();
   }
 });
 
-// Standalone popup window tracking
-chrome.windows.onRemoved.addListener((winId) => {
-  if (winId === standaloneWindowId) {
-    standaloneWindowId = null;
+// Standalone mini-player window (single instance)
+async function findFallbackWindow() {
+  const url = chrome.runtime.getURL(FALLBACK_WINDOW_URL);
+  const contexts = await chrome.runtime.getContexts({ contextTypes: ['TAB'] });
+  return contexts.find(c => c.documentUrl === url) || null;
+}
+
+async function openFallbackWindow() {
+  const existing = await findFallbackWindow();
+  if (existing) {
+    await chrome.windows.update(existing.windowId, { focused: true });
+    return;
   }
-});
+  await chrome.windows.create({
+    url: chrome.runtime.getURL(FALLBACK_WINDOW_URL),
+    type: 'popup',
+    width: 360,
+    height: 540
+  });
+}
 
 // Keyboard shortcut handlers
 chrome.commands.onCommand.addListener(async (command) => {
-  if (command === 'toggle-pip-miniplayer') {
-    const targetTab = await findMediaTabForPlayer();
-    if (targetTab?.id) {
-      chrome.tabs.sendMessage(targetTab.id, { type: 'TOGGLE_MINIPLAYER' });
-    }
-  } else if (command === 'toggle-eq') {
-    const status = await getActualCaptureStatus();
-    if (status.isCapturing) {
-      await stopAudioCapture();
-    } else {
-      const targetTab = await findAudioCaptureTab();
+  try {
+    if (command === 'toggle-miniplayer') {
+      // "Show/Hide": a second press closes the standalone window.
+      const existing = await findFallbackWindow();
+      if (existing) {
+        await chrome.windows.remove(existing.windowId);
+        return;
+      }
+      const targetTab = await findMediaTabForPlayer();
       if (targetTab?.id) {
-        await startAudioCapture(targetTab.id);
+        chrome.tabs.sendMessage(targetTab.id, { type: 'TOGGLE_MINIPLAYER' }, (res) => {
+          if (chrome.runtime.lastError || !res?.success) openFallbackWindow();
+        });
+      } else {
+        await openFallbackWindow();
+      }
+    } else if (command === 'toggle-eq') {
+      const status = await getActualCaptureStatus();
+      if (status.isCapturing) {
+        await stopAudioCapture();
+      } else {
+        const targetTab = await findAudioCaptureTab();
+        if (targetTab?.id) {
+          await startAudioCapture(targetTab.id);
+        }
       }
     }
+  } catch (err) {
+    console.warn(`Command "${command}" failed:`, err?.message || err);
   }
 });
 
@@ -390,8 +435,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const result = await startAudioCapture(targetTab.id);
             sendResponse({ success: true, result, capturedTabId });
           } catch (err) {
-            sendResponse({ success: false, error: err.message });
+            sendResponse({ success: false, error: explainCaptureError(err, targetTab) });
           }
+          break;
+        }
+
+        case 'CAPTURE_ENDED': {
+          // Sent by the offscreen document when the captured stream ends (e.g. the tab was closed).
+          const oldTabId = capturedTabId || (await chrome.storage.local.get('capturedTabId')).capturedTabId || null;
+          capturedTabId = null;
+          await chrome.storage.local.set({ capturedTabId: null, isAudioCapturing: false });
+          broadcastAudioState(false, oldTabId);
+          sendResponse({ success: true });
           break;
         }
 
@@ -463,33 +518,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           if (targetTab?.id) {
             chrome.tabs.sendMessage(targetTab.id, { type: 'TOGGLE_MINIPLAYER' }, (res) => {
               if (chrome.runtime.lastError || !res?.success) {
-                chrome.windows.create({
-                  url: chrome.runtime.getURL('miniplayer.html'),
-                  type: 'popup',
-                  width: 360,
-                  height: 540
-                });
+                openFallbackWindow();
               }
             });
           } else {
-            chrome.windows.create({
-              url: chrome.runtime.getURL('miniplayer.html'),
-              type: 'popup',
-              width: 360,
-              height: 540
-            });
+            await openFallbackWindow();
           }
           sendResponse({ success: true });
           break;
         }
 
         case 'CREATE_FALLBACK_WINDOW': {
-          chrome.windows.create({
-            url: message.url || chrome.runtime.getURL('miniplayer.html'),
-            type: 'popup',
-            width: 360,
-            height: 540
-          });
+          await openFallbackWindow();
           sendResponse({ success: true });
           break;
         }
@@ -545,9 +585,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'RESET_DEFAULT_PRESETS': {
           const presetToReset = message.currentPreset;
           const data = await chrome.storage.local.get('presets');
-          const p = { ...(data.presets || {}) };
+          const p = { ...DEFAULT_PRESETS, ...(data.presets || {}) };
 
-          if (presetToReset && FACTORY_PRESETS[presetToReset]) {
+          if (presetToReset && !FACTORY_PRESETS[presetToReset] && p[presetToReset]) {
+            // Custom preset: discard unsaved slider changes. Never delete saved presets.
+            await chrome.storage.local.set({
+              currentPreset: presetToReset,
+              currentParams: p[presetToReset]
+            });
+            sendResponse({
+              success: true,
+              presets: p,
+              selectedName: presetToReset,
+              currentParams: p[presetToReset]
+            });
+          } else if (presetToReset && FACTORY_PRESETS[presetToReset]) {
             p[presetToReset] = { ...FACTORY_PRESETS[presetToReset] };
             await chrome.storage.local.set({
               presets: p,
@@ -561,14 +613,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               currentParams: p[presetToReset]
             });
           } else {
+            // Restore factory values for every factory preset; custom presets are kept.
+            const restored = { ...p, ...DEFAULT_PRESETS };
             await chrome.storage.local.set({
-              presets: DEFAULT_PRESETS,
+              presets: restored,
               currentPreset: "Punchy Bass & Clarity",
               currentParams: DEFAULT_PRESETS["Punchy Bass & Clarity"]
             });
             sendResponse({
               success: true,
-              presets: DEFAULT_PRESETS,
+              presets: restored,
               selectedName: "Punchy Bass & Clarity",
               currentParams: DEFAULT_PRESETS["Punchy Bass & Clarity"]
             });

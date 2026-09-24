@@ -1106,3 +1106,21 @@ input:checked + .slider-round:before {
   transform: scale(1.02);
   box-shadow: 0 4px 12px rgba(0,229,255,0.3);
 }
+
+/* Data-source / error notice for Playlists and Playlist Lab */
+.data-notice {
+  margin: 4px 0 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: #ffd27a;
+  background: rgba(255, 196, 0, 0.08);
+  border: 1px solid rgba(255, 196, 0, 0.35);
+}
+
+.data-notice.is-error {
+  color: #ff9e9e;
+  background: rgba(255, 82, 82, 0.08);
+  border-color: rgba(255, 82, 82, 0.4);
+}

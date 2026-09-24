@@ -1,0 +1,45 @@
+// Static checks that need no browser: manifest integrity, command wiring, JS syntax.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { join, resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const manifest = JSON.parse(readFileSync(join(root, 'manifest.json'), 'utf8'));
+const background = readFileSync(join(root, 'background.js'), 'utf8');
+
+test('every file the manifest references exists', () => {
+  const files = [
+    manifest.background.service_worker,
+    manifest.action.default_popup,
+    ...Object.values(manifest.icons),
+    ...manifest.content_scripts.flatMap((c) => c.js),
+    ...manifest.web_accessible_resources.flatMap((w) => w.resources).filter((r) => !r.includes('*'))
+  ];
+  for (const f of files) assert.ok(existsSync(join(root, f)), `missing ${f}`);
+});
+
+test('every manifest command has a handler in background.js', () => {
+  for (const name of Object.keys(manifest.commands)) {
+    assert.match(background, new RegExp(`command === '${name}'`), `no handler for command "${name}"`);
+  }
+});
+
+test('permissions have not been broadened', () => {
+  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'offscreen', 'scripting', 'storage', 'tabCapture', 'tabs']);
+  assert.deepEqual(manifest.host_permissions, ['<all_urls>']);
+  assert.equal(manifest.content_security_policy, undefined, 'CSP must stay at the MV3 default unless explicitly approved');
+});
+
+test('all extension scripts parse', () => {
+  for (const f of readdirSync(root).filter((n) => n.endsWith('.js'))) {
+    execFileSync(process.execPath, ['--check', join(root, f)]);
+  }
+});
+
+test('fallback window is the working undocked popup, not the broken miniplayer page', () => {
+  assert.match(background, /FALLBACK_WINDOW_URL = 'popup\.html\?undocked=true'/);
+  assert.doesNotMatch(background, /getURL\('miniplayer\.html'\)/);
+});

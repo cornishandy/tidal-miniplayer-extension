@@ -17,6 +17,25 @@ let autoBalanceBypassGain = null;
 let autoBalanceWetGain = null;
 let volumeGain = null;
 let masterLimiter = null;
+let outputCeiling = null;
+
+// Final safety ceiling after the limiter. DynamicsCompressorNode can overshoot on fast peaks
+// (measured +0.2 dBFS at extreme settings), so samples above CEILING_KNEE are bent smoothly
+// toward CEILING_MAX (-0.3 dBFS). Below the knee the curve is exact identity (no coloration).
+const CEILING_KNEE = 0.93;
+const CEILING_MAX = 0.966; // -0.3 dBFS
+
+function makeCeilingCurve(points = 8193) {
+  const curve = new Float32Array(points);
+  const span = CEILING_MAX - CEILING_KNEE;
+  for (let i = 0; i < points; i++) {
+    const x = (i / (points - 1)) * 2 - 1;
+    const ax = Math.abs(x);
+    const y = ax <= CEILING_KNEE ? ax : CEILING_KNEE + span * Math.tanh((ax - CEILING_KNEE) / span);
+    curve[i] = Math.sign(x) * y;
+  }
+  return curve;
+}
 
 let currentParams = {
   bass: 5.0,
@@ -68,7 +87,7 @@ async function startCapture(streamId, initialParams = {}) {
 
     Object.assign(currentParams, initialParams);
 
-    currentStream = await navigator.mediaDevices.getUserMedia({
+    const stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: 'tab',
@@ -76,6 +95,17 @@ async function startCapture(streamId, initialParams = {}) {
         }
       },
       video: false
+    });
+    currentStream = stream;
+
+    // The track ends when the captured tab closes or Chrome revokes capture: release everything
+    // and tell the service worker so every surface shows EQ as OFF.
+    stream.getAudioTracks().forEach(track => {
+      track.addEventListener('ended', () => {
+        if (currentStream !== stream) return;
+        stopCapture();
+        chrome.runtime.sendMessage({ type: 'CAPTURE_ENDED' }).catch(() => {});
+      });
     });
 
     audioCtx = new AudioContext({ latencyHint: 'interactive' });
@@ -136,13 +166,21 @@ async function startCapture(streamId, initialParams = {}) {
     masterLimiter.attack.value = 0.001;
     masterLimiter.release.value = 0.05;
 
+    outputCeiling = audioCtx.createWaveShaper();
+    outputCeiling.curve = makeCeilingCurve();
+    outputCeiling.oversample = 'none';
+
     // === Signal Routing Architecture ===
     // Source -> Split into:
     //   Path A: Direct Passthrough (for true bypass)
     //   Path B: DSP Chain -> HPF -> Bass -> Mid -> High -> Split into:
     //             -> AutoBalance Wet (Comp)
     //             -> AutoBalance Dry (Bypass)
-    //          -> Sum -> Master Volume -> Master Limiter -> Destination
+    //          -> Sum -> Master Volume -> Master Limiter -> Output Ceiling -> Destination
+
+    // Set routing gains before anything is connected so the first samples are not the
+    // bypass and DSP paths summed together (both GainNodes default to 1.0).
+    applyRoutingState({ immediate: true });
 
     sourceNode.connect(directPassThroughGain);
     directPassThroughGain.connect(audioCtx.destination);
@@ -162,9 +200,9 @@ async function startCapture(streamId, initialParams = {}) {
     autoBalanceBypassGain.connect(volumeGain);
 
     volumeGain.connect(masterLimiter);
-    masterLimiter.connect(audioCtx.destination);
+    masterLimiter.connect(outputCeiling);
+    outputCeiling.connect(audioCtx.destination);
 
-    applyRoutingState();
     isCapturing = true;
 
     return { success: true };
@@ -224,27 +262,21 @@ function updateParams(newParams) {
   applyRoutingState();
 }
 
-function applyRoutingState() {
+function applyRoutingState({ immediate = false } = {}) {
   if (!audioCtx || audioCtx.state === 'closed') return;
   const now = audioCtx.currentTime;
   const rampTime = 0.02;
+  const set = (node, value) => {
+    if (!node) return;
+    if (immediate) node.gain.value = value;
+    else node.gain.setTargetAtTime(value, now, rampTime);
+  };
 
   const isBypass = currentParams.bypass === true;
   const isCompBypassed = currentParams.stageBypass?.comp || !currentParams.autoBalance;
 
-  if (isBypass) {
-    dspPathGain?.gain.setTargetAtTime(0.0, now, rampTime);
-    directPassThroughGain?.gain.setTargetAtTime(1.0, now, rampTime);
-  } else {
-    dspPathGain?.gain.setTargetAtTime(1.0, now, rampTime);
-    directPassThroughGain?.gain.setTargetAtTime(0.0, now, rampTime);
-  }
-
-  if (isCompBypassed) {
-    autoBalanceWetGain?.gain.setTargetAtTime(0.0, now, rampTime);
-    autoBalanceBypassGain?.gain.setTargetAtTime(1.0, now, rampTime);
-  } else {
-    autoBalanceWetGain?.gain.setTargetAtTime(1.0, now, rampTime);
-    autoBalanceBypassGain?.gain.setTargetAtTime(0.0, now, rampTime);
-  }
+  set(dspPathGain, isBypass ? 0.0 : 1.0);
+  set(directPassThroughGain, isBypass ? 1.0 : 0.0);
+  set(autoBalanceWetGain, isCompBypassed ? 0.0 : 1.0);
+  set(autoBalanceBypassGain, isCompBypassed ? 1.0 : 0.0);
 }

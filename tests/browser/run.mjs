@@ -250,14 +250,15 @@ try {
     // ---- W-AUDIO-BASS: objective spectrum check at 60 Hz vs 1 kHz (post-limiter) ----
     const measure = `(async () => {
       const an = audioCtx.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0;
-      masterLimiter.connect(an); const bypassAn = audioCtx.createAnalyser(); bypassAn.fftSize = 16384; bypassAn.smoothingTimeConstant = 0;
+      const tap = (typeof outputCeiling !== 'undefined' && outputCeiling) || masterLimiter;
+      tap.connect(an); const bypassAn = audioCtx.createAnalyser(); bypassAn.fftSize = 16384; bypassAn.smoothingTimeConstant = 0;
       directPassThroughGain.connect(bypassAn);
       await new Promise(r => setTimeout(r, 700));
       const bins = (a) => { const d = new Float32Array(a.frequencyBinCount); a.getFloatFrequencyData(d); const hz = audioCtx.sampleRate / a.fftSize;
         const at = (f) => Math.max(...[-2,-1,0,1,2].map(k => d[Math.round(f / hz) + k]));
         const t = new Float32Array(a.fftSize); a.getFloatTimeDomainData(t); let peak = 0; for (const v of t) peak = Math.max(peak, Math.abs(v));
         return { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), peak: +peak.toFixed(3) }; };
-      const r = { chain: bins(an) }; an.disconnect(); masterLimiter.disconnect(an); directPassThroughGain.disconnect(bypassAn);
+      const r = { chain: bins(an), tap: tap === masterLimiter ? 'limiter' : 'ceiling' }; tap.disconnect(an); directPassThroughGain.disconnect(bypassAn);
       return r; })()`;
     await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: { hpf: false, eq: false, comp: false, gain: false } } });
     await sleep(400);
@@ -268,7 +269,9 @@ try {
     const f = flat.value?.chain, b = boosted.value?.chain;
     const lift60 = b && f ? b.hz60 - f.hz60 : null;
     const lift1k = b && f ? b.hz1k - f.hz1k : null;
-    record('W-AUDIO-BASS', 'Bass +10 dB lifts 60 Hz relative to 1 kHz (objective FFT, post-limiter)',
+    record('W-AUDIO-TRANSPARENT', 'Flat settings pass the tone at its original level (input peak 0.15)',
+      f && Math.abs(f.peak - 0.15) < 0.01 ? 'PASS' : 'FAIL', { flat: f, tap: flat.value?.tap }, 'objective-audio');
+    record('W-AUDIO-BASS', 'Bass +10 dB lifts 60 Hz relative to 1 kHz (objective FFT, final output)',
       lift60 !== null && lift60 > 6 && Math.abs(lift1k) < 2 ? 'PASS' : 'FAIL', { flat: f, boosted: b, lift60: lift60?.toFixed(1), lift1k: lift1k?.toFixed(1) }, 'objective-audio');
 
     await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 0, hpf: 200, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false } });
@@ -281,8 +284,9 @@ try {
     await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 14, hpf: 20, mid: 6, high: 6, gain: 2.5, pitch: 1, autoBalance: false, bypass: false } });
     await sleep(500);
     const hot = (await evalOffscreen(measure)).value?.chain;
-    record('W-AUDIO-LIMITER', 'Worst-case settings (bass +14, mid/high +6, 250%) stay near/below 0 dBFS after limiter',
-      hot && hot.peak <= 1.05 ? 'PASS' : 'FAIL', { hot, note: 'peak is linear sample peak at limiter output; 1.0 = 0 dBFS' }, 'objective-audio');
+    const hotTap = (await evalOffscreen(`(typeof outputCeiling !== 'undefined' && outputCeiling) ? 'ceiling' : 'limiter'`)).value;
+    record('W-AUDIO-LIMITER', 'Worst-case settings (bass +14, mid/high +6, 250%) never exceed -0.3 dBFS at the output',
+      hot && hot.peak <= 0.967 ? 'PASS' : 'FAIL', { hot, tap: hotTap, note: 'linear sample peak; 0.966 = -0.3 dBFS, 1.0 = 0 dBFS' }, 'objective-audio');
 
     // ---- W-CAPTURE-STOP ----
     const stopRes = await sendFrom(popup, { type: 'STOP_CAPTURE' });
@@ -343,6 +347,16 @@ try {
     fbErrors.length === 0 && fbTitle === 'Synthetic Tone' ? 'PASS' : 'FAIL', { url: fbUrl, pageErrors: fbErrors, fbTitle });
   await fbPage.close();
 
+  // ---- W-FALLBACK-SINGLE: repeated "open mini-player" requests reuse one window ----
+  await sendFrom(popup, { type: 'CREATE_FALLBACK_WINDOW' });
+  await sleep(800);
+  await sendFrom(popup, { type: 'CREATE_FALLBACK_WINDOW' });
+  await sleep(800);
+  const fbCount = await sw.evaluate(async (u) => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] }))
+    .filter((c) => c.documentUrl === chrome.runtime.getURL(u)).length, fbUrl);
+  record('W-FALLBACK-SINGLE', 'Opening the standalone mini-player twice keeps a single window', fbCount === 1 ? 'PASS' : 'FAIL', { fbCount });
+  for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
+
   // ---- W-PLAYLISTS-HONESTY / W-LAB-HONESTY (no Tidal session exists in this profile) ----
   await popup.click('#tab-btn-playlists');
   await sleep(1500);
@@ -352,8 +366,20 @@ try {
   record('W-PLAYLIST-ESCAPE', 'Playlist titles render as text (no HTML injection)', escaped ? 'PASS' : 'FAIL',
     { visibleText: plText.slice(0, 200), htmlHasBoldTag: /<b>Bold<\/b>/.test(plHtml) });
 
+  // ---- W-PLAYLIST-ADD-HONEST: add/remove is not built; the UI must not pretend it worked ----
+  await popup.locator('.pl-checkbox').first().click();
+  await sleep(800);
+  const cbChecked = await popup.locator('.pl-checkbox').first().isChecked();
+  const plNotice = await popup.locator('#pl-data-notice').innerText().catch(() => '');
+  record('W-PLAYLIST-ADD-HONEST', 'Checking a playlist does not claim the track was added (checkbox reverts, reason shown)',
+    !cbChecked && /not built/i.test(plNotice) ? 'PASS' : 'FAIL', { cbCheckedAfter: cbChecked, plNotice });
+
   await popup.click('#tab-btn-lab');
   await sleep(2000);
+  const labA = await popup.evaluate(() => document.getElementById('lab-select-a').selectedOptions[0]?.textContent || '');
+  const labB = await popup.evaluate(() => document.getElementById('lab-select-b').selectedOptions[0]?.textContent || '');
+  record('W-LAB-AUTOSELECT', 'Lab pre-selects A = "A+" and B = "Super A+" (exact match first)',
+    labA.startsWith('A+ (') && labB.startsWith('Super A+ (') ? 'PASS' : 'FAIL', { labA, labB });
   await popup.click('.lab-pill[data-op="union"]');
   await sleep(1500);
   const labRows = await popup.locator('#lab-table-body tr').allInnerTexts();
