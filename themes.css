@@ -1,0 +1,95 @@
+/* themes.css - Visual Themes for Tidal Mini-Player & Audio Engine */
+
+:root {
+  --bg-primary: #121216;
+  --bg-secondary: #18181f;
+  --bg-card: rgba(255, 255, 255, 0.03);
+  --bg-surface: #1e1e26;
+  --accent: #00e5ff;
+  --accent-glow: rgba(0, 229, 255, 0.35);
+  --accent-gradient: linear-gradient(135deg, #00e5ff, #0077ff);
+  --text-main: #ffffff;
+  --text-muted: #888888;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --card-border: rgba(255, 255, 255, 0.06);
+  --router-node-bg: #1c1d24;
+  --router-node-border: #2e303d;
+  --router-active: #00e5ff;
+  --canvas-grid: rgba(255, 255, 255, 0.07);
+}
+
+/* 1. Technics 1200 / Analog DJ Deck (Warm Amber & Slate) */
+body.theme-amber {
+  --bg-primary: #141416;
+  --bg-secondary: #1a1a1e;
+  --bg-card: rgba(255, 170, 0, 0.04);
+  --bg-surface: #222228;
+  --accent: #ff9d00;
+  --accent-glow: rgba(255, 157, 0, 0.4);
+  --accent-gradient: linear-gradient(135deg, #ffb300, #ff6f00);
+  --text-main: #f5f5f7;
+  --text-muted: #9e9a93;
+  --border-color: rgba(255, 157, 0, 0.15);
+  --card-border: rgba(255, 157, 0, 0.1);
+  --router-node-bg: #222228;
+  --router-node-border: #3d3a34;
+  --router-active: #ff9d00;
+  --canvas-grid: rgba(255, 157, 0, 0.1);
+}
+
+/* 2. Synthwave / 80s Retro Sunset (Hot Pink & Electric Violet) */
+body.theme-synthwave {
+  --bg-primary: #120d1e;
+  --bg-secondary: #1a122c;
+  --bg-card: rgba(255, 0, 128, 0.06);
+  --bg-surface: #23163b;
+  --accent: #ff007f;
+  --accent-glow: rgba(255, 0, 127, 0.45);
+  --accent-gradient: linear-gradient(135deg, #ff007f, #8000ff);
+  --text-main: #ffffff;
+  --text-muted: #b49ecc;
+  --border-color: rgba(255, 0, 128, 0.2);
+  --card-border: rgba(128, 0, 255, 0.15);
+  --router-node-bg: #25163f;
+  --router-node-border: #4d2678;
+  --router-active: #ff00b3;
+  --canvas-grid: rgba(255, 0, 128, 0.12);
+}
+
+/* 3. Matrix / Terminal Hacker (Phosphor Green & Deep Black) */
+body.theme-matrix {
+  --bg-primary: #050a06;
+  --bg-secondary: #0a140d;
+  --bg-card: rgba(0, 255, 70, 0.04);
+  --bg-surface: #0f1f14;
+  --accent: #00ff66;
+  --accent-glow: rgba(0, 255, 102, 0.4);
+  --accent-gradient: linear-gradient(135deg, #00ff66, #009933);
+  --text-main: #d0ffd9;
+  --text-muted: #5e8f69;
+  --border-color: rgba(0, 255, 102, 0.2);
+  --card-border: rgba(0, 255, 102, 0.12);
+  --router-node-bg: #0b1c10;
+  --router-node-border: #164221;
+  --router-active: #00ff66;
+  --canvas-grid: rgba(0, 255, 102, 0.1);
+}
+
+/* 4. Midnight OLED (Pure Inky Black & Subtle Lavender) */
+body.theme-oled {
+  --bg-primary: #000000;
+  --bg-secondary: #08080a;
+  --bg-card: rgba(255, 255, 255, 0.02);
+  --bg-surface: #101014;
+  --accent: #b388ff;
+  --accent-glow: rgba(179, 136, 255, 0.35);
+  --accent-gradient: linear-gradient(135deg, #b388ff, #7c4dff);
+  --text-main: #f0f0f5;
+  --text-muted: #737385;
+  --border-color: rgba(255, 255, 255, 0.08);
+  --card-border: rgba(255, 255, 255, 0.05);
+  --router-node-bg: #111116;
+  --router-node-border: #262633;
+  --router-active: #b388ff;
+  --canvas-grid: rgba(179, 136, 255, 0.08);
+}

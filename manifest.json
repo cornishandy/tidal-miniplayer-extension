@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Universal Mini-Player & DJ Bass Booster",
+  "version": "1.1.0",
+  "description": "Floating macOS Mini-Player for Tidal, YouTube, Movies, and Any Tab with DJ Bass Boost, Anti-Distortion HPF, Auto-Balancing, and Physics Visualizer.",
+  "permissions": [
+    "tabCapture",
+    "offscreen",
+    "storage",
+    "activeTab",
+    "tabs",
+    "scripting"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Universal Mini-Player & Audio Booster",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "commands": {
+    "toggle-miniplayer": {
+      "suggested_key": {
+        "default": "Alt+M",
+        "mac": "Alt+M"
+      },
+      "description": "Show/Hide Mini-Player"
+    },
+    "toggle-eq": {
+      "suggested_key": {
+        "default": "Alt+E",
+        "mac": "Alt+E"
+      },
+      "description": "Toggle Audio EQ On/Off"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["router-visualizer.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "tidal-bridge.js",
+        "miniplayer.html",
+        "miniplayer.js",
+        "miniplayer.css",
+        "popup.css",
+        "router-visualizer.js",
+        "themes.css",
+        "icons/*"
+      ],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}

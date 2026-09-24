@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# Editor & IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node / Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build / Output / Packaging
+dist/
+build/
+*.crx
+*.zip
+*.tar.gz
+
+# Secrets, Credentials, Keys
+*.pem
+*.key
+*.pub
+.env*
