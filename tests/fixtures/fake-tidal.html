@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Fake Tidal (synthetic test fixture)</title></head>
+<body>
+  <!-- Decoy: a playlist card play button OUTSIDE the footer. Must never be clicked by transport commands. -->
+  <section id="cards">
+    <div class="card"><a href="/playlist/11111111-aaaa">A+</a><button data-test="play" id="decoy-play">Play card</button></div>
+    <a href="/playlist/22222222-bbbb">Super A+</a>
+    <a href="/playlist/33333333-cccc">&lt;b&gt;Bold&lt;/b&gt; &amp; Co</a>
+  </section>
+  <div id="footerPlayer">
+    <a data-test="footer-track-title" href="/album/1">Synthetic Tone</a>
+    <a data-test="track-artist" href="/artist/1">Test Generator</a>
+    <div data-test="playback-controls">
+      <button data-test="previous" id="prev">Prev</button>
+      <button data-test="play" id="footer-play" aria-label="Play">Play</button>
+      <button data-test="next" id="next">Next</button>
+    </div>
+    <button data-test="footer-favorite" id="fav" aria-checked="false">Fav</button>
+  </div>
+  <audio id="a" src="/tone.wav" loop></audio>
+  <script>
+    window.clicks = { decoy: 0, footerPlay: 0, prev: 0, next: 0, fav: 0 };
+    const a = document.getElementById('a');
+    document.getElementById('decoy-play').onclick = () => { window.clicks.decoy++; };
+    const fp = document.getElementById('footer-play');
+    fp.onclick = () => {
+      window.clicks.footerPlay++;
+      if (a.paused) { a.play(); fp.setAttribute('data-test', 'pause'); fp.setAttribute('aria-label', 'Pause'); }
+      else { a.pause(); fp.setAttribute('data-test', 'play'); fp.setAttribute('aria-label', 'Play'); }
+    };
+    document.getElementById('prev').onclick = () => { window.clicks.prev++; };
+    document.getElementById('next').onclick = () => { window.clicks.next++; };
+    const fav = document.getElementById('fav');
+    fav.onclick = () => { window.clicks.fav++; fav.setAttribute('aria-checked', String(fav.getAttribute('aria-checked') !== 'true')); };
+  </script>
+</body></html>
