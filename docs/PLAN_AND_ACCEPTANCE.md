@@ -10,7 +10,7 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.3.0**, runtime commit `dccf108`, fingerprint `dfac61d0babdd57c…`, 2026-10-01. Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
+Current review build: **v1.3.1**, runtime commit `ca30d42`, fingerprint `eeb25589c3f28315…`, 2026-10-01 (1.3.0 was `dccf108`; its results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
 | ID | Workflow / requirement | Level | 1.2.1 | **1.3.0** |
 |---|---|---|---|---|
@@ -21,12 +21,13 @@ Current review build: **v1.3.0**, runtime commit `dccf108`, fingerprint `dfac61d
 | W-TRACK-INFO | Title/artist read from Tidal footer only | installed-browser (fake Tidal DOM) | PASS | PASS |
 | W-TRANSPORT-SCOPE | Play/Prev/Next hit footer, never playlist cards | installed-browser (decoy) | PASS | PASS |
 | W-HEART | Heart clicks the footer heart and shows its state | installed-browser | — | PASS |
-| W-JUMP | +30 s / −15 s jumps | installed-browser | — (was W-SKIP-25) | PASS (+29.7 / −13.7 while playing) |
+| W-JUMP | +30 s / −15 s jumps through the footer seek bar (media element out of reach, as on Tidal) | installed-browser | — (was W-SKIP-25) | PASS (+29.2 / −14.0 while playing) |
 | W-THEME-DOTS | Theme dots switch and remember the theme | installed-browser | — (was W-THEME-KEEPS-LAYOUT) | PASS |
 | W-PRESET-RESET-SAFE | Reset on custom preset keeps all custom presets | installed-browser | PASS | PASS |
 | W-NO-LAYOUT-SHIFT | Changing a value does not move the controls | installed-browser | PASS | PASS |
 | W-BAND-SWITCH-SYNC | Band tag switches the stage off, keeps the value, persists | installed-browser | — | PASS |
-| W-PHYSICS-INLINE | Wave and curve on the main screen, animating | installed-browser | — (was W-PHYSICS-SIDE) | PASS |
+| W-PHYSICS-INLINE | Live strip and curve on the main screen; still while the EQ is off | installed-browser | — (was W-PHYSICS-SIDE) | PASS |
+| W-LIVE-SPECTRUM | The live strip is real: input shows the tone peaks; output shows the +10 dB bass lift at 60 Hz only | objective-audio | — | PASS (+10.0 dB at 60 Hz, +0.2 at 1 kHz) |
 | W-CAPTURE-START | EQ attaches; offscreen graph runs | installed-browser* | PASS | PASS |
 | W-AUDIO-TRANSPARENT | Flat settings keep input level (peak 0.15) | objective-audio | PASS | PASS |
 | W-AUDIO-BASS | Bass +10 dB → +9.3 dB at 60 Hz, 1 kHz unchanged | objective-audio | PASS | PASS |
@@ -35,13 +36,14 @@ Current review build: **v1.3.0**, runtime commit `dccf108`, fingerprint `dfac61d
 | W-AUDIO-LIMITER | Worst case never exceeds −0.3 dBFS | objective-audio | PASS (0.965) | PASS (0.965) |
 | W-CAPTURE-STOP / W-CAPTURE-RESTART | Stop releases everything; re-attach works | installed-browser | PASS | PASS |
 | W-TAB-CLOSE-CLEANUP / W-TAB-CLOSE-AFTER-SW-RESTART | Closing the captured tab → OFF, also after a worker restart | installed-browser | PASS | PASS |
-| W-STAY-OPEN | On: icon opens the window, no popup; off: popup restored | installed-browser | — | PASS |
+| W-STAY-OPEN | Real click: icon switches to window mode and the window opens; off in the window restores the popup | installed-browser | — | PASS |
 | W-FALLBACK-WINDOW / W-FALLBACK-SINGLE | Stay-open window works; only one instance | installed-browser | PASS | PASS |
 | W-MINIBAR | Mini bar opens as Document PiP from the Stay-open page by a real click | installed-browser | — | PASS |
 | W-NO-REMOTE-REQUESTS | No requests beyond the local fixture server | installed-browser | PASS | PASS (real Tidal: cover image only) |
 | W-NO-PAGE-ERRORS | No uncaught errors during run | installed-browser | PASS | PASS |
 | ~~W-PHYSICS-SIDE, W-SKIP-25, W-THEME-KEEPS-LAYOUT, W-PLAYLIST-*, W-LAB-*~~ | Removed surfaces | — | — | RETIRED |
 | U-* (8) | Manifest, commands, permissions unchanged, syntax, fallback URL, no network code, retired surfaces and dead files stay out, no emoji | unit | 7/7 | **8/8** |
+| W-STAY-OPEN-MAC | Stay open on your Mac (you reported it not working on 1.3.0) | user | — | **REPORTED FAILING, not reproduced**; awaiting detail |
 | W-TOOLBAR-INVOKE | EQ via a real toolbar click (activeTab grant) | user | NOT RUN | NOT RUN |
 | W-LOOK-1.3.0 | The new screen, strip, physics and band switches look right in your Chrome | user-visual | — | NOT RUN |
 | W-MINIBAR-DESKTOP | Mini bar floats over other apps on your desktop | user | — | NOT RUN |
@@ -56,7 +58,8 @@ Current review build: **v1.3.0**, runtime commit `dccf108`, fingerprint `dfac61d
 
 - **2026-09-24 takeover**: identity and preservation verified; assessment; build script with fingerprint; isolated harness; 13 fixes (`9b01e83`); v1.1.1; operating README; review build.
 - **2026-10-01 round 1**: Playlists, Lab and favourite removed; Physics as a side panel; dead space removed; v1.2.0 (`a92a3c0`). Harness 24/24, unit 7/7. Design mockups for the open questions in `docs/mockups/`.
-- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).\n- **2026-10-01 round 3**: the new main screen, v1.3.0 (`dccf108`): legible size, no header, art strip, jumps, heart, per-band switches, physics on screen, Stay open, mini bar; dead files removed. Harness 29/29, unit 8/8.
+- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).\n- **2026-10-01 round 4**: 1.3.1 (`ca30d42`): live before/after spectrum ("make it real"), cover-art centre slice + full cover, jumps via the page's seek bar. Harness 30/30, unit 8/8.
+- **2026-10-01 round 3**: the new main screen, v1.3.0 (`dccf108`): legible size, no header, art strip, jumps, heart, per-band switches, physics on screen, Stay open, mini bar; dead files removed. Harness 29/29, unit 8/8.
 
 ## Changes from inherited decisions or claims
 

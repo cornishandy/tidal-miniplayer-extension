@@ -8,9 +8,9 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 
 | Surface | How you reach it | Regions (top → bottom) | Status |
 |---|---|---|---|
-| **The screen** (440 × 585) | Click the extension icon (or the Stay-open window) | Art strip (left) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · presets · physics (wave + response) · sliders with band switches · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–3; **your look pending** |
+| **The screen** (440 × 585) | Click the extension icon (or the Stay-open window) | Art slice (left) · full cover (top right) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · presets · physics (live spectrum + response) · sliders with band switches · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–4; **your look pending** |
 | Band switches | Tag at the left of each row | LOW · HPF · MID · HI · AUTO · VOL · SPD | ✔ R-15 |
-| Physics | On the screen | Animated signal model · response curve · readout | ✔ R-12 (P3) |
+| Physics | On the screen | **Live spectrum** (in vs out, real audio) · response curve (settings) · readout | ✔ R-12 → R-18 ("make it real") |
 | Stay-open window | Footer switch, or Alt+M | Same screen in a window Chrome does not auto-close; sizes itself to the content | ✔ R-06 |
 | Mini bar | *Mini bar* in the Stay-open window | Always-on-top bar: art, title, ♥, −15 s, play, +30 s, EQ pill, ✕ | ✔ R-10; **your desktop check pending** |
 | Keyboard shortcuts | Alt+M, Alt+E | Show/hide the window · toggle EQ | ○ (static only) |
@@ -33,7 +33,7 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 
 1. ~~Purpose and everyday journey~~ → folded into rounds 1–3.
 2. ~~Round 1~~, ~~Round 2~~, **Round 3 built** (1.3.0). ← **waiting on your look at the real thing**
-3. Open items: C1 vs C2 · year source · heart on real Tidal · preset list (R-07) · EQ target-tab rules · Pitch vs Speed wording.
+3. Open items: Stay-open report (R-19) · jumps on real Tidal (R-17) · year source · preset list (R-07) · C1 vs C2 · EQ target-tab rules · Pitch vs Speed wording.
 4. Status and feedback: errors, loading and empty states, what persists.
 5. Accessibility and typography: keyboard access, focus rings, contrast.
 6. Cut-over plan: presets migration from your everyday copy; retiring the old install (needs your explicit decision).
