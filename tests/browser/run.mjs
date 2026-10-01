@@ -33,8 +33,8 @@ function unpackedId(path) {
 }
 const EXT_ID = unpackedId(extDir);
 
-// ---------- synthetic audio ----------
-function toneWav({ seconds = 20, rate = 48000, freqs = [60, 1000, 8000], amp = 0.05 } = {}) {
+// ---------- synthetic audio (60 s so the 30 s jump has room) ----------
+function toneWav({ seconds = 60, rate = 48000, freqs = [60, 1000, 8000], amp = 0.05 } = {}) {
   const n = seconds * rate;
   const buf = Buffer.alloc(44 + n * 2);
   buf.write('RIFF', 0); buf.writeUInt32LE(36 + n * 2, 4); buf.write('WAVE', 8);
@@ -116,7 +116,7 @@ async function shot(page, name) {
 
 function record(id, title, status, evidence, level = 'installed-browser') {
   results.push({ id, title, status, level, evidence });
-  console.log(`${status.padEnd(8)} ${id.padEnd(22)} ${title}${evidence ? `\n         ${typeof evidence === 'string' ? evidence : JSON.stringify(evidence)}` : ''}`);
+  console.log(`${status.padEnd(8)} ${id.padEnd(26)} ${title}${evidence ? `\n         ${typeof evidence === 'string' ? evidence : JSON.stringify(evidence)}` : ''}`);
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -135,14 +135,14 @@ async function evalOffscreen(expression) {
   return { value: msg.result?.result?.value };
 }
 
-async function openPopup() {
+async function openPopup(path = 'popup.html') {
   const page = await context.newPage();
   const errors = [];
   const dialogs = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('dialog', async (d) => { dialogs.push(`${d.type()}: ${d.message()}`); await d.accept(d.type() === 'prompt' ? 'Harness Preset' : undefined); });
   watchRequests(page);
-  await page.goto(`chrome-extension://${EXT_ID}/popup.html`);
+  await page.goto(`chrome-extension://${EXT_ID}/${path}`);
   await sleep(1200);
   return { page, errors, dialogs };
 }
@@ -150,13 +150,13 @@ async function openPopup() {
 function sendFrom(page, msg) {
   return page.evaluate((m) => new Promise((r) => chrome.runtime.sendMessage(m, (res) => r(res ?? { lastError: chrome.runtime.lastError?.message }))), msg);
 }
+const storedParams = (page) => page.evaluate(() => new Promise((r) => chrome.storage.local.get('currentParams', (d) => r(d.currentParams || null))));
 
 try {
   // ---- W-LOAD: extension loads and service worker starts ----
   let [sw] = context.serviceWorkers();
   if (!sw) sw = await context.waitForEvent('serviceworker', { timeout: 10000 }).catch(() => null);
   const swOk = sw && sw.url().startsWith(`chrome-extension://${EXT_ID}/`);
-  const swErrors = [];
   record('W-LOAD', 'Unpacked build loads; service worker starts', swOk ? 'PASS' : 'FAIL',
     { extensionId: EXT_ID, serviceWorker: sw?.url() || null });
 
@@ -175,28 +175,34 @@ try {
   record('W-POPUP-RENDER', 'Popup renders, state loads, presets populate', popupErrors.length === 0 && presetCount >= 8 ? 'PASS' : 'FAIL',
     { presetCount, pageErrors: popupErrors, screenshot: shotDefault });
 
-  // ---- W-SURFACES-REMOVED: Playlists, Playlist Lab and the favorite button are gone (2026-10-01 decision) ----
-  const stillPresent = await popup.evaluate(() => ['#tab-btn-playlists', '#tab-btn-lab', '#popup-tab-playlists', '#popup-tab-lab',
-    '.popup-tab-bar', '#player-btn-fav', '#micro-btn-fav', '#pl-data-notice', '#lab-data-notice'].filter((s) => document.querySelector(s)));
-  const plReply = await sw.evaluate(async (u) => {
+  // ---- W-SURFACES-REMOVED: header icons, tabs, floating button, Physics side panel are gone (R-01, R-06, R-13) ----
+  const stillPresent = await popup.evaluate(() => ['header.header', '#btn-size-toggle', '#btn-micro-toggle', '#btn-always-on-top', '#btn-undock', '#btn-theme-toggle',
+    '#btn-open-router', '#physics-panel', '#toggle-floating-btn', '#tab-btn-playlists', '#tab-btn-lab', '.popup-tab-bar', '.micro-container'].filter((s) => document.querySelector(s)));
+  const unsupported = await sw.evaluate(async (u) => {
     const [t] = await chrome.tabs.query({ url: u + '*' });
-    try { return (await chrome.tabs.sendMessage(t.id, { type: 'FETCH_USER_PLAYLISTS' })) ?? null; } catch (e) { return { unsupported: String(e.message || e) }; }
+    const out = {};
+    for (const type of ['FETCH_USER_PLAYLISTS', 'TOGGLE_FLOATING_BUTTON', 'TOGGLE_MINIPLAYER']) {
+      try { out[type] = (await chrome.tabs.sendMessage(t.id, { type, show: true })) ?? null; } catch (e) { out[type] = { unsupported: true }; }
+    }
+    return out;
   }, TIDAL_URL.split('?')[0]);
-  record('W-SURFACES-REMOVED', 'Playlists, Playlist Lab and favorite are gone from the popup and the page script',
-    stillPresent.length === 0 && !plReply?.playlists ? 'PASS' : 'FAIL', { stillPresent, plReply });
+  const floatingInPage = await tidal.evaluate(() => !!document.getElementById('tidal-pip-floating-btn'));
+  record('W-SURFACES-REMOVED', 'Header icons, tabs, floating button and side panel are gone; page script ignores their commands',
+    stillPresent.length === 0 && !floatingInPage && Object.values(unsupported).every((v) => v === null || v?.unsupported) ? 'PASS' : 'FAIL',
+    { stillPresent, floatingInPage, unsupported });
 
-  // ---- W-NO-DEAD-SPACE: the sliders pack from the top; the popup is only as tall as its content ----
+  // ---- W-NO-DEAD-SPACE: rows pack from the top; the popup is only as tall as its content ----
   const space = await popup.evaluate(() => {
     const c = document.querySelector('.controls-area');
     const kids = [...c.children];
     const first = kids[0].getBoundingClientRect(), last = kids[kids.length - 1].getBoundingClientRect();
     const slack = c.getBoundingClientRect().height - (last.bottom - first.top);
-    const above = first.top - document.querySelector('.preset-section').getBoundingClientRect().bottom;
+    const foot = document.querySelector('.foot').getBoundingClientRect();
     const bodyH = document.body.getBoundingClientRect().height;
-    return { slack: +slack.toFixed(1), above: +above.toFixed(1), below: +(bodyH - last.bottom).toFixed(1), bodyH: +bodyH.toFixed(1) };
+    return { slack: +slack.toFixed(1), belowRows: +(foot.top - last.bottom).toFixed(1), bodyH: +bodyH.toFixed(1), bodyW: document.body.getBoundingClientRect().width };
   });
   record('W-NO-DEAD-SPACE', 'No empty band above or below the EQ sliders; popup height follows content',
-    space.slack < 4 && space.above < 16 && space.below < 16 && space.bodyH < 420 ? 'PASS' : 'FAIL', space);
+    space.slack < 4 && space.belowRows < 20 && space.bodyH < 600 && space.bodyW === 440 ? 'PASS' : 'FAIL', space);
 
   // ---- W-TRACK-INFO: metadata scraped from the footer only ----
   await sleep(1500);
@@ -205,40 +211,52 @@ try {
   record('W-TRACK-INFO', 'Popup shows track metadata from the Tidal footer',
     shownTitle === 'Synthetic Tone' && shownArtist === 'Test Generator' ? 'PASS' : 'FAIL', { shownTitle, shownArtist });
 
-  // ---- W-TRANSPORT-SCOPE: Play/Prev/Next hit the footer, never the decoy card; the page's favorite button is never touched ----
+  // ---- W-TRANSPORT-SCOPE: Play/Prev/Next hit the footer, never the decoy card ----
   await popup.click('#player-btn-play'); await sleep(500);
   await popup.click('#player-btn-next'); await sleep(400);
   await popup.click('#player-btn-prev'); await sleep(400);
   const clicks = await tidal.evaluate(() => window.clicks);
   const playing = await tidal.evaluate(() => !document.getElementById('a').paused);
-  record('W-TRANSPORT-SCOPE', 'Transport commands target footer controls only (decoy and favorite untouched)',
+  record('W-TRANSPORT-SCOPE', 'Transport commands target footer controls only (decoy untouched)',
     clicks.decoy === 0 && clicks.footerPlay === 1 && clicks.next === 1 && clicks.prev === 1 && clicks.fav === 0 && playing ? 'PASS' : 'FAIL',
     { clicks, playing });
 
-  // ---- W-SKIP-25 (tone is 20 s, so +25% = +5 s) ----
-  await tidal.evaluate(() => { const a = document.getElementById('a'); a.currentTime = 2; });
-  await sleep(2200); // let the popup's 1 s poll observe the new position
-  const before = await tidal.evaluate(() => document.getElementById('a').currentTime);
-  await popup.click('#player-btn-skip-fwd'); await sleep(300);
-  const after = await tidal.evaluate(() => document.getElementById('a').currentTime);
-  const delta = after - before;
-  record('W-SKIP-25', '+25% skip seeks forward ~25% of duration (20 s tone => ~5 s)',
-    delta > 4.2 && delta < 5.8 ? 'PASS' : 'FAIL', { before, after, delta: +delta.toFixed(2) });
+  // ---- W-HEART: the heart clicks Tidal's own footer heart and reflects its state ----
+  await popup.click('#player-btn-fav'); await sleep(1400);
+  const heartClicks = await tidal.evaluate(() => window.clicks.fav);
+  const heartOn = await popup.evaluate(() => document.getElementById('player-btn-fav').classList.contains('on'));
+  await popup.click('#player-btn-fav'); await sleep(1400);
+  const heartOff = await popup.evaluate(() => !document.getElementById('player-btn-fav').classList.contains('on'));
+  const heartClicks2 = await tidal.evaluate(() => window.clicks.fav);
+  record('W-HEART', 'Heart toggles the footer favourite button and shows its state (on, then off)',
+    heartClicks === 1 && heartOn && heartClicks2 === 2 && heartOff ? 'PASS' : 'FAIL', { heartClicks, heartOn, heartClicks2, heartOff });
 
-  // ---- W-THEME-KEEPS-LAYOUT ----
-  await popup.click('#btn-size-toggle');
-  await popup.click('#btn-theme-toggle');
-  const bodyClass = await popup.evaluate(() => document.body.className);
-  record('W-THEME-KEEPS-LAYOUT', 'Cycling theme keeps Wide/Micro layout classes',
-    bodyClass.includes('size-wide') ? 'PASS' : 'FAIL', { bodyClass });
-  await popup.evaluate(() => { document.body.className = ''; });
+  // ---- W-JUMP: +30 s and −15 s jumps (60 s tone) ----
+  await tidal.evaluate(() => { document.getElementById('a').currentTime = 2; });
+  await sleep(2200); // let the popup's 1 s poll observe the new position
+  const t0 = await tidal.evaluate(() => document.getElementById('a').currentTime);
+  await popup.click('#player-btn-fwd30'); await sleep(400);
+  const t1 = await tidal.evaluate(() => document.getElementById('a').currentTime);
+  await sleep(1800);
+  await popup.click('#player-btn-back15'); await sleep(400);
+  const t2 = await tidal.evaluate(() => document.getElementById('a').currentTime);
+  const fwd = t1 - t0, back = t2 - t1;
+  record('W-JUMP', 'Forward 30 s moves ~+30 s; back 15 s moves ~−15 s',
+    fwd > 29 && fwd < 32 && back > -17.5 && back < -13.5 ? 'PASS' : 'FAIL', { t0: +t0.toFixed(2), t1: +t1.toFixed(2), t2: +t2.toFixed(2), fwd: +fwd.toFixed(2), back: +back.toFixed(2) });
+
+  // ---- W-THEME-DOTS: a theme dot applies the theme and it is remembered ----
+  await popup.click('.dot[data-theme="theme-amber"]');
+  await sleep(200);
+  const themeClass = await popup.evaluate(() => document.body.className);
+  const themeStored = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('visualTheme', (d) => r(d.visualTheme))));
+  record('W-THEME-DOTS', 'Theme dots switch the theme and remember it',
+    themeClass.includes('theme-amber') && themeStored === 'theme-amber' ? 'PASS' : 'FAIL', { themeClass, themeStored });
+  await popup.click('.dot[data-theme="theme-cyan"]');
 
   // ---- W-PRESET-RESET-SAFE: "Reset" on a custom preset must not delete custom presets ----
   dialogs.length = 0;
   await popup.click('#btn-save-preset'); // prompt auto-answered "Harness Preset"
   await sleep(500);
-  await popup.click('#btn-save-preset'); // second custom preset: "Harness Preset" again -> overwrite; make a distinct one
-  await sleep(300);
   const savedNames = await popup.evaluate(() => Object.keys(presets));
   await popup.selectOption('#preset-select', 'Harness Preset');
   await popup.click('.eq-nudge-btn[data-target="slider-bass"][data-action="up"]');
@@ -251,7 +269,7 @@ try {
     { savedNames, storedAfterReset, dialogs: [...dialogs] });
 
   // ---- W-NO-LAYOUT-SHIFT: Saved -> Modified (badge changes, Update appears) must not move the controls ----
-  await popup.selectOption('#preset-select', 'Harness Preset'); // custom preset: Update and Delete can appear
+  await popup.selectOption('#preset-select', 'Harness Preset');
   await sleep(250);
   const nudgeSel = '.eq-nudge-btn[data-target="slider-high"][data-action="up"]';
   const rectOf = (sel) => popup.evaluate((q) => { const r = document.querySelector(q).getBoundingClientRect(); return { x: +r.x.toFixed(1), y: +r.y.toFixed(1) }; }, sel);
@@ -266,54 +284,42 @@ try {
     nudgeBefore.y === nudgeAfter.y && nudgeBefore.x === nudgeAfter.x && sliderBefore.y === sliderAfter.y && /Modified/.test(badgeText) && updateShown ? 'PASS' : 'FAIL',
     { nudgeBefore, nudgeAfter, sliderBefore, sliderAfter, badgeText, updateShown });
 
-  // ---- W-PHYSICS-SIDE: the Physics panel docks beside the controls (both visible), then closes ----
-  await popup.setViewportSize({ width: 800, height: 600 });
-  const widthBefore = await popup.evaluate(() => document.body.getBoundingClientRect().width);
-  await popup.click('#btn-open-router');
-  await sleep(600);
-  const side = await popup.evaluate(() => {
-    const panel = document.getElementById('physics-panel').getBoundingClientRect();
-    const main = document.querySelector('.popup-main').getBoundingClientRect();
-    const slider = document.getElementById('slider-bass');
-    const r = slider.getBoundingClientRect();
-    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-    const canvas = document.getElementById('pipeline-canvas').getBoundingClientRect();
-    return { open: document.body.classList.contains('physics-open'), bodyW: document.body.getBoundingClientRect().width,
-      panelW: +panel.width.toFixed(1), panelStartsAfterMain: panel.left >= main.right - 1, sliderClickable: hit === slider,
-      canvasW: +canvas.width.toFixed(1), canvasH: +canvas.height.toFixed(1), panelH: +panel.height.toFixed(1), mainH: +main.height.toFixed(1) };
-  });
-  const shotPhysics = await shot(popup, 'popup-physics.png');
-  await popup.click('#btn-open-router');
-  await sleep(600);
-  const widthAfter = await popup.evaluate(() => document.body.getBoundingClientRect().width);
-  const persisted = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('physicsPanelOpen', (d) => r(d.physicsPanelOpen))));
-  record('W-PHYSICS-SIDE', 'Physics opens as a side panel beside the controls (sliders stay clickable) and closes back to 360px',
-    side.open && side.bodyW >= 650 && side.panelW >= 290 && side.panelStartsAfterMain && side.sliderClickable && side.canvasW > 250
-      && Math.abs(side.panelH - side.mainH) < 2 && widthAfter < 400 && persisted === false ? 'PASS' : 'FAIL',
-    { widthBefore, ...side, widthAfter, persistedAfterClose: persisted, screenshot: shotPhysics });
-
-  // ---- W-STAGE-BYPASS-SYNC: A/B bypass state survives a slider move and popup reopen ----
-  const clickEl = (pg, sel) => pg.evaluate((q) => document.querySelector(q).click(), sel);
-  await clickEl(popup, '#btn-open-router');
-  await sleep(300);
-  await clickEl(popup, '#toggle-stage-eq');
-  await sleep(200);
-  await clickEl(popup, '.eq-nudge-btn[data-target="slider-mid"][data-action="up"]');
+  // ---- W-BAND-SWITCH-SYNC: a band tag switches that stage off, keeps the value, and persists across reopen ----
+  const midBefore = await popup.evaluate(() => document.getElementById('slider-mid').value);
+  await popup.click('.band-tag[data-band="mid"]');
   await sleep(400);
-  const storedBypass = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('currentParams', (d) => r(d.currentParams?.stageBypass || null))));
+  const midAfter = await popup.evaluate(() => document.getElementById('slider-mid').value);
+  const storedMid = (await storedParams(popup))?.stageBypass;
   const { page: popup2 } = await openPopup();
-  const reopenedLabel = await popup2.locator('#toggle-stage-eq').textContent();
-  record('W-STAGE-BYPASS-SYNC', 'EQ-stage bypass persists after a slider move and shows as BYPASS on reopen',
-    storedBypass?.eq === true && /BYPASS/.test(reopenedLabel) ? 'PASS' : 'FAIL', { storedBypass, reopenedLabel });
+  const reopened = await popup2.evaluate(() => ({
+    tagOff: document.querySelector('.band-tag[data-band="mid"]').classList.contains('off'),
+    rowDimmed: document.querySelector('.eq-row[data-band="mid"]').classList.contains('is-off'),
+    midValue: document.getElementById('slider-mid').value
+  }));
   await popup2.close();
-  // restore: un-bypass so later audio checks run the full chain
-  await clickEl(popup, '#toggle-stage-eq');
-  await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { stageBypass: { hpf: false, eq: false, comp: false, gain: false } } });
-  await clickEl(popup, '#btn-open-router');
-  await popup.bringToFront();
+  record('W-BAND-SWITCH-SYNC', 'MID tag switches the band off, keeps its value, and shows as off after reopening',
+    storedMid?.mid === true && midBefore === midAfter && reopened.tagOff && reopened.rowDimmed && reopened.midValue === midBefore ? 'PASS' : 'FAIL',
+    { midBefore, midAfter, storedMid, reopened });
+  await popup.click('.band-tag[data-band="mid"]'); // back on
+  await sleep(200);
+
+  // ---- W-PHYSICS-INLINE: both drawings live on the main screen and animate ----
+  const phys = await popup.evaluate(async () => {
+    const main = document.querySelector('.popup-main').getBoundingClientRect();
+    const pc = document.getElementById('pipeline-canvas').getBoundingClientRect();
+    const bc = document.getElementById('bode-canvas').getBoundingClientRect();
+    const f0 = physics.frames;
+    await new Promise((r) => setTimeout(r, 400));
+    return { pipelineW: pc.width, pipelineH: pc.height, bodeW: bc.width, bodeH: bc.height,
+      insideMain: pc.left >= main.left && pc.right <= main.right && bc.left >= main.left && bc.right <= main.right,
+      framesAdvanced: physics.frames - f0, readout: document.getElementById('physics-readout').textContent };
+  });
+  record('W-PHYSICS-INLINE', 'Signal wave and response curve are on the main screen and animate',
+    phys.insideMain && phys.pipelineW > 300 && phys.bodeW > 300 && phys.pipelineH >= 40 && phys.bodeH >= 56 && phys.framesAdvanced > 5 ? 'PASS' : 'FAIL', phys);
 
   // ---- W-CAPTURE-START: tab capture + DSP graph (synthetic tone, muted output) ----
   const media = await context.newPage();
+  watchRequests(media);
   await media.goto(MEDIA_URL);
   await media.evaluate(() => document.getElementById('a').play());
   await sleep(700);
@@ -326,57 +332,62 @@ try {
     captureOk ? 'PASS' : (String(startRes?.error || '').includes('invoked') ? 'BLOCKED' : 'FAIL'),
     { startRes, graph, note: 'Uses --allowlisted-extension-id to stand in for the toolbar click, which automation cannot perform.' });
 
+  const NONE = { hpf: false, bass: false, mid: false, high: false, gain: false, speed: false };
   if (captureOk) {
-    // ---- W-AUDIO-BASS: objective spectrum check at 60 Hz vs 1 kHz (post-limiter) ----
     const measure = `(async () => {
       const an = audioCtx.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0;
       const tap = (typeof outputCeiling !== 'undefined' && outputCeiling) || masterLimiter;
-      tap.connect(an); const bypassAn = audioCtx.createAnalyser(); bypassAn.fftSize = 16384; bypassAn.smoothingTimeConstant = 0;
-      directPassThroughGain.connect(bypassAn);
+      tap.connect(an);
       await new Promise(r => setTimeout(r, 700));
-      const bins = (a) => { const d = new Float32Array(a.frequencyBinCount); a.getFloatFrequencyData(d); const hz = audioCtx.sampleRate / a.fftSize;
-        const at = (f) => Math.max(...[-2,-1,0,1,2].map(k => d[Math.round(f / hz) + k]));
-        const t = new Float32Array(a.fftSize); a.getFloatTimeDomainData(t); let peak = 0; for (const v of t) peak = Math.max(peak, Math.abs(v));
-        return { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), peak: +peak.toFixed(3) }; };
-      const r = { chain: bins(an), tap: tap === masterLimiter ? 'limiter' : 'ceiling' }; tap.disconnect(an); directPassThroughGain.disconnect(bypassAn);
-      return r; })()`;
-    await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: { hpf: false, eq: false, comp: false, gain: false } } });
+      const d = new Float32Array(an.frequencyBinCount); an.getFloatFrequencyData(d); const hz = audioCtx.sampleRate / an.fftSize;
+      const at = (f) => Math.max(...[-2,-1,0,1,2].map(k => d[Math.round(f / hz) + k]));
+      const t = new Float32Array(an.fftSize); an.getFloatTimeDomainData(t); let peak = 0; for (const v of t) peak = Math.max(peak, Math.abs(v));
+      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), peak: +peak.toFixed(3), tap: tap === masterLimiter ? 'limiter' : 'ceiling' };
+      tap.disconnect(an); return r; })()`;
+    const setParams = (params) => sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params });
+
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
-    const flat = await evalOffscreen(measure);
-    await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false } });
+    const flat = (await evalOffscreen(measure)).value;
+    await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
-    const boosted = await evalOffscreen(measure);
-    const f = flat.value?.chain, b = boosted.value?.chain;
-    const lift60 = b && f ? b.hz60 - f.hz60 : null;
-    const lift1k = b && f ? b.hz1k - f.hz1k : null;
+    const boosted = (await evalOffscreen(measure)).value;
+    const lift60 = boosted && flat ? boosted.hz60 - flat.hz60 : null;
+    const lift1k = boosted && flat ? boosted.hz1k - flat.hz1k : null;
     record('W-AUDIO-TRANSPARENT', 'Flat settings pass the tone at its original level (input peak 0.15)',
-      f && Math.abs(f.peak - 0.15) < 0.01 ? 'PASS' : 'FAIL', { flat: f, tap: flat.value?.tap }, 'objective-audio');
+      flat && Math.abs(flat.peak - 0.15) < 0.01 ? 'PASS' : 'FAIL', { flat }, 'objective-audio');
     record('W-AUDIO-BASS', 'Bass +10 dB lifts 60 Hz relative to 1 kHz (objective FFT, final output)',
-      lift60 !== null && lift60 > 6 && Math.abs(lift1k) < 2 ? 'PASS' : 'FAIL', { flat: f, boosted: b, lift60: lift60?.toFixed(1), lift1k: lift1k?.toFixed(1) }, 'objective-audio');
+      lift60 !== null && lift60 > 6 && Math.abs(lift1k) < 2 ? 'PASS' : 'FAIL', { flat, boosted, lift60: lift60?.toFixed(1), lift1k: lift1k?.toFixed(1) }, 'objective-audio');
 
-    await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 0, hpf: 200, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false } });
+    // ---- W-AUDIO-BAND-SWITCH: LOW off keeps the slider at +10 but removes the lift ----
+    await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: { ...NONE, bass: true } });
+    await sleep(400);
+    const bassOff = (await evalOffscreen(measure)).value;
+    const liftOff = bassOff && flat ? bassOff.hz60 - flat.hz60 : null;
+    record('W-AUDIO-BAND-SWITCH', 'With the LOW band switched off, bass +10 dB has no effect (60 Hz back to flat)',
+      liftOff !== null && Math.abs(liftOff) < 1 && lift60 > 6 ? 'PASS' : 'FAIL', { flat, bassOff, liftWithBandOff: liftOff?.toFixed(1), liftWithBandOn: lift60?.toFixed(1) }, 'objective-audio');
+
+    await setParams({ bass: 0, hpf: 200, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(500);
-    const hpf = (await evalOffscreen(measure)).value?.chain;
-    const cut60 = hpf && f ? f.hz60 - hpf.hz60 : null;
+    const hpf = (await evalOffscreen(measure)).value;
+    const cut60 = hpf && flat ? flat.hz60 - hpf.hz60 : null;
     record('W-AUDIO-HPF', 'HPF at 200 Hz attenuates 60 Hz by >15 dB (objective FFT)',
-      cut60 !== null && cut60 > 15 ? 'PASS' : 'FAIL', { flat: f, hpf200: hpf, cut60: cut60?.toFixed(1) }, 'objective-audio');
+      cut60 !== null && cut60 > 15 ? 'PASS' : 'FAIL', { flat, hpf200: hpf, cut60: cut60?.toFixed(1) }, 'objective-audio');
 
-    await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 14, hpf: 20, mid: 6, high: 6, gain: 2.5, pitch: 1, autoBalance: false, bypass: false } });
+    await setParams({ bass: 14, hpf: 20, mid: 6, high: 6, gain: 2.5, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(500);
-    const hot = (await evalOffscreen(measure)).value?.chain;
-    const hotTap = (await evalOffscreen(`(typeof outputCeiling !== 'undefined' && outputCeiling) ? 'ceiling' : 'limiter'`)).value;
+    const hot = (await evalOffscreen(measure)).value;
     record('W-AUDIO-LIMITER', 'Worst-case settings (bass +14, mid/high +6, 250%) never exceed -0.3 dBFS at the output',
-      hot && hot.peak <= 0.967 ? 'PASS' : 'FAIL', { hot, tap: hotTap, note: 'linear sample peak; 0.966 = -0.3 dBFS, 1.0 = 0 dBFS' }, 'objective-audio');
+      hot && hot.peak <= 0.967 ? 'PASS' : 'FAIL', { hot, note: 'linear sample peak; 0.966 = -0.3 dBFS, 1.0 = 0 dBFS' }, 'objective-audio');
 
     // ---- W-CAPTURE-STOP ----
     const stopRes = await sendFrom(popup, { type: 'STOP_CAPTURE' });
     await sleep(500);
     const afterStop = await evalOffscreen(`({ isCapturing, ctx: audioCtx ? audioCtx.state : null, stream: !!currentStream })`);
     const state = await sendFrom(popup, { type: 'GET_STATE' });
-    const audible = await sw.evaluate(async (id) => (await chrome.tabs.get(id)).audible, mediaTabId);
     record('W-CAPTURE-STOP', 'Stop releases stream + AudioContext; state reports OFF',
       stopRes?.success && afterStop.value?.isCapturing === false && !afterStop.value?.stream && state.isCapturing === false ? 'PASS' : 'FAIL',
-      { stopRes, afterStop, stateIsCapturing: state.isCapturing, tabAudibleAfterStop: audible });
+      { stopRes, afterStop, stateIsCapturing: state.isCapturing });
 
     // ---- W-CAPTURE-RESTART ----
     const re = await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
@@ -394,13 +405,13 @@ try {
 
     // ---- W-TAB-CLOSE-AFTER-SW-RESTART: in-memory capturedTabId lost after worker restart ----
     const media2 = await context.newPage();
+    watchRequests(media2);
     await media2.goto(MEDIA_URL + '?2');
     await media2.evaluate(() => document.getElementById('a').play());
     await sleep(500);
     const media2Id = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, MEDIA_URL + '?2');
     const s2 = await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: media2Id });
     await sleep(400);
-    // Simulate worker suspension by clearing the in-memory variable (what a real restart does).
     await sw.evaluate(() => { capturedTabId = null; });
     await media2.close();
     await sleep(1200);
@@ -409,12 +420,25 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-BASS', 'W-AUDIO-HPF', 'W-AUDIO-LIMITER', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-AUDIO-LIMITER', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }
 
-  // ---- W-FALLBACK-WINDOW: the window used when Document PiP is unavailable ----
+  // ---- W-STAY-OPEN: the switch makes the toolbar icon open the window instead of the popup, and back ----
+  const popupBefore = await sw.evaluate(() => chrome.action.getPopup({}));
+  await sendFrom(popup, { type: 'SET_STAY_OPEN', on: true });
+  await sleep(300);
+  const popupWhenOn = await sw.evaluate(() => chrome.action.getPopup({}));
+  const stayStored = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('stayOpen', (d) => r(d.stayOpen))));
+  await sendFrom(popup, { type: 'SET_STAY_OPEN', on: false });
+  await sleep(300);
+  const popupWhenOff = await sw.evaluate(() => chrome.action.getPopup({}));
+  record('W-STAY-OPEN', 'Stay open: on = toolbar icon opens the window (no popup); off = popup restored',
+    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && /popup\.html$/.test(popupWhenOff) ? 'PASS' : 'FAIL',
+    { popupBefore, popupWhenOn, stayStored, popupWhenOff });
+
+  // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();
   const fbErrors = [];
   fbPage.on('pageerror', (e) => fbErrors.push(String(e)));
@@ -423,25 +447,43 @@ try {
   await fbPage.goto(`chrome-extension://${EXT_ID}/${fbUrl}`);
   await sleep(1500);
   const fbTitle = await fbPage.locator('#player-title').first().textContent().catch(() => null);
-  await fbPage.screenshot({ path: join(outDir, 'fallback-window.png') });
-  record('W-FALLBACK-WINDOW', 'Fallback mini-player window loads without script errors and shows the track',
+  await shot(fbPage, 'fallback-window.png');
+  record('W-FALLBACK-WINDOW', 'Stay-open window page loads without script errors and shows the track',
     fbErrors.length === 0 && fbTitle === 'Synthetic Tone' ? 'PASS' : 'FAIL', { url: fbUrl, pageErrors: fbErrors, fbTitle });
+
+  // ---- W-MINIBAR: Document Picture-in-Picture from the Stay-open page (a real click) ----
+  const pipSupported = await fbPage.evaluate(() => 'documentPictureInPicture' in window);
+  if (pipSupported) {
+    await fbPage.click('#btn-minibar');
+    await sleep(1200);
+    const mb = await fbPage.evaluate(() => {
+      const w = window.documentPictureInPicture.window;
+      if (!w) return { opened: false, hint: document.getElementById('hint').textContent };
+      const d = w.document;
+      return { opened: true, title: d.getElementById('mb-title')?.textContent, hasPlay: !!d.getElementById('mb-play'), hasEq: !!d.getElementById('mb-eq'), width: w.innerWidth, height: w.innerHeight };
+    });
+    if (mb.opened) await fbPage.evaluate(() => window.documentPictureInPicture.window.close());
+    record('W-MINIBAR', 'Mini bar opens as a Document PiP window from the Stay-open page and shows the track',
+      mb.opened && mb.title === 'Synthetic Tone' && mb.hasPlay && mb.hasEq ? 'PASS' : 'FAIL', mb);
+  } else {
+    record('W-MINIBAR', 'Mini bar (Document PiP) from the Stay-open page', 'NOT RUN', { reason: 'documentPictureInPicture unavailable in this browser mode' });
+  }
   await fbPage.close();
 
-  // ---- W-FALLBACK-SINGLE: repeated "open mini-player" requests reuse one window ----
-  await sendFrom(popup, { type: 'CREATE_FALLBACK_WINDOW' });
+  // ---- W-FALLBACK-SINGLE: repeated "open window" requests reuse one window ----
+  await sendFrom(popup, { type: 'OPEN_WINDOW' });
   await sleep(800);
-  await sendFrom(popup, { type: 'CREATE_FALLBACK_WINDOW' });
+  await sendFrom(popup, { type: 'OPEN_WINDOW' });
   await sleep(800);
   const fbCount = await sw.evaluate(async (u) => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] }))
-    .filter((c) => c.documentUrl === chrome.runtime.getURL(u)).length, fbUrl);
-  record('W-FALLBACK-SINGLE', 'Opening the standalone mini-player twice keeps a single window', fbCount === 1 ? 'PASS' : 'FAIL', { fbCount });
+    .filter((c) => c.documentUrl && c.documentUrl.startsWith(chrome.runtime.getURL(u))).length, fbUrl);
+  record('W-FALLBACK-SINGLE', 'Opening the Stay-open window twice keeps a single window', fbCount === 1 ? 'PASS' : 'FAIL', { fbCount });
   for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
 
   // ---- W-NO-REMOTE-REQUESTS: nothing is contacted beyond the local fixture server ----
   const remote = allRequests.filter((u) => !/^(chrome-extension:|http:\/\/127\.0\.0\.1:|http:\/\/fake-tidal\.com:|data:|blob:|about:)/.test(u));
   record('W-NO-REMOTE-REQUESTS', 'Popup, windows and page script make no requests beyond the local fixture server (no Tidal API, no telemetry)',
-    remote.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remote.slice(0, 10) });
+    remote.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remote.slice(0, 10), note: 'On real Tidal the popup also loads the cover image from Tidal\'s image server.' });
 
   await shot(popup, 'popup-final.png');
   record('W-NO-PAGE-ERRORS', 'No uncaught errors in popup / fake Tidal page during run',

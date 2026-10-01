@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Universal Mini-Player & DJ Bass Booster",
-  "version": "1.2.1",
-  "description": "Floating macOS Mini-Player for Tidal, YouTube, Movies, and Any Tab with DJ Bass Boost, Anti-Distortion HPF, Auto-Balancing, and Physics Visualizer.",
+  "version": "1.3.0",
+  "description": "DJ bass EQ for Tidal and any tab: anti-distortion HPF, bass, mid, high, auto-balancing, master volume and pitch/speed, with a response view, transport controls and an always-on-top mini bar.",
   "permissions": [
     "tabCapture",
     "offscreen",
@@ -19,7 +19,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Universal Mini-Player & Audio Booster",
+    "default_title": "DJ Bass Booster",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
@@ -37,7 +37,7 @@
         "default": "Alt+M",
         "mac": "Alt+M"
       },
-      "description": "Show/Hide Mini-Player"
+      "description": "Show/Hide the Stay-open window"
     },
     "toggle-eq": {
       "suggested_key": {
@@ -50,22 +50,8 @@
   "content_scripts": [
     {
       "matches": ["http://*/*", "https://*/*"],
-      "js": ["router-visualizer.js", "content.js"],
+      "js": ["content.js"],
       "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "tidal-bridge.js",
-        "miniplayer.html",
-        "miniplayer.js",
-        "popup.css",
-        "router-visualizer.js",
-        "themes.css",
-        "icons/*"
-      ],
-      "matches": ["<all_urls>"]
     }
   ]
 }

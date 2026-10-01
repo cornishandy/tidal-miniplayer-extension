@@ -4,52 +4,40 @@ The actual surfaces, controls and workflows, with review coverage. Updated as ba
 
 Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and verified · ✖ removed
 
-## Surfaces (as of 1.2.0)
+## Surfaces (as of 1.3.0, `dccf108`)
 
 | Surface | How you reach it | Regions (top → bottom) | Status |
 |---|---|---|---|
-| **Toolbar popup** (360 × ~336; Wide 490; +300 with Physics open) | Click the extension icon | Header icon row · player bar (art, title, seek + ticks, ⏮ −25% ▶ +25% ⏭, volume) · status bar (AUDIO EQ switch + badge, Floating Button switch) · presets · sliders | ◐ player bar and header have options out (R-05, R-06) |
-| EQ section | Popup | Presets row (badge Saved/Modified, Update, Save As New, ✕, Reset) · Bass · HPF · Mid · High · Auto-Balancing · Master Volume · Pitch/Speed (each: label, −, slider, +, value) | ✔ dead space removed (R-03); content not yet reviewed |
-| ~~PLAYLISTS tab~~ | — | — | ✖ R-01 |
-| ~~PLAYLIST LAB tab~~ | — | — | ✖ R-01 |
-| **Physics side panel** | Header 🔬 | Signal pipeline (animated model) · stage ON/BYPASS buttons · response curve · readout · Guide | ✔ R-02; to be replaced by on-screen physics (R-12, options out) |
-| Micro mode | Header ▫️ | One row: art, title, ⏮ ▶ ⏭, EQ pill, ↗ expand | ◐ fate depends on R-06 |
-| Standalone window | Header 🗗 Undock, 📌 On Top, or Alt+M | Same as popup; sizes itself to the content; Dock closes it | ◐ R-06 |
-| In-page floating button | “Floating Button” switch (default off) | Draggable “🎧 Mini-Player” pill on every http(s) page | ● R-13: remove |
-| Document PiP window | Click the floating button (needs an in-page click) | Reduced popup copy: no skips, nudges, volume; Physics as an overlay drawer | ○ |
-| Keyboard shortcuts | Alt+M, Alt+E | Show/hide standalone window · toggle EQ | ○ |
-| Themes | Header 🎨 | Cyan, Amber, Synthwave, Matrix, OLED (Physics canvases follow) | ◐ R-06 |
-| ~~♥ favourite~~ | — | — | ✖ R-04 |
+| **The screen** (440 × 585) | Click the extension icon (or the Stay-open window) | Art strip (left) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · presets · physics (wave + response) · sliders with band switches · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–3; **your look pending** |
+| Band switches | Tag at the left of each row | LOW · HPF · MID · HI · AUTO · VOL · SPD | ✔ R-15 |
+| Physics | On the screen | Animated signal model · response curve · readout | ✔ R-12 (P3) |
+| Stay-open window | Footer switch, or Alt+M | Same screen in a window Chrome does not auto-close; sizes itself to the content | ✔ R-06 |
+| Mini bar | *Mini bar* in the Stay-open window | Always-on-top bar: art, title, ♥, −15 s, play, +30 s, EQ pill, ✕ | ✔ R-10; **your desktop check pending** |
+| Keyboard shortcuts | Alt+M, Alt+E | Show/hide the window · toggle EQ | ○ (static only) |
+| Themes | Footer dots | Cyan, Amber, Synthwave, Matrix, OLED (drawings follow) | ✔ |
+| ~~Header icon row, Micro, Wide, On Top, Undock, Physics side panel, floating button, in-page PiP, Playlists, Lab~~ | — | — | ✖ R-01, R-06, R-13 |
 
 ## Workflows
 
 | ID | Workflow | Status |
 |---|---|---|
-| J-1 | Open Tidal → turn EQ on → pick preset → adjust → close popup (EQ keeps running) | ○ |
-| J-2 | Know which tab is being processed; turn it off; normal audio returns | ◐ (R-05 option A shows the track in the EQ strip) |
-| J-3 | Control playback from popup / Micro / window / PiP | ◐ (R-05 decides which controls remain) |
-| J-4 | Save, update, delete and reset presets | ◐ (R-07 rule; list fix pending your export) |
-| J-5 | A/B a DSP stage in the Physics panel while watching the sliders | ✔ possible now (side panel) |
-| ~~J-6~~ | ~~Lab: “in A+ but not Super A+” → create playlist~~ | ✖ |
-| J-7 | Errors: wrong tab, Chrome page, tab closed, no Tidal | ○ |
+| J-1 | Open Tidal → turn EQ on → pick preset → adjust → close popup (EQ keeps running) | ◐ you confirmed title/▶ on real Tidal (1.2.0); EQ-on on real Tidal not yet reported |
+| J-2 | Know which tab is being processed; turn it off; normal audio returns | ✔ badge shows the tab title (W-CAPTURE-START/STOP) |
+| J-3 | Control playback from the screen or the mini bar | ✔ fixture; real Tidal pending |
+| J-4 | Save, update, delete and reset presets | ✔ W-PRESET-RESET-SAFE; R-07 list fix pending your export |
+| J-5 | A/B one band without losing its value | ✔ R-15 (objective audio check) |
+| J-6 | Keep the screen open while browsing; float the mini bar over other apps | ✔ W-STAY-OPEN, W-MINIBAR; your desktop check pending |
+| J-7 | Errors: wrong tab, Chrome page, tab closed, no Tidal, heart not found | ◐ messages exist; not reviewed with you |
 
 ## Batches
 
-1. ~~Purpose and everyday journey~~ → overtaken by your round-1 feedback (2026-10-01); Q1.1–Q1.4 folded into R-05/R-06.
-2. Round 1: R-05 → C chosen; R-06 → header removed (decided); R-07 presets (export pending).
-2b. **Round 2 (current)**: C1/C2 · physics p1/p2/p3 · icons i1/i2/i3 · Stay-open and Mini-bar rules · heart HTML · year source. ← **waiting on you**
-3. EQ section: main vs advanced controls, Pitch vs Speed, preset buttons, reset/undo, units, bigger type.
-4. Status and feedback: badge/icon state, errors, loading and empty states, what persists.
-5. PiP window and floating button: keep or drop; parity with the popup.
-6. Accessibility and typography: keyboard access to double-click reset, focus rings, contrast, font sizes.
-7. Housekeeping: `miniplayer.*` and `tidal-bridge.js` (unused), shortcuts; cut-over plan (presets migration).
-
-## Open questions (round 1, asked 2026-10-01)
-
-- Round 1 (answered): C chosen; title/▶ work on real Tidal; header: remove everything but stay-open and theme.
-- Round 2 (`round2.html`): C1 / C2 · p1 / p2 / p3 · i1 / i2 / i3 · OK on the Stay-open window and the Mini-bar rule · the heart button's HTML · year source.
-- R-07 Presets: send the preset list from your everyday copy (one console line, see REVIEW_READY), or name the defaults you want.
+1. ~~Purpose and everyday journey~~ → folded into rounds 1–3.
+2. ~~Round 1~~, ~~Round 2~~, **Round 3 built** (1.3.0). ← **waiting on your look at the real thing**
+3. Open items: C1 vs C2 · year source · heart on real Tidal · preset list (R-07) · EQ target-tab rules · Pitch vs Speed wording.
+4. Status and feedback: errors, loading and empty states, what persists.
+5. Accessibility and typography: keyboard access, focus rings, contrast.
+6. Cut-over plan: presets migration from your everyday copy; retiring the old install (needs your explicit decision).
 
 ## Next review point
 
-Your picks for R-05/R-06 → implement → verify → sync → batch 3 (EQ section), starting from `tests/results/review-v1.2.0/popup-default.png` or your review profile.
+Load 1.3.0, use it on real Tidal for a while, then tell me what to change. Then the open items above.

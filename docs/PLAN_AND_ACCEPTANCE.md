@@ -10,47 +10,45 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.2.1**, runtime commit `44599e5`, fingerprint `c6ff582bdd7396f4…`, 2026-10-01. Previous review builds: v1.2.0 (`a92a3c0`), v1.1.1 (`d0b6d53`). Baseline for comparison: `f03383e`, same harness where the check existed. The v1.2.0 column is kept; v1.2.1 differs only in the row marked ★.
+Current review build: **v1.3.0**, runtime commit `dccf108`, fingerprint `dfac61d0babdd57c…`, 2026-10-01. Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
-| ID | Workflow / requirement | Level | Baseline | v1.1.1 | **v1.2.0** |
-|---|---|---|---|---|---|
-| W-LOAD | Unpacked build loads; worker starts | installed-browser | PASS | PASS | PASS |
-| W-POPUP-RENDER | Popup renders; 8 factory presets load | installed-browser | PASS | PASS | PASS |
-| W-SURFACES-REMOVED | Playlists, Lab and favourite gone from popup and page script (R-01, R-04) | installed-browser | — | — | PASS |
-| W-NO-DEAD-SPACE | No empty band above/below sliders; height follows content (R-03) | installed-browser | — | — | PASS (0 px slack, 336 px tall) |
-| W-NO-LAYOUT-SHIFT ★ | Changing a value (Saved → Modified, Update appears) does not move the controls (R-14) | installed-browser | — | **FAIL on 1.2.0** (15 px jump; reproduced your report) | **PASS on 1.2.1** |
-| W-TRACK-INFO | Title/artist read from Tidal footer only | installed-browser (fake Tidal DOM) | PASS | PASS | PASS |
-| W-TRANSPORT-SCOPE | Play/Prev/Next hit footer, never playlist cards; page favourite never touched | installed-browser (decoy) | PASS | PASS | PASS |
-| W-SKIP-25 | +25 % skip moves ~25 % of duration | installed-browser | PASS | PASS | PASS |
-| W-THEME-KEEPS-LAYOUT | Theme cycle keeps Wide/Micro | installed-browser | FAIL | PASS | PASS |
-| W-PRESET-RESET-SAFE | Reset on custom preset keeps all custom presets | installed-browser | **FAIL (data loss)** | PASS | PASS |
-| W-PHYSICS-SIDE | Physics opens beside the controls, sliders clickable, closes to 360 px, state remembered (R-02) | installed-browser | — | — | PASS |
-| W-STAGE-BYPASS-SYNC | A/B stage bypass saved and shown on reopen | installed-browser | FAIL | PASS | PASS |
-| W-CAPTURE-START | EQ attaches; offscreen graph runs | installed-browser* | PASS | PASS | PASS |
-| W-AUDIO-TRANSPARENT | Flat settings keep input level (peak 0.15) | objective-audio | PASS | PASS | PASS |
-| W-AUDIO-BASS | Bass +10 dB → +9.3 dB at 60 Hz, 1 kHz unchanged | objective-audio | PASS | PASS | PASS |
-| W-AUDIO-HPF | HPF 200 Hz → −21 dB at 60 Hz | objective-audio | PASS | PASS | PASS |
-| W-AUDIO-LIMITER | Worst case never exceeds −0.3 dBFS | objective-audio | FAIL (peak 1.024) | PASS (0.965) | PASS (0.965) |
-| W-CAPTURE-STOP | Stop releases stream + context; OFF everywhere | installed-browser | PASS | PASS | PASS |
-| W-CAPTURE-RESTART | Re-attach after stop | installed-browser | PASS | PASS | PASS |
-| W-TAB-CLOSE-CLEANUP | Closing captured tab → OFF | installed-browser | PASS | PASS | PASS |
-| W-TAB-CLOSE-AFTER-SW-RESTART | Same, after worker restart | installed-browser | FAIL | PASS | PASS |
-| W-FALLBACK-WINDOW | Standalone mini-player window works | installed-browser | FAIL (crash) | PASS | PASS |
-| W-FALLBACK-SINGLE | Only one standalone window | installed-browser | FAIL | PASS | PASS |
-| W-NO-REMOTE-REQUESTS | No requests beyond the local fixture server (no Tidal API, no telemetry) | installed-browser | — | — | PASS (18 requests, all local) |
-| W-NO-PAGE-ERRORS | No uncaught errors during run | installed-browser | PASS | PASS | PASS |
-| ~~W-PLAYLIST-ESCAPE / W-PLAYLIST-ADD-HONEST / W-LAB-AUTOSELECT / W-LAB-HONESTY~~ | Playlist/Lab honesty | installed-browser | FAIL | PASS | **RETIRED** (surfaces removed, R-01) |
-| U-MANIFEST / U-COMMANDS / U-PERMS / U-SYNTAX / U-FALLBACK | Static integrity, commands wired, permissions unchanged | unit | — | PASS (5/5) | PASS |
-| U-NO-NETWORK | No `fetch`/XHR/Tidal API in shipped scripts | unit | — | — | PASS |
-| U-RETIRED | Playlists/Lab/favourite markup and commands stay out | unit | — | — | PASS |
-| W-TOOLBAR-INVOKE | EQ via a real toolbar click (activeTab grant) | user | NOT RUN | NOT RUN | NOT RUN |
-| W-PHYSICS-VISUAL | Side panel looks right in your Chrome (width, animation, Retina) | user-visual | — | — | NOT RUN (1.2.0 is now loaded in your review profile) |
-| W-PIP-FLOATING | Document PiP from the in-page floating button | user | NOT RUN | NOT RUN | NOT RUN |
-| W-SHORTCUTS | Alt+M / Alt+E in real Chrome | user | NOT RUN | NOT RUN | NOT RUN |
-| W-REAL-TIDAL-TRANSPORT | Transport and metadata on real listen.tidal.com | real-tidal | BLOCKED | BLOCKED | **PARTLY PASS (your report, 2026-10-01)**: title and artist correct, play/pause works. Prev/next, seek, skips and volume not yet reported. |
-| ~~W-REAL-TIDAL-PLAYLISTS~~ | Lab on real playlists | real-tidal | BLOCKED | BLOCKED | RETIRED |
-| W-LISTEN | Sound quality, presets, no pumping or distortion | user-listening | NOT RUN | NOT RUN | **PARTLY**: you reported liking the sound (2026-10-01); extreme-boost check still open |
-| W-LIVE-INSTALL | Everyday install untouched | static | PASS | PASS | PASS (old folder byte-identical; profile unreadable, so ID unconfirmed) |
+| ID | Workflow / requirement | Level | 1.2.1 | **1.3.0** |
+|---|---|---|---|---|
+| W-LOAD | Unpacked build loads; worker starts | installed-browser | PASS | PASS |
+| W-POPUP-RENDER | Screen renders; 8 factory presets load | installed-browser | PASS | PASS |
+| W-SURFACES-REMOVED | Header icons, tabs, floating button, side panel gone; page script ignores their commands | installed-browser | PASS (tabs) | PASS |
+| W-NO-DEAD-SPACE | Rows pack from the top; 440 px wide; under Chrome's 600 px cap | installed-browser | PASS | PASS (585 px) |
+| W-TRACK-INFO | Title/artist read from Tidal footer only | installed-browser (fake Tidal DOM) | PASS | PASS |
+| W-TRANSPORT-SCOPE | Play/Prev/Next hit footer, never playlist cards | installed-browser (decoy) | PASS | PASS |
+| W-HEART | Heart clicks the footer heart and shows its state | installed-browser | — | PASS |
+| W-JUMP | +30 s / −15 s jumps | installed-browser | — (was W-SKIP-25) | PASS (+29.7 / −13.7 while playing) |
+| W-THEME-DOTS | Theme dots switch and remember the theme | installed-browser | — (was W-THEME-KEEPS-LAYOUT) | PASS |
+| W-PRESET-RESET-SAFE | Reset on custom preset keeps all custom presets | installed-browser | PASS | PASS |
+| W-NO-LAYOUT-SHIFT | Changing a value does not move the controls | installed-browser | PASS | PASS |
+| W-BAND-SWITCH-SYNC | Band tag switches the stage off, keeps the value, persists | installed-browser | — | PASS |
+| W-PHYSICS-INLINE | Wave and curve on the main screen, animating | installed-browser | — (was W-PHYSICS-SIDE) | PASS |
+| W-CAPTURE-START | EQ attaches; offscreen graph runs | installed-browser* | PASS | PASS |
+| W-AUDIO-TRANSPARENT | Flat settings keep input level (peak 0.15) | objective-audio | PASS | PASS |
+| W-AUDIO-BASS | Bass +10 dB → +9.3 dB at 60 Hz, 1 kHz unchanged | objective-audio | PASS | PASS |
+| W-AUDIO-BAND-SWITCH | LOW off: bass +10 dB has no effect (60 Hz back to flat) | objective-audio | — | PASS |
+| W-AUDIO-HPF | HPF 200 Hz → −21 dB at 60 Hz | objective-audio | PASS | PASS |
+| W-AUDIO-LIMITER | Worst case never exceeds −0.3 dBFS | objective-audio | PASS (0.965) | PASS (0.965) |
+| W-CAPTURE-STOP / W-CAPTURE-RESTART | Stop releases everything; re-attach works | installed-browser | PASS | PASS |
+| W-TAB-CLOSE-CLEANUP / W-TAB-CLOSE-AFTER-SW-RESTART | Closing the captured tab → OFF, also after a worker restart | installed-browser | PASS | PASS |
+| W-STAY-OPEN | On: icon opens the window, no popup; off: popup restored | installed-browser | — | PASS |
+| W-FALLBACK-WINDOW / W-FALLBACK-SINGLE | Stay-open window works; only one instance | installed-browser | PASS | PASS |
+| W-MINIBAR | Mini bar opens as Document PiP from the Stay-open page by a real click | installed-browser | — | PASS |
+| W-NO-REMOTE-REQUESTS | No requests beyond the local fixture server | installed-browser | PASS | PASS (real Tidal: cover image only) |
+| W-NO-PAGE-ERRORS | No uncaught errors during run | installed-browser | PASS | PASS |
+| ~~W-PHYSICS-SIDE, W-SKIP-25, W-THEME-KEEPS-LAYOUT, W-PLAYLIST-*, W-LAB-*~~ | Removed surfaces | — | — | RETIRED |
+| U-* (8) | Manifest, commands, permissions unchanged, syntax, fallback URL, no network code, retired surfaces and dead files stay out, no emoji | unit | 7/7 | **8/8** |
+| W-TOOLBAR-INVOKE | EQ via a real toolbar click (activeTab grant) | user | NOT RUN | NOT RUN |
+| W-LOOK-1.3.0 | The new screen, strip, physics and band switches look right in your Chrome | user-visual | — | NOT RUN |
+| W-MINIBAR-DESKTOP | Mini bar floats over other apps on your desktop | user | — | NOT RUN |
+| W-SHORTCUTS | Alt+M / Alt+E in real Chrome | user | NOT RUN | NOT RUN |
+| W-REAL-TIDAL-TRANSPORT | Transport and metadata on real listen.tidal.com | real-tidal | PARTLY (title, ▶) | PARTLY (title, ▶ on 1.2.0); heart, jumps, cover art not yet reported |
+| W-LISTEN | Sound quality, presets, no pumping or distortion | user-listening | PARTLY | PARTLY (you liked 1.1.0's sound; 1.2.x+ ceiling not yet judged) |
+| W-LIVE-INSTALL | Everyday install untouched | static | PASS | PASS |
 
 \* Capture was authorised with `--allowlisted-extension-id` in place of the toolbar click. The graph, stop and cleanup behaviour is real.
 
@@ -58,7 +56,7 @@ Current review build: **v1.2.1**, runtime commit `44599e5`, fingerprint `c6ff582
 
 - **2026-09-24 takeover**: identity and preservation verified; assessment; build script with fingerprint; isolated harness; 13 fixes (`9b01e83`); v1.1.1; operating README; review build.
 - **2026-10-01 round 1**: Playlists, Lab and favourite removed; Physics as a side panel; dead space removed; v1.2.0 (`a92a3c0`). Harness 24/24, unit 7/7. Design mockups for the open questions in `docs/mockups/`.
-- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).
+- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).\n- **2026-10-01 round 3**: the new main screen, v1.3.0 (`dccf108`): legible size, no header, art strip, jumps, heart, per-band switches, physics on screen, Stay open, mini bar; dead files removed. Harness 29/29, unit 8/8.
 
 ## Changes from inherited decisions or claims
 

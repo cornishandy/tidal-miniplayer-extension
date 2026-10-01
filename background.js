@@ -1,9 +1,22 @@
-// background.js - Service Worker for Tab Audio Capture, Routing, and Mini-Player
+// background.js - Service Worker for Tab Audio Capture, Routing, and the Stay-open window
 
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
-// Standalone mini-player window. Used when Document PiP is unavailable (PiP needs a click inside the page).
+// The Stay-open window: the popup screen in a window Chrome does not auto-close.
 const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
 let capturedTabId = null;
+
+// "Stay open": when on, the toolbar icon opens the window instead of the auto-closing popup.
+async function applyStayOpen(on) {
+  await chrome.action.setPopup({ popup: on ? '' : 'popup.html' });
+}
+
+chrome.action.onClicked.addListener(() => { openFallbackWindow().catch(() => {}); });
+
+async function restoreStayOpen() {
+  const { stayOpen } = await chrome.storage.local.get('stayOpen');
+  await applyStayOpen(!!stayOpen);
+}
+chrome.runtime.onStartup.addListener(() => { restoreStayOpen().catch(() => {}); });
 
 // Built-in presets
 const FACTORY_PRESETS = {
@@ -86,7 +99,7 @@ const FACTORY_PRESET_NAMES = Object.keys(FACTORY_PRESETS);
 const DEFAULT_PRESETS = { ...FACTORY_PRESETS };
 
 chrome.runtime.onInstalled.addListener(async () => {
-  const data = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'showFloatingButton_userExplicit']);
+  const data = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset']);
   if (!data.presets) {
     await chrome.storage.local.set({ presets: DEFAULT_PRESETS });
   } else {
@@ -101,12 +114,9 @@ chrome.runtime.onInstalled.addListener(async () => {
   if (!data.currentPreset) {
     await chrome.storage.local.set({ currentPreset: "Punchy Bass & Clarity" });
   }
-  if (!data.showFloatingButton_userExplicit) {
-    await chrome.storage.local.set({
-      showFloatingButton: false,
-      showFloatingButton_userExplicit: false
-    });
-  }
+  // Settings of removed features (floating button, Physics side panel).
+  await chrome.storage.local.remove(['showFloatingButton', 'showFloatingButton_userExplicit', 'physicsPanelOpen']);
+  await restoreStayOpen();
 });
 
 async function isOffscreenOpen() {
@@ -363,46 +373,41 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
-// Standalone mini-player window (single instance)
+// Stay-open window (single instance). `minibar` asks the window to highlight its Mini bar button.
 async function findFallbackWindow() {
   const url = chrome.runtime.getURL(FALLBACK_WINDOW_URL);
   const contexts = await chrome.runtime.getContexts({ contextTypes: ['TAB'] });
-  return contexts.find(c => c.documentUrl === url) || null;
+  return contexts.find(c => c.documentUrl && c.documentUrl.startsWith(url)) || null;
 }
 
-async function openFallbackWindow() {
+async function openFallbackWindow({ minibar = false } = {}) {
   const existing = await findFallbackWindow();
   if (existing) {
     await chrome.windows.update(existing.windowId, { focused: true });
+    if (minibar) chrome.runtime.sendMessage({ type: 'MINIBAR_HINT' }).catch(() => {});
     return;
   }
   // Initial size only; the page then fits the window to its content (popup.js fitUndockedWindow).
   await chrome.windows.create({
-    url: chrome.runtime.getURL(FALLBACK_WINDOW_URL),
+    url: chrome.runtime.getURL(FALLBACK_WINDOW_URL + (minibar ? '&minibar=1' : '')),
     type: 'popup',
-    width: 360,
-    height: 420
+    width: 440,
+    height: 600
   });
 }
+
 
 // Keyboard shortcut handlers
 chrome.commands.onCommand.addListener(async (command) => {
   try {
     if (command === 'toggle-miniplayer') {
-      // "Show/Hide": a second press closes the standalone window.
+      // "Show/Hide": a second press closes the Stay-open window.
       const existing = await findFallbackWindow();
       if (existing) {
         await chrome.windows.remove(existing.windowId);
         return;
       }
-      const targetTab = await findMediaTabForPlayer();
-      if (targetTab?.id) {
-        chrome.tabs.sendMessage(targetTab.id, { type: 'TOGGLE_MINIPLAYER' }, (res) => {
-          if (chrome.runtime.lastError || !res?.success) openFallbackWindow();
-        });
-      } else {
-        await openFallbackWindow();
-      }
+      await openFallbackWindow();
     } else if (command === 'toggle-eq') {
       const status = await getActualCaptureStatus();
       if (status.isCapturing) {
@@ -434,7 +439,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           }
           try {
             const result = await startAudioCapture(targetTab.id);
-            sendResponse({ success: true, result, capturedTabId });
+            sendResponse({ success: true, result, capturedTabId, tabTitle: targetTab.title || null });
           } catch (err) {
             sendResponse({ success: false, error: explainCaptureError(err, targetTab) });
           }
@@ -495,60 +500,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'GET_STATE': {
-          const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'showFloatingButton', 'showFloatingButton_userExplicit']);
+          const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'stayOpen']);
           const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
           const currentPreset = stored.currentPreset || "Punchy Bass & Clarity";
-          const showFloating = stored.showFloatingButton_userExplicit === true && stored.showFloatingButton === true;
           const status = await getActualCaptureStatus();
+          let tabTitle = null;
+          if (status.isCapturing && status.tabId) {
+            try { tabTitle = (await chrome.tabs.get(status.tabId)).title || null; } catch { tabTitle = null; }
+          }
 
           sendResponse({
             capturedTabId: status.tabId,
+            capturedTabTitle: tabTitle,
             isCapturing: status.isCapturing,
             presets,
             factoryPresets: FACTORY_PRESET_NAMES,
             currentPreset,
             currentParams: stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS["Punchy Bass & Clarity"],
-            showFloatingButton: showFloating
+            stayOpen: !!stored.stayOpen
           });
           break;
         }
 
+        case 'SET_STAY_OPEN': {
+          await chrome.storage.local.set({ stayOpen: !!message.on });
+          await applyStayOpen(!!message.on);
+          sendResponse({ success: true, stayOpen: !!message.on });
+          break;
+        }
+
+        case 'OPEN_WINDOW':
         case 'TOGGLE_MINIPLAYER':
-        case 'OPEN_MINIPLAYER': {
-          const targetTab = await findMediaTabForPlayer();
-          if (targetTab?.id) {
-            chrome.tabs.sendMessage(targetTab.id, { type: 'TOGGLE_MINIPLAYER' }, (res) => {
-              if (chrome.runtime.lastError || !res?.success) {
-                openFallbackWindow();
-              }
-            });
-          } else {
-            await openFallbackWindow();
-          }
-          sendResponse({ success: true });
-          break;
-        }
-
+        case 'OPEN_MINIPLAYER':
         case 'CREATE_FALLBACK_WINDOW': {
-          await openFallbackWindow();
-          sendResponse({ success: true });
-          break;
-        }
-
-        case 'TOGGLE_FLOATING_BUTTON': {
-          await chrome.storage.local.set({
-            showFloatingButton: !!message.show,
-            showFloatingButton_userExplicit: true
-          });
-          const allTabs = await chrome.tabs.query({});
-          allTabs.forEach(tab => {
-            if (tab.id && !tab.url?.startsWith('chrome://')) {
-              chrome.tabs.sendMessage(tab.id, {
-                type: 'TOGGLE_FLOATING_BUTTON',
-                show: !!message.show
-              }).catch(() => {});
-            }
-          });
+          await openFallbackWindow({ minibar: !!message.minibar });
           sendResponse({ success: true });
           break;
         }

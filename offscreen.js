@@ -48,11 +48,27 @@ let currentParams = {
   bypass: false,
   stageBypass: {
     hpf: false,
-    eq: false,
+    bass: false,
+    mid: false,
+    high: false,
     comp: false,
-    gain: false
+    gain: false,
+    speed: false
   }
 };
+
+// Which stages are switched off. `eq` is the pre-1.3 flag for the whole 3-band EQ and is still honoured.
+function bypassState() {
+  const b = currentParams.stageBypass || {};
+  return {
+    hpf: !!b.hpf,
+    bass: !!(b.bass || b.eq),
+    mid: !!(b.mid || b.eq),
+    high: !!(b.high || b.eq),
+    comp: !!b.comp || !currentParams.autoBalance,
+    gain: !!b.gain
+  };
+}
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
@@ -122,26 +138,27 @@ async function startCapture(streamId, initialParams = {}) {
     // 2. High-Pass Filter (Anti-Distortion Sub-Bass Barrier)
     hpfNode = audioCtx.createBiquadFilter();
     hpfNode.type = 'highpass';
-    hpfNode.frequency.value = currentParams.stageBypass?.hpf ? 20 : currentParams.hpf;
+    const off = bypassState();
+    hpfNode.frequency.value = off.hpf ? 20 : currentParams.hpf;
     hpfNode.Q.value = 0.707; // Butterworth response
 
     // 3. Low-Shelf & Peaking EQ
     bassNode = audioCtx.createBiquadFilter();
     bassNode.type = 'lowshelf';
     bassNode.frequency.value = 120;
-    bassNode.gain.value = currentParams.stageBypass?.eq ? 0 : currentParams.bass;
+    bassNode.gain.value = off.bass ? 0 : currentParams.bass;
 
     midNode = audioCtx.createBiquadFilter();
     midNode.type = 'peaking';
     midNode.frequency.value = 1000;
     midNode.Q.value = 0.8;
-    midNode.gain.value = currentParams.stageBypass?.eq ? 0 : currentParams.mid;
+    midNode.gain.value = off.mid ? 0 : currentParams.mid;
 
     // 4. High-Shelf Filter (Silky 5000Hz highs)
     highNode = audioCtx.createBiquadFilter();
     highNode.type = 'highshelf';
     highNode.frequency.value = 5000;
-    highNode.gain.value = currentParams.stageBypass?.eq ? 0 : currentParams.high;
+    highNode.gain.value = off.high ? 0 : currentParams.high;
 
     // 5. Auto-Balance Compressor (Gentle, musical leveler)
     autoBalanceComp = audioCtx.createDynamicsCompressor();
@@ -156,7 +173,7 @@ async function startCapture(streamId, initialParams = {}) {
 
     // 6. Master Volume / Gain
     volumeGain = audioCtx.createGain();
-    volumeGain.gain.value = currentParams.stageBypass?.gain ? 1.0 : currentParams.gain;
+    volumeGain.gain.value = off.gain ? 1.0 : currentParams.gain;
 
     // 7. Master Brickwall Safety Limiter (Prevents DAC clipping & distortion)
     masterLimiter = audioCtx.createDynamicsCompressor();
@@ -233,31 +250,13 @@ function updateParams(newParams) {
 
   const now = audioCtx.currentTime;
   const rampTime = 0.03; // 30ms smooth crossfade to eliminate pops
+  const off = bypassState();
 
-  if (hpfNode) {
-    const targetHpf = currentParams.stageBypass?.hpf ? 20 : (currentParams.hpf || 30);
-    hpfNode.frequency.setTargetAtTime(targetHpf, now, rampTime);
-  }
-
-  if (bassNode) {
-    const targetBass = currentParams.stageBypass?.eq ? 0 : (currentParams.bass || 0);
-    bassNode.gain.setTargetAtTime(targetBass, now, rampTime);
-  }
-
-  if (midNode) {
-    const targetMid = currentParams.stageBypass?.eq ? 0 : (currentParams.mid || 0);
-    midNode.gain.setTargetAtTime(targetMid, now, rampTime);
-  }
-
-  if (highNode) {
-    const targetHigh = currentParams.stageBypass?.eq ? 0 : (currentParams.high || 0);
-    highNode.gain.setTargetAtTime(targetHigh, now, rampTime);
-  }
-
-  if (volumeGain) {
-    const targetGain = currentParams.stageBypass?.gain ? 1.0 : (currentParams.gain || 1.0);
-    volumeGain.gain.setTargetAtTime(targetGain, now, rampTime);
-  }
+  if (hpfNode) hpfNode.frequency.setTargetAtTime(off.hpf ? 20 : (currentParams.hpf || 30), now, rampTime);
+  if (bassNode) bassNode.gain.setTargetAtTime(off.bass ? 0 : (currentParams.bass || 0), now, rampTime);
+  if (midNode) midNode.gain.setTargetAtTime(off.mid ? 0 : (currentParams.mid || 0), now, rampTime);
+  if (highNode) highNode.gain.setTargetAtTime(off.high ? 0 : (currentParams.high || 0), now, rampTime);
+  if (volumeGain) volumeGain.gain.setTargetAtTime(off.gain ? 1.0 : (currentParams.gain || 1.0), now, rampTime);
 
   applyRoutingState();
 }
@@ -273,7 +272,7 @@ function applyRoutingState({ immediate = false } = {}) {
   };
 
   const isBypass = currentParams.bypass === true;
-  const isCompBypassed = currentParams.stageBypass?.comp || !currentParams.autoBalance;
+  const isCompBypassed = bypassState().comp;
 
   set(dspPathGain, isBypass ? 0.0 : 1.0);
   set(directPassThroughGain, isBypass ? 1.0 : 0.0);
