@@ -16,6 +16,14 @@
     <symbol id="s-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
     <symbol id="s-back" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 3v5h5"/></symbol>
     <symbol id="s-fwd" viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 3v5h-5"/></symbol>
+    <!-- band icons (side panel buttons) -->
+    <symbol id="i-bass" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><circle cx="8" cy="8" r="2.2"/></symbol>
+    <symbol id="i-hpf" viewBox="0 0 16 16"><path d="M2 13.5C5.5 13.5 6 3 14 3"/><path d="M2 3v10.5"/></symbol>
+    <symbol id="i-mid" viewBox="0 0 16 16"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5"/></symbol>
+    <symbol id="i-high" viewBox="0 0 16 16"><path d="M8 1.5 9.6 6.4 14.5 8 9.6 9.6 8 14.5 6.4 9.6 1.5 8l4.9-1.6z"/></symbol>
+    <symbol id="i-comp" viewBox="0 0 16 16"><path d="M8 2v12M3 5.5h10"/><path d="M3 5.5 1.5 10h3zM13 5.5l-1.5 4.5h3z"/></symbol>
+    <symbol id="i-gain" viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11.5 6a3 3 0 0 1 0 4"/></symbol>
+    <symbol id="i-speed" viewBox="0 0 16 16"><path d="M2.5 12.5a6 6 0 1 1 11 0"/><path d="M8 12.5l3-4.5"/></symbol>
   </svg>
 
   <div class="popup-container">
@@ -81,7 +89,7 @@
         <!-- Sliders. The tag at the left switches that stage off while keeping its value. -->
         <main class="controls-area">
           <div class="eq-row" data-band="bass">
-            <button class="band-tag" data-band="bass" title="Bass on. Click to switch it off without losing the value.">LOW</button>
+            <button class="band-tag" data-band="bass" title="Bass on. Click to switch it off without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-bass"/></svg><span class="band-text">LOW</span></button>
             <div class="eq-label" title="Low-shelf filter at 120 Hz: warm low-end weight, +0 to +14 dB.">Bass Boost</div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-bass" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
             <input type="range" id="slider-bass" class="eq-slider" min="0" max="14" step="0.5" value="5.0">
@@ -90,7 +98,7 @@
           </div>
 
           <div class="eq-row" data-band="hpf">
-            <button class="band-tag" data-band="hpf" title="High-pass filter on. Click to switch it off without losing the value.">HPF</button>
+            <button class="band-tag" data-band="hpf" title="High-pass filter on. Click to switch it off without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-hpf"/></svg><span class="band-text">HPF</span></button>
             <div class="eq-label" title="High-pass filter, 20 to 200 Hz, 12 dB/octave: removes sub-sonic rumble that causes distortion.">HPF <small>anti-distort</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-hpf" data-step="5" title="−5 Hz (Shift: −1)">−</button>
             <input type="range" id="slider-hpf" class="eq-slider" min="20" max="200" step="5" value="30">
@@ -99,7 +107,7 @@
           </div>
 
           <div class="eq-row" data-band="mid">
-            <button class="band-tag" data-band="mid" title="Mid on. Click to switch it off without losing the value.">MID</button>
+            <button class="band-tag" data-band="mid" title="Mid on. Click to switch it off without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-mid"/></svg><span class="band-text">MID</span></button>
             <div class="eq-label" title="Peaking filter at 1 kHz (Q 0.8): vocal presence and body, −6 to +6 dB.">Mid <small>vocals / body</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-mid" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
             <input type="range" id="slider-mid" class="eq-slider" min="-6" max="6" step="0.5" value="1.5">
@@ -108,7 +116,7 @@
           </div>
 
           <div class="eq-row" data-band="high">
-            <button class="band-tag" data-band="high" title="High on. Click to switch it off without losing the value.">HI</button>
+            <button class="band-tag" data-band="high" title="High on. Click to switch it off without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-high"/></svg><span class="band-text">HI</span></button>
             <div class="eq-label" title="High-shelf filter at 5 kHz: air and sparkle, −6 to +6 dB.">High <small>sparkle</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-high" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
             <input type="range" id="slider-high" class="eq-slider" min="-6" max="6" step="0.5" value="2.0">
@@ -117,13 +125,13 @@
           </div>
 
           <div class="eq-row toggle-row" data-band="comp">
-            <button class="band-tag" data-band="comp" title="Auto-Balancing on. Click to switch it off.">AUTO</button>
+            <button class="band-tag" data-band="comp" title="Auto-Balancing on. Click to switch it off."><svg class="band-icon" aria-hidden="true"><use href="#i-comp"/></svg><span class="band-text">AUTO</span></button>
             <div class="eq-label" title="Dynamic leveler: keeps deep bass boosts balanced and free of distortion.">Auto-Balancing <small>leveler</small></div>
             <span class="eq-val" id="val-auto">on</span>
           </div>
 
           <div class="eq-row" data-band="gain">
-            <button class="band-tag" data-band="gain" title="Master volume on. Click to switch it off (100 %) without losing the value.">VOL</button>
+            <button class="band-tag" data-band="gain" title="Master volume on. Click to switch it off (100 %) without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-gain"/></svg><span class="band-text">VOL</span></button>
             <div class="eq-label" title="Output gain, 50 % to 250 %, before the safety limiter. 100 % is unity.">Master Volume</div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-gain" data-step="0.05" title="−5 % (Shift: −1 %)">−</button>
             <input type="range" id="slider-gain" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1.0">
@@ -132,7 +140,7 @@
           </div>
 
           <div class="eq-row" data-band="speed">
-            <button class="band-tag" data-band="speed" title="Pitch / Speed on. Click to switch it off (1.00x) without losing the value.">SPD</button>
+            <button class="band-tag" data-band="speed" title="Pitch / Speed on. Click to switch it off (1.00x) without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-speed"/></svg><span class="band-text">SPD</span></button>
             <div class="eq-label" title="Playback speed and pitch, 0.75x to 1.30x. Applies while the EQ is on.">Pitch / Speed</div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-pitch" data-step="0.05" title="−0.05x (Shift: −0.01x)">−</button>
             <input type="range" id="slider-pitch" class="eq-slider" min="0.75" max="1.3" step="0.05" value="1.0">

@@ -9,7 +9,7 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 | Surface | How you reach it | Regions (top → bottom) | Status |
 |---|---|---|---|
 | **The screen** (440 × 585) | Click the extension icon (or the Stay-open window) | Art slice (left) · full cover (top right) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · presets · physics (live spectrum + response) · sliders with band switches · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–4; **your look pending** |
-| Band switches | Tag at the left of each row | LOW · HPF · MID · HI · AUTO · VOL · SPD | ✔ R-15 |
+| Band switches | Tag at the left of each row | Popup: LOW · HPF · MID · HI · AUTO · VOL · SPD text tags. Side panel: icon buttons (R-21, option A) | ✔ R-15, R-21 |
 | Physics | On the screen | **Live spectrum** (in vs out, real audio) · response curve (settings) · readout | ✔ R-12 → R-18 ("make it real") |
 | **Side panel** (Stay open) | Footer switch, then the toolbar icon; or Alt+M | Same screen docked beside the page in Chrome's side panel; two-line slider rows; stays while you click anything | ✔ R-20; **your check pending** |
 | Standalone window | Fallback only (Chrome without a side panel) | Same screen in a window | ✔ R-06 (fallback) |
