@@ -41,7 +41,7 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 1. In Chrome, open the profile menu, choose **Add**, then **Continue without an account**, and name it *Extension Review*.
 2. In that profile's window, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose
    `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`.
-3. Check the card shows version **1.2.0** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
+3. Check the card shows version **1.2.1** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
 
 Why a separate profile: an unpacked extension's ID comes from its folder, so the review build is a **different extension** from your live 1.1.0 install. It has its own empty settings, and your custom presets are *not* copied. In the same profile, both copies would inject into every page. Chrome also lets only one of them capture a given tab. For Tidal features in the review profile, sign in to Tidal there.
 

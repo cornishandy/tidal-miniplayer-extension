@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-01 (round 1)
+# Review Ready: 2026-10-01 (round 2)
 
 ## Identity
 
@@ -15,15 +15,19 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` |
-| Version | **1.2.0** (the live install is 1.1.0; the previous review build was 1.1.1) |
+| Version | **1.2.1** (the live install is 1.1.0; previous review builds 1.1.1, 1.2.0) |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (unchanged: same folder) |
-| Runtime source commit | `a92a3c0` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `467808d118953de1…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `44599e5` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `c6ff582bdd7396f4…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
 
-## What changed since 1.1.1 (your round-1 decisions)
+## What changed in 1.2.1
+
+- The preset row no longer reflows when a value changes, so the sliders and + / − buttons stay put under the pointer (your report; R-14). Button labels are shorter: *Update*, *+ Save*, *↺ Reset*.
+
+## What changed in 1.2.0 (your round-1 decisions)
 
 - Playlists and Playlist Lab tabs: **gone**. The extension now makes **no network requests** and no longer reads Tidal's session.
 - ♥ favourite: **gone** (popup, Micro, PiP).
@@ -43,16 +47,17 @@ Toolbar popup (player bar · AUDIO EQ · presets · sliders), Physics side panel
 
 ## Tests
 
-- **Executed**: 24 installed-browser and objective-audio checks, plus 7 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.2.0/`.
+- **Executed**: 25 installed-browser and objective-audio checks, plus 7 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.2.1/`.
 - **Not run**: your visual check of the side panel in real Chrome, a real toolbar-click capture, Document PiP from the floating button, Alt+M/Alt+E, and the extreme-boost listening check.
 - **Blocked**: anything on real Tidal (transport, metadata). It needs your signed-in session, and I don't contact Tidal.
 
 ## What I need from you
 
-1. ~~Load 1.2.0~~ Done (2026-10-01): loaded in your review profile; title/artist and play/pause confirmed on real Tidal. Still open: open 🔬 and tell me if the side panel looks right.
-2. Pick a player bar (A/B/C) and a header (1/2/3) from the mockups (now with the cover-art strip and year), or say what you'd change.
-3. **Year of original release: pick a source.** Tidal's player bar has no year, so one of: (a) Tidal's own album data: the year of the album edition you're playing (remasters show the remaster year), fetched from Tidal using your signed-in session (this re-adds a Tidal request, which 1.2.0 removed); (b) **MusicBrainz** first-release year: the real original year, but the extension would send each track's title and artist to musicbrainz.org (free, no account, no key); (c) no year. Assistant's recommendation: (b) if you're comfortable with that lookup, otherwise (a).
-4. For the presets: the list from your everyday copy. In the everyday Chrome profile, right-click the extension icon → **Inspect popup** → **Console** tab → paste the line below → copy what it prints into our chat. It only reads; it changes nothing.
+1. Click **Reload** on the review card; confirm **1.2.1**; check that nudging a value no longer moves the sliders.
+2. Round-2 picks (`docs/mockups/round2.html`, `r2-*.png`): player **C1 or C2** · physics **p1 / p2 / p3** · icons **i1 / i2 / i3** · OK on the **Stay open** window and the **Mini bar** rule (it opens from that window and lives as long as the window does).
+3. **The heart.** On the Tidal page, right-click the heart in the bottom player bar → **Inspect** → in the panel, right-click the highlighted line → **Copy** → **Copy outerHTML** → paste it here. That lets me target Tidal's own button instead of guessing.
+4. **Year of original release: pick a source.** Tidal's player bar has no year, so one of: (a) Tidal's own album data: the year of the album edition you're playing (remasters show the remaster year), fetched from Tidal using your signed-in session (this re-adds a Tidal request, which 1.2.0 removed); (b) **MusicBrainz** first-release year: the real original year, but the extension would send each track's title and artist to musicbrainz.org (free, no account, no key); (c) no year. Assistant's recommendation: (b) if you're comfortable with that lookup, otherwise (a).
+5. For the presets: the list from your everyday copy. In the everyday Chrome profile, right-click the extension icon → **Inspect popup** → **Console** tab → paste the line below → copy what it prints into our chat. It only reads; it changes nothing.
    `chrome.storage.local.get(['presets','currentPreset'], d => console.log(JSON.stringify(d, null, 1)))`
 
 ## Remaining known issues

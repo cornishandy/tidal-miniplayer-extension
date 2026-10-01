@@ -10,7 +10,7 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.2.0**, runtime commit `a92a3c0`, fingerprint `467808d118953de1…`, 2026-10-01. Previous review build: v1.1.1 (`d0b6d53`). Baseline for comparison: `f03383e`, same harness where the check existed.
+Current review build: **v1.2.1**, runtime commit `44599e5`, fingerprint `c6ff582bdd7396f4…`, 2026-10-01. Previous review builds: v1.2.0 (`a92a3c0`), v1.1.1 (`d0b6d53`). Baseline for comparison: `f03383e`, same harness where the check existed. The v1.2.0 column is kept; v1.2.1 differs only in the row marked ★.
 
 | ID | Workflow / requirement | Level | Baseline | v1.1.1 | **v1.2.0** |
 |---|---|---|---|---|---|
@@ -18,6 +18,7 @@ Current review build: **v1.2.0**, runtime commit `a92a3c0`, fingerprint `467808d
 | W-POPUP-RENDER | Popup renders; 8 factory presets load | installed-browser | PASS | PASS | PASS |
 | W-SURFACES-REMOVED | Playlists, Lab and favourite gone from popup and page script (R-01, R-04) | installed-browser | — | — | PASS |
 | W-NO-DEAD-SPACE | No empty band above/below sliders; height follows content (R-03) | installed-browser | — | — | PASS (0 px slack, 336 px tall) |
+| W-NO-LAYOUT-SHIFT ★ | Changing a value (Saved → Modified, Update appears) does not move the controls (R-14) | installed-browser | — | **FAIL on 1.2.0** (15 px jump; reproduced your report) | **PASS on 1.2.1** |
 | W-TRACK-INFO | Title/artist read from Tidal footer only | installed-browser (fake Tidal DOM) | PASS | PASS | PASS |
 | W-TRANSPORT-SCOPE | Play/Prev/Next hit footer, never playlist cards; page favourite never touched | installed-browser (decoy) | PASS | PASS | PASS |
 | W-SKIP-25 | +25 % skip moves ~25 % of duration | installed-browser | PASS | PASS | PASS |
@@ -57,6 +58,7 @@ Current review build: **v1.2.0**, runtime commit `a92a3c0`, fingerprint `467808d
 
 - **2026-09-24 takeover**: identity and preservation verified; assessment; build script with fingerprint; isolated harness; 13 fixes (`9b01e83`); v1.1.1; operating README; review build.
 - **2026-10-01 round 1**: Playlists, Lab and favourite removed; Physics as a side panel; dead space removed; v1.2.0 (`a92a3c0`). Harness 24/24, unit 7/7. Design mockups for the open questions in `docs/mockups/`.
+- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).
 
 ## Changes from inherited decisions or claims
 
