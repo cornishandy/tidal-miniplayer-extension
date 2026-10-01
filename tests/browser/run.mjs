@@ -250,6 +250,22 @@ try {
     savedNames.includes('Harness Preset') && storedAfterReset.includes('Harness Preset') ? 'PASS' : 'FAIL',
     { savedNames, storedAfterReset, dialogs: [...dialogs] });
 
+  // ---- W-NO-LAYOUT-SHIFT: Saved -> Modified (badge changes, Update appears) must not move the controls ----
+  await popup.selectOption('#preset-select', 'Harness Preset'); // custom preset: Update and Delete can appear
+  await sleep(250);
+  const nudgeSel = '.eq-nudge-btn[data-target="slider-high"][data-action="up"]';
+  const rectOf = (sel) => popup.evaluate((q) => { const r = document.querySelector(q).getBoundingClientRect(); return { x: +r.x.toFixed(1), y: +r.y.toFixed(1) }; }, sel);
+  const nudgeBefore = await rectOf(nudgeSel);
+  const sliderBefore = await rectOf('#slider-bass');
+  for (let i = 0; i < 3; i++) { await popup.click(nudgeSel); await sleep(90); }
+  const nudgeAfter = await rectOf(nudgeSel);
+  const sliderAfter = await rectOf('#slider-bass');
+  const badgeText = await popup.locator('#preset-status-badge').textContent();
+  const updateShown = await popup.locator('#btn-update-preset').isVisible();
+  record('W-NO-LAYOUT-SHIFT', 'Nudging a value (Saved → Modified, Update button appears) does not move the sliders or buttons',
+    nudgeBefore.y === nudgeAfter.y && nudgeBefore.x === nudgeAfter.x && sliderBefore.y === sliderAfter.y && /Modified/.test(badgeText) && updateShown ? 'PASS' : 'FAIL',
+    { nudgeBefore, nudgeAfter, sliderBefore, sliderAfter, badgeText, updateShown });
+
   // ---- W-PHYSICS-SIDE: the Physics panel docks beside the controls (both visible), then closes ----
   await popup.setViewportSize({ width: 800, height: 600 });
   const widthBefore = await popup.evaluate(() => document.body.getBoundingClientRect().width);

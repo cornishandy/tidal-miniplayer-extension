@@ -655,10 +655,15 @@ input:checked + .slider-round:before {
   flex-shrink: 0;
 }
 
+/* Fixed height and no wrapping: the Saved/Modified badge and the Update/Delete buttons come and go
+   while you drag or nudge, and must never move the sliders under the pointer. */
 .section-title-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: nowrap;
+  height: 20px;
+  overflow: hidden;
   margin-bottom: 4px;
 }
 
@@ -669,29 +674,35 @@ input:checked + .slider-round:before {
   color: var(--text-muted, #888);
 }
 
-.preset-badge-saved {
+.preset-badge-saved,
+.preset-badge-modified {
   font-size: 8.5px;
   font-weight: 700;
-  color: #888;
   padding: 1px 5px;
   border-radius: 8px;
+  min-width: 66px;
+  text-align: center;
+  white-space: nowrap;
+  border: 1px solid transparent;
+}
+
+.preset-badge-saved {
+  color: #888;
   background: rgba(255,255,255,0.05);
 }
 
 .preset-badge-modified {
-  font-size: 8.5px;
-  font-weight: 700;
   color: #ffb300;
-  padding: 1px 5px;
-  border-radius: 8px;
   background: rgba(255, 179, 0, 0.15);
-  border: 1px solid rgba(255, 179, 0, 0.35);
+  border-color: rgba(255, 179, 0, 0.35);
   box-shadow: 0 0 6px rgba(255, 179, 0, 0.2);
 }
 
 .preset-actions {
   display: flex;
   gap: 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .btn-text {
