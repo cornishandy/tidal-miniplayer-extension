@@ -19,6 +19,12 @@ let volumeGain = null;
 let masterLimiter = null;
 let outputCeiling = null;
 
+// Live display taps: what the tab sends (before the chain) and what you hear (after the ceiling).
+let inputAnalyser = null;
+let outputAnalyser = null;
+let frameBuf = null;
+const FRAME_POINTS = 72; // log-spaced 20 Hz .. 20 kHz
+
 // Final safety ceiling after the limiter. DynamicsCompressorNode can overshoot on fast peaks
 // (measured +0.2 dBFS at extreme settings), so samples above CEILING_KNEE are bent smoothly
 // toward CEILING_MAX (-0.3 dBFS). Below the knee the curve is exact identity (no coloration).
@@ -94,8 +100,36 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'GET_AUDIO_STATUS':
       sendResponse({ isCapturing, currentParams });
       return true;
+
+    case 'GET_AUDIO_FRAME':
+      // One snapshot of both spectra, in dB (0 = full-scale sine), for the popup's live display.
+      if (isCapturing && inputAnalyser && outputAnalyser && audioCtx) {
+        sendResponse({ isCapturing: true, input: spectrumPoints(inputAnalyser), output: spectrumPoints(outputAnalyser) });
+      } else {
+        sendResponse({ isCapturing: false });
+      }
+      return true;
   }
 });
+
+// Collapse an analyser's bins into FRAME_POINTS log-spaced points (max within each span).
+function spectrumPoints(analyser) {
+  const n = analyser.frequencyBinCount;
+  if (!frameBuf || frameBuf.length !== n) frameBuf = new Float32Array(n);
+  analyser.getFloatFrequencyData(frameBuf);
+  const hz = audioCtx.sampleRate / analyser.fftSize;
+  const out = new Array(FRAME_POINTS);
+  for (let i = 0; i < FRAME_POINTS; i++) {
+    const f0 = 20 * Math.pow(1000, i / FRAME_POINTS);
+    const f1 = 20 * Math.pow(1000, (i + 1) / FRAME_POINTS);
+    const b0 = Math.floor(f0 / hz);
+    const b1 = Math.max(b0 + 1, Math.floor(f1 / hz));
+    let m = -Infinity;
+    for (let b = b0; b < b1 && b < n; b++) if (frameBuf[b] > m) m = frameBuf[b];
+    out[i] = isFinite(m) ? Math.round(m * 10) / 10 : -120;
+  }
+  return out;
+}
 
 async function startCapture(streamId, initialParams = {}) {
   try {
@@ -187,6 +221,14 @@ async function startCapture(streamId, initialParams = {}) {
     outputCeiling.curve = makeCeilingCurve();
     outputCeiling.oversample = 'none';
 
+    // 8. Display taps (no audio output of their own)
+    inputAnalyser = audioCtx.createAnalyser();
+    inputAnalyser.fftSize = 8192;
+    inputAnalyser.smoothingTimeConstant = 0.75;
+    outputAnalyser = audioCtx.createAnalyser();
+    outputAnalyser.fftSize = 8192;
+    outputAnalyser.smoothingTimeConstant = 0.75;
+
     // === Signal Routing Architecture ===
     // Source -> Split into:
     //   Path A: Direct Passthrough (for true bypass)
@@ -220,6 +262,9 @@ async function startCapture(streamId, initialParams = {}) {
     masterLimiter.connect(outputCeiling);
     outputCeiling.connect(audioCtx.destination);
 
+    sourceNode.connect(inputAnalyser);
+    outputCeiling.connect(outputAnalyser);
+
     isCapturing = true;
 
     return { success: true };
@@ -240,6 +285,8 @@ function stopCapture() {
   }
   isCapturing = false;
   sourceNode = null;
+  inputAnalyser = null;
+  outputAnalyser = null;
 }
 
 function updateParams(newParams) {

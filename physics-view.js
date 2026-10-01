@@ -1,16 +1,17 @@
-// physics-view.js - Signal pipeline and frequency-response drawing for the popup's main screen.
-// An illustration driven by the slider values (not a meter of the live audio). Two canvases:
-//   pipeline: animated wave through In → HPF → EQ → Comp → Gain → Out
-//   bode:     combined magnitude response of HPF + Bass + Mid + High + Master Volume
-// Per-band bypass (stageBypass.hpf/bass/mid/high/gain, autoBalance) is reflected in both.
+// physics-view.js - The two drawings on the main screen.
+//   live:  the real spectrum of the audio while the EQ is on. Grey = what the tab sends (before the
+//          chain), colour = what you hear (after the output ceiling). Still and flat when the EQ is off.
+//   bode:  the combined magnitude response of HPF + Bass + Mid + High + Master Volume from the
+//          current settings (a picture of the settings, not a measurement).
+// Both use the same log frequency axis, 20 Hz .. 20 kHz.
 
 class PhysicsView {
-  constructor({ pipelineCanvas, bodeCanvas, readoutEl, doc = document }) {
+  constructor({ liveCanvas, bodeCanvas, readoutEl, doc = document }) {
     this.doc = doc;
-    this.pipelineCanvas = pipelineCanvas;
+    this.liveCanvas = liveCanvas;
     this.bodeCanvas = bodeCanvas;
     this.readoutEl = readoutEl || null;
-    this.pipelineCtx = pipelineCanvas ? pipelineCanvas.getContext('2d') : null;
+    this.liveCtx = liveCanvas ? liveCanvas.getContext('2d') : null;
     this.bodeCtx = bodeCanvas ? bodeCanvas.getContext('2d') : null;
 
     this.params = {
@@ -18,23 +19,23 @@ class PhysicsView {
       stageBypass: { hpf: false, bass: false, mid: false, high: false, gain: false, speed: false }
     };
     this.isCapturing = false;
-    this.time = 0;
-    this.frames = 0;
+    this.frame = null;      // latest { input: dB[72], output: dB[72] } or null when nothing is processed
+    this.frames = 0;        // draws of a live frame (used by the test harness)
     this.animFrameId = null;
-    this.particles = [];
-    this.particleCount = 40;
 
-    // Canvas palettes follow the popup's visual theme (body.theme-*). No class = cyan.
+    // Colours follow the popup's visual theme (body.theme-*). No class = cyan.
     this.activeTheme = 'theme-cyan';
     this.themeColors = {
-      'theme-cyan': { line: '#00e5ff', glow: 'rgba(0,229,255,0.4)', p1: '#00e5ff', p2: '#ff007f', p3: '#ffe600' },
-      'theme-amber': { line: '#ff9d00', glow: 'rgba(255,157,0,0.4)', p1: '#ff9d00', p2: '#ffcc00', p3: '#ff5500' },
-      'theme-synthwave': { line: '#ff007f', glow: 'rgba(255,0,127,0.45)', p1: '#ff007f', p2: '#a855f7', p3: '#00e5ff' },
-      'theme-matrix': { line: '#00ff66', glow: 'rgba(0,255,102,0.4)', p1: '#00ff66', p2: '#adff2f', p3: '#32cd32' },
-      'theme-oled': { line: '#b388ff', glow: 'rgba(179,136,255,0.35)', p1: '#b388ff', p2: '#7c4dff', p3: '#ffffff' }
+      'theme-cyan': { line: '#00e5ff', glow: 'rgba(0,229,255,0.4)' },
+      'theme-amber': { line: '#ff9d00', glow: 'rgba(255,157,0,0.4)' },
+      'theme-synthwave': { line: '#ff007f', glow: 'rgba(255,0,127,0.45)' },
+      'theme-matrix': { line: '#00ff66', glow: 'rgba(0,255,102,0.4)' },
+      'theme-oled': { line: '#b388ff', glow: 'rgba(179,136,255,0.35)' }
     };
 
     this.resize();
+    this.drawIdle();
+    this.drawBode();
   }
 
   // Which bands are off. Accepts the legacy `eq` flag (whole 3-band EQ) from older saved presets.
@@ -55,43 +56,53 @@ class PhysicsView {
     return { w: canvas._logicalW || canvas.width, h: canvas._logicalH || canvas.height };
   }
 
-  // Draw 1:1 at the canvas's CSS size (crisp on Retina). Re-seeds particles when the size changes.
+  // Draw 1:1 at the canvas's CSS size (crisp on Retina).
   resize() {
     const win = this.doc.defaultView;
     const dpr = (win && win.devicePixelRatio) || 1;
-    for (const c of [this.pipelineCanvas, this.bodeCanvas]) {
+    for (const c of [this.liveCanvas, this.bodeCanvas]) {
       if (!c) continue;
       const rect = c.getBoundingClientRect();
       const w = Math.max(1, Math.round(rect.width || c.clientWidth || 300));
-      const h = Math.max(1, Math.round(rect.height || c.clientHeight || 60));
+      const h = Math.max(1, Math.round(rect.height || c.clientHeight || 50));
       if (c._logicalW === w && c._logicalH === h && c._dpr === dpr) continue;
       c.width = Math.round(w * dpr);
       c.height = Math.round(h * dpr);
       c._logicalW = w; c._logicalH = h; c._dpr = dpr;
       c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
-      if (c === this.pipelineCanvas) this.initParticles(w, h);
-    }
-  }
-
-  initParticles(width, height) {
-    this.particles = [];
-    for (let i = 0; i < this.particleCount; i++) {
-      this.particles.push({
-        x: Math.random() * width,
-        baseY: height / 2,
-        speed: 1.2 + Math.random() * 1.6,
-        radius: 1.2 + Math.random() * 1.6,
-        colorType: Math.floor(Math.random() * 3),
-        phase: Math.random() * Math.PI * 2
-      });
     }
   }
 
   updateState(params, isCapturing) {
     if (params) this.params = { ...this.params, ...params, stageBypass: { ...(params.stageBypass || this.params.stageBypass) } };
     if (typeof isCapturing === 'boolean') this.isCapturing = isCapturing;
+    this.syncTheme();
+    this.resize();
     this.updateReadout();
-    if (!this.animFrameId) { this.resize(); this.drawPipeline(); this.drawBode(); }
+    this.drawBode();
+    if (!this.frame) this.drawIdle();
+  }
+
+  // A new live frame (or null when nothing is being processed). Frames arrive ~15 times a second.
+  setFrame(frame) {
+    const had = !!this.frame;
+    this.frame = frame && frame.input && frame.output ? frame : null;
+    if (this.frame) {
+      if (!this.animFrameId) this.animFrameId = requestAnimationFrame(() => this.renderLive());
+    } else if (had || this.animFrameId) {
+      if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
+      this.animFrameId = null;
+      this.drawIdle();
+    }
+  }
+
+  renderLive() {
+    this.animFrameId = null;
+    if (!this.frame) { this.drawIdle(); return; }
+    this.syncTheme();
+    this.resize();
+    this.drawLive(this.frame);
+    this.frames++;
   }
 
   updateReadout() {
@@ -99,14 +110,13 @@ class PhysicsView {
     const p = this.params;
     const off = this.bypassOf(p);
     const db = (v) => `${v >= 0 ? '+' : ''}${(+v).toFixed(1)}`;
-    const parts = [
+    this.readoutEl.textContent = [
       `HPF ${off.hpf ? 'off' : `${Math.round(p.hpf || 30)}Hz`}`,
       `Low ${off.bass ? 'off' : db(p.bass || 0)}`,
       `Mid ${off.mid ? 'off' : db(p.mid || 0)}`,
       `Hi ${off.high ? 'off' : db(p.high || 0)}`,
       `Vol ${off.gain ? 'off' : `${Math.round((p.gain || 1) * 100)}%`}`
-    ];
-    this.readoutEl.textContent = parts.join(' · ');
+    ].join(' · ');
   }
 
   syncTheme() {
@@ -117,143 +127,110 @@ class PhysicsView {
     this.activeTheme = found;
   }
 
-  start() {
-    if (this.animFrameId) return;
-    const render = () => {
-      this.syncTheme();
-      this.resize();
-      this.drawPipeline();
-      this.drawBode();
-      this.time += 0.04 * (this.bypassOf().speed ? 1 : (this.params.pitch || 1.0));
-      this.frames++;
-      this.animFrameId = requestAnimationFrame(render);
-    };
-    this.animFrameId = requestAnimationFrame(render);
+  theme() {
+    return this.themeColors[this.activeTheme] || this.themeColors['theme-cyan'];
   }
 
-  stop() {
-    if (this.animFrameId) cancelAnimationFrame(this.animFrameId);
-    this.animFrameId = null;
+  // x position of a frequency on the shared log axis
+  xOf(f, w) {
+    return (Math.log10(f / 20) / 3) * w;
   }
 
-  drawPipeline() {
-    if (!this.pipelineCtx || !this.pipelineCanvas) return;
-    const ctx = this.pipelineCtx;
-    const { w, h } = this.logicalSize(this.pipelineCanvas);
-    const theme = this.themeColors[this.activeTheme] || this.themeColors['theme-cyan'];
-    const p = this.params;
-    const off = this.bypassOf(p);
-    const ampScale = h / 220;
-    const stageWidth = w / 6;
-    const xScale = 620 / w;
+  drawAxis(ctx, w, h, withLabels) {
+    for (const f of [20, 60, 200, 1000, 5000, 20000]) {
+      const x = this.xOf(f, w);
+      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
+      if (withLabels) {
+        ctx.font = '8px sans-serif';
+        ctx.fillStyle = '#666';
+        ctx.textAlign = 'center';
+        ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}Hz`, Math.min(w - 12, Math.max(14, x)), h - 3);
+      }
+    }
+  }
+
+  // ---- live spectrum ----
+  drawIdle() {
+    if (!this.liveCtx || !this.liveCanvas) return;
+    const ctx = this.liveCtx;
+    const { w, h } = this.logicalSize(this.liveCanvas);
+    ctx.clearRect(0, 0, w, h);
+    this.drawAxis(ctx, w, h, false);
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0, h - 8); ctx.lineTo(w, h - 8); ctx.stroke();
+    ctx.font = '9px sans-serif';
+    ctx.fillStyle = '#6a6a76';
+    ctx.textAlign = 'center';
+    ctx.fillText(this.isCapturing ? 'waiting for audio…' : 'LIVE · EQ is off, nothing is being processed', w / 2, h / 2 + 3);
+  }
+
+  drawLive(frame) {
+    if (!this.liveCtx || !this.liveCanvas) return;
+    const ctx = this.liveCtx;
+    const { w, h } = this.logicalSize(this.liveCanvas);
+    const theme = this.theme();
+    const n = frame.input.length;
+    const top = 4, bottom = h - 8;
+    const DB_MIN = -95, DB_MAX = -10; // 0 dB = full-scale sine
+    const yOf = (db) => bottom - (Math.max(DB_MIN, Math.min(DB_MAX, db)) - DB_MIN) / (DB_MAX - DB_MIN) * (bottom - top);
+    const xOfIdx = (i) => (i + 0.5) / n * w;
 
     ctx.clearRect(0, 0, w, h);
+    this.drawAxis(ctx, w, h, false);
 
-    // Stage dividers and names
-    ctx.font = '8px sans-serif';
-    ctx.textAlign = 'left';
-    const names = ['In', 'HPF', 'EQ', 'Comp', 'Gain', 'Out'];
-    for (let i = 0; i < 6; i++) {
-      if (i > 0) {
-        ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-        ctx.setLineDash([3, 3]);
-        ctx.beginPath(); ctx.moveTo(i * stageWidth, 0); ctx.lineTo(i * stageWidth, h); ctx.stroke();
-        ctx.setLineDash([]);
-      }
-      const stageOff = (i === 1 && off.hpf) || (i === 2 && off.bass && off.mid && off.high) || (i === 3 && off.comp) || (i === 4 && off.gain);
-      ctx.fillStyle = stageOff ? '#555' : '#888';
-      ctx.fillText(names[i] + (stageOff ? ' off' : ''), i * stageWidth + 4, 10);
-    }
+    const area = (arr, fill, line, width) => {
+      ctx.beginPath();
+      ctx.moveTo(0, bottom);
+      for (let i = 0; i < n; i++) ctx.lineTo(xOfIdx(i), yOf(arr[i]));
+      ctx.lineTo(w, bottom);
+      ctx.closePath();
+      ctx.fillStyle = fill;
+      ctx.fill();
+      ctx.beginPath();
+      for (let i = 0; i < n; i++) (i === 0 ? ctx.moveTo : ctx.lineTo).call(ctx, xOfIdx(i), yOf(arr[i]));
+      ctx.strokeStyle = line;
+      ctx.lineWidth = width;
+      ctx.stroke();
+    };
 
-    // HPF barrier
-    const hpfX = stageWidth * 1.5;
-    if (!off.hpf) {
-      const hpfFreq = p.hpf || 30;
-      const barrierHeight = Math.min(h * 0.8, (40 + (hpfFreq / 200) * 140) * ampScale);
-      ctx.fillStyle = 'rgba(255, 68, 68, 0.12)';
-      ctx.fillRect(hpfX - 8, (h - barrierHeight) / 2, 16, barrierHeight);
-      ctx.strokeStyle = '#ff4444';
-      ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.moveTo(hpfX, (h - barrierHeight) / 2); ctx.lineTo(hpfX, (h + barrierHeight) / 2); ctx.stroke();
-    }
-
-    // Compressor ceiling / floor
-    if (!off.comp) {
-      const x1 = stageWidth * 3, x2 = stageWidth * 4;
-      const ceilingY = 14, floorY = h - 10;
-      ctx.strokeStyle = 'rgba(255, 170, 0, 0.5)';
-      ctx.setLineDash([4, 4]);
-      ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(x1, ceilingY); ctx.lineTo(x2, ceilingY); ctx.moveTo(x1, floorY); ctx.lineTo(x2, floorY); ctx.stroke();
-      ctx.setLineDash([]);
-    }
-
-    // Wave: amplitude grows through the stages according to the settings
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = this.isCapturing ? theme.line : 'rgba(255,255,255,0.25)';
-    ctx.shadowColor = this.isCapturing ? theme.glow : 'transparent';
-    ctx.shadowBlur = 8;
-    ctx.beginPath();
-    const baselineY = h / 2;
-    for (let x = 0; x < w; x += 2) {
-      const stageIdx = Math.floor(x / stageWidth);
-      let amp = 12;
-      if (stageIdx >= 1 && !off.hpf) amp *= 0.9;
-      if (stageIdx >= 2) {
-        amp += (off.bass ? 0 : (p.bass || 0) * 2.2) + (off.mid ? 0 : (p.mid || 0) * 1.5) + (off.high ? 0 : (p.high || 0) * 0.6);
-      }
-      if (stageIdx >= 3 && !off.comp) amp = Math.min(amp, 45);
-      if (stageIdx >= 4 && !off.gain) amp *= (p.gain || 1.0);
-      if (stageIdx >= 5) amp *= 1.05;
-      amp *= ampScale;
-      const speed = off.speed ? 1 : (p.pitch || 1.0);
-      const y = baselineY + Math.sin(x * 0.04 * speed * xScale - this.time * 3) * amp + Math.sin(x * 0.08 * speed * xScale - this.time * 5) * amp * 0.35;
-      if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    }
-    ctx.stroke();
+    // What the tab sends (grey), then what you hear (theme colour)
+    area(frame.input, 'rgba(255,255,255,0.10)', 'rgba(255,255,255,0.35)', 1);
+    ctx.shadowColor = theme.glow;
+    ctx.shadowBlur = 6;
+    area(frame.output, theme.glow.replace(/[\d.]+\)$/, '0.18)'), theme.line, 1.6);
     ctx.shadowBlur = 0;
 
-    // Particles
-    const speed = off.speed ? 1 : (p.pitch || 1.0);
-    for (const pt of this.particles) {
-      pt.x += pt.speed * speed / xScale;
-      if (pt.x > w) pt.x = 0;
-      const curStage = Math.floor(pt.x / stageWidth);
-      let jitter = Math.sin(pt.x * 0.05 * xScale - this.time * 4 + pt.phase) * (8 + (off.bass ? 0 : (p.bass || 0)) * 2) * ampScale;
-      if (!off.hpf && curStage === 1 && pt.x > hpfX - 12 && pt.x < hpfX + 4 && pt.colorType === 0) pt.x = Math.max(0, pt.x - 4);
-      if (!off.comp && curStage >= 3) jitter = Math.max(-42 * ampScale, Math.min(42 * ampScale, jitter));
-      ctx.beginPath();
-      ctx.arc(pt.x, pt.baseY + jitter, pt.radius, 0, Math.PI * 2);
-      ctx.fillStyle = pt.colorType === 0 ? theme.p1 : pt.colorType === 1 ? theme.p2 : theme.p3;
-      ctx.fill();
-    }
+    // Legend
+    ctx.font = '8px sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#8a8a96';
+    ctx.fillText('LIVE  in', 4, 10);
+    ctx.fillStyle = theme.line;
+    ctx.fillText('out', 42, 10);
   }
 
+  // ---- settings response ----
   drawBode() {
     if (!this.bodeCtx || !this.bodeCanvas) return;
     const ctx = this.bodeCtx;
     const { w, h } = this.logicalSize(this.bodeCanvas);
-    const theme = this.themeColors[this.activeTheme] || this.themeColors['theme-cyan'];
+    const theme = this.theme();
     const p = this.params;
     const off = this.bypassOf(p);
-    const zeroY = h / 2;
-    const topPad = 6, bottomPad = 12;
+    const zeroY = h / 2 - 2;
+    const topPad = 4, bottomPad = 11;
 
     ctx.clearRect(0, 0, w, h);
+    this.drawAxis(ctx, w, h, true);
 
-    // Grid: 0 dB line and frequency markers
+    // 0 dB line
     ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(255,255,255,0.15)';
     ctx.beginPath(); ctx.moveTo(0, zeroY); ctx.lineTo(w, zeroY); ctx.stroke();
     ctx.font = '8px sans-serif';
-    ctx.fillStyle = '#666';
-    ctx.textAlign = 'center';
-    for (const f of [20, 60, 200, 1000, 5000, 20000]) {
-      const x = (Math.log10(f / 20) / Math.log10(1000)) * w;
-      ctx.strokeStyle = 'rgba(255,255,255,0.05)';
-      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke();
-      ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}Hz`, Math.min(w - 12, Math.max(14, x)), h - 3);
-    }
     ctx.textAlign = 'left';
     ctx.fillStyle = '#555';
     ctx.fillText('0 dB', 3, zeroY - 3);
@@ -276,7 +253,6 @@ class PhysicsView {
       pts.push([px, Math.max(topPad, Math.min(h - bottomPad, y))]);
     }
 
-    // Fill under the curve, then the curve
     ctx.beginPath();
     ctx.moveTo(pts[0][0], zeroY);
     for (const [x, y] of pts) ctx.lineTo(x, y);
