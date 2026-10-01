@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-01 (round 5: side panel, full-size art)
+# Review Ready: 2026-10-01 (round 6: side-panel icon buttons)
 
 ## Identity
 
@@ -14,13 +14,17 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` |
-| Version | **1.3.2** (the live install is 1.1.0) |
+| Version | **1.3.3** (the live install is 1.1.0) |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (unchanged: same folder) |
-| Runtime source commit | `18bc5d1` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `5f6c2c2e0600961e…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `f018f0c` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `b9c69cef1e2ca349…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.3.3
+
+- In the side panel, the per-band on/off buttons are icons (your pick A): accent when on, grey with a slash when off. The popup keeps its text tags.
 
 ## What changed in 1.3.2
 
@@ -45,13 +49,13 @@ Your rounds 1–3 built: one legible screen (440 px), no header; cover-art strip
 
 ## Tests
 
-- **Executed**: 33 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.2/`.
+- **Executed**: 33 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.3/`.
 - **Not run**: your look at the screen, the mini bar on your desktop, a real toolbar-click capture, Alt+M/Alt+E, the extreme-boost listening check.
 - **Blocked**: anything on real Tidal (heart, jumps, cover art). It needs your signed-in session, and I don't contact Tidal.
 
 ## What I need from you
 
-1. Click **Reload** on the review card; confirm **1.3.2**. Flip **Stay open**: the screen should move into a panel on the right of the browser window and stay there while you click around Tidal. Drag the panel's edge to make it wider or narrower. Tell me if it holds.
+1. Click **Reload** on the review card; confirm **1.3.3**. Flip **Stay open**: the screen should move into a panel on the right of the browser window and stay there while you click around Tidal. Drag the panel's edge to make it wider or narrower. Tell me if it holds.
 2. On real Tidal: is the cover sharp now? Do the jumps work, and does the time (e.g. 1:23 / 4:56) show next to the artist?
 3. Click **Mini bar** in the panel and tell me if it floats over other apps.
 4. If the heart stays dimmed on real Tidal: right-click the heart in Tidal's bottom bar → **Inspect** → right-click the highlighted line → **Copy** → **Copy outerHTML** → paste it here.
