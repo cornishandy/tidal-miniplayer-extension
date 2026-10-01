@@ -43,3 +43,17 @@ test('fallback window is the working undocked popup, not the broken miniplayer p
   assert.match(background, /FALLBACK_WINDOW_URL = 'popup\.html\?undocked=true'/);
   assert.doesNotMatch(background, /getURL\('miniplayer\.html'\)/);
 });
+
+test('no network code: the shipped scripts never contact Tidal or any server', () => {
+  for (const f of ['background.js', 'content.js', 'popup.js', 'offscreen.js', 'router-visualizer.js']) {
+    const src = readFileSync(join(root, f), 'utf8');
+    assert.doesNotMatch(src, /\bfetch\s*\(|XMLHttpRequest|tidal\.com\/v1|api\.tidal\.com/, `${f} contains network code`);
+  }
+});
+
+test('retired surfaces stay out: no Playlists, Playlist Lab or favorite button (decision 2026-10-01)', () => {
+  const popup = readFileSync(join(root, 'popup.html'), 'utf8');
+  const content = readFileSync(join(root, 'content.js'), 'utf8');
+  assert.doesNotMatch(popup, /tab-btn-playlists|tab-btn-lab|player-btn-fav|lab-btn-create/);
+  assert.doesNotMatch(content, /FETCH_USER_PLAYLISTS|CREATE_PLAYLIST_WITH_TRACKS|TOGGLE_FAVORITE|getTidalSession/);
+});

@@ -1,4 +1,4 @@
-// content.js - Content script for Tidal Web Player & Document PiP Miniplayer
+// content.js - Content script: reads the Tidal player bar, transport commands, floating button and Document PiP window
 
 (function() {
   if (window.__TIDAL_MINIPLAYER_INJECTED__) return;
@@ -27,8 +27,7 @@
         artwork: '',
         isPlaying: media ? !media.paused : true,
         currentTime: media ? media.currentTime : 0,
-        duration: media ? media.duration : 0,
-        isFavorite: false
+        duration: media ? media.duration : 0
       };
     }
 
@@ -89,11 +88,7 @@
       duration = parseTimeToSeconds(allTimes[0].textContent.trim());
     }
 
-    // Determine favorite state accurately
-    const favBtn = getFavoriteButton();
-    const isFavorite = isTrackFavorited(favBtn);
-
-    currentTrackInfo = { title, artist, artwork, isPlaying, currentTime, duration, isFavorite };
+    currentTrackInfo = { title, artist, artwork, isPlaying, currentTime, duration };
     return currentTrackInfo;
   }
 
@@ -138,32 +133,6 @@
     return controls.querySelector('button[data-test="next"], button[aria-label="Next"], button[aria-label="Next track"]');
   }
 
-  function getFavoriteButton() {
-    const footer = getFooterPlayerElement() || document;
-    return footer.querySelector(
-      'button[data-test*="favorite"], button[data-test="interaction-bar-favorite"], button[aria-label*="favorite" i], button[aria-label*="Favorite" i], [data-test="favorite-button"], button[data-test="heart"], #footerPlayer button[aria-checked]'
-    );
-  }
-
-  function isTrackFavorited(favBtn) {
-    if (!favBtn) return false;
-    if (favBtn.getAttribute('aria-checked') === 'true') return true;
-    if (favBtn.classList.contains('active')) return true;
-    const svg = favBtn.querySelector('svg');
-    if (svg) {
-      const fill = svg.getAttribute('fill') || window.getComputedStyle(svg).fill;
-      if (fill && fill !== 'none' && fill !== 'transparent' && !fill.includes('rgba(0, 0, 0, 0)')) return true;
-      const path = svg.querySelector('path');
-      if (path) {
-        const pFill = path.getAttribute('fill');
-        if (pFill && pFill !== 'none' && pFill !== 'transparent') return true;
-      }
-    }
-    const ariaLabel = (favBtn.getAttribute('aria-label') || '').toLowerCase();
-    if (ariaLabel.includes('remove from') || ariaLabel.includes('unfavorite')) return true;
-    return false;
-  }
-
   function togglePlayPause() {
     const playBtn = getPlayPauseButton();
     if (playBtn) {
@@ -190,15 +159,6 @@
     setTimeout(getTrackInfo, 250);
   }
 
-  function toggleFavorite() {
-    const favBtn = getFavoriteButton();
-    if (favBtn) {
-      favBtn.click();
-      return true;
-    }
-    return false;
-  }
-
   function seekAudio(targetSecs) {
     const media = document.querySelector('audio, video');
     if (media && !isNaN(targetSecs)) {
@@ -217,234 +177,7 @@
     media.forEach(m => { m.volume = clamped; });
   }
 
-  // Helper to extract Tidal Auth Session from localStorage
-  function getTidalSession() {
-    try {
-      for (let i = 0; i < localStorage.length; i++) {
-        const key = localStorage.key(i);
-        if (key && (key.includes('session') || key.includes('oAuth') || key.includes('credentials') || key.includes('token') || key.includes('user'))) {
-          const val = localStorage.getItem(key);
-          try {
-            const parsed = JSON.parse(val);
-            const token = parsed.accessToken || parsed.token || parsed.session?.token || parsed.credentials?.token;
-            const userId = parsed.userId || parsed.session?.userId || parsed.user?.id || parsed.id;
-            if (token || userId) return { token, userId };
-          } catch (e) {}
-        }
-      }
-    } catch (e) {}
-    return null;
-  }
-
-  // 2. Playlists Automation & Set-Theory Track Engine
-  //
-  // Every response carries `source` so the UI can say where data came from:
-  //   'tidal-api'  - read from Tidal with the page's own session
-  //   'page-links' - playlist titles scraped from links on the Tidal page (no track counts)
-  //   'demo'       - built-in sample data, shown only when no Tidal tab is available
-  //   'none'       - nothing could be read (with `error`)
-  // Nothing is ever invented for a real Tidal playlist.
-  const DEMO_PLAYLISTS = [
-    { uuid: 'pl-a-plus', title: 'A+', numberOfTracks: 7 },
-    { uuid: 'pl-super-a', title: 'Super A+', numberOfTracks: 4 },
-    { uuid: 'pl-andy', title: 'Andy', numberOfTracks: 3 },
-    { uuid: 'pl-showcase', title: 'Showcase', numberOfTracks: 2 }
-  ];
-  const isDemoUuid = (uuid) => DEMO_PLAYLISTS.some(p => p.uuid === uuid);
-
-  async function fetchUserPlaylists() {
-    if (!isTidal) {
-      return { playlists: DEMO_PLAYLISTS, source: 'demo' };
-    }
-
-    const session = getTidalSession();
-    if (session && session.token && session.userId) {
-      try {
-        const resp = await fetch(`https://listen.tidal.com/v1/users/${session.userId}/playlists?limit=100`, {
-          headers: { 'Authorization': `Bearer ${session.token}` }
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.items) {
-            return {
-              source: 'tidal-api',
-              playlists: data.items.map(p => ({
-                uuid: p.uuid,
-                title: p.title,
-                numberOfTracks: p.numberOfTracks,
-                lastUpdated: p.lastUpdated
-              }))
-            };
-          }
-        }
-      } catch (e) {
-        console.warn('Tidal API fetch error, using DOM scraper:', e);
-      }
-    }
-
-    // Scrape from DOM
-    const plLinks = Array.from(document.querySelectorAll('a[href*="/playlist/"]'));
-    const map = new Map();
-
-    plLinks.forEach(a => {
-      const href = a.getAttribute('href') || '';
-      const match = href.match(/\/playlist\/([a-zA-Z0-9-]+)/);
-      if (match) {
-        const uuid = match[1];
-        const title = a.textContent.trim() || 'Playlist';
-        if (!map.has(uuid) && title.length > 0 && !title.includes('Create Playlist')) {
-          map.set(uuid, { uuid, title, numberOfTracks: null });
-        }
-      }
-    });
-
-    const list = Array.from(map.values());
-    if (list.length === 0) {
-      return {
-        playlists: [],
-        source: 'none',
-        error: 'No playlists could be read from Tidal. Make sure you are signed in and your playlists are visible in the Tidal sidebar.'
-      };
-    }
-
-    return { playlists: list, source: 'page-links' };
-  }
-
-  // Fetch tracks for a specific playlist
-  async function fetchPlaylistTracks(uuid) {
-    const session = getTidalSession();
-    if (session && session.token) {
-      try {
-        const resp = await fetch(`https://listen.tidal.com/v1/playlists/${uuid}/tracks?limit=500`, {
-          headers: { 'Authorization': `Bearer ${session.token}` }
-        });
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.items) {
-            return {
-              source: 'tidal-api',
-              tracks: data.items.map((item) => {
-                const t = item.item || item;
-                return {
-                  id: t.id,
-                  title: t.title,
-                  artist: t.artist?.name || (t.artists && t.artists[0]?.name) || 'Unknown Artist',
-                  album: t.album?.title || '',
-                  duration: t.duration || 0,
-                  bpm: t.bpm || null,
-                  key: t.key || null,
-                  dateAdded: item.dateAdded || null
-                };
-              })
-            };
-          }
-        }
-      } catch (e) {}
-    }
-
-    if (!isDemoUuid(uuid)) {
-      return {
-        tracks: [],
-        source: 'none',
-        error: 'Could not read this playlist\'s tracks from Tidal. Nothing is shown rather than guessing.'
-      };
-    }
-
-    // Built-in sample tracks for the demo playlists only
-    const mockDb = {
-      'pl-a-plus': [
-        { id: 101, title: 'Midnight City', artist: 'M83', bpm: 105, key: '11B', dateAdded: '2026-03-12', duration: 243 },
-        { id: 102, title: 'Breathe', artist: 'The Prodigy', bpm: 130, key: '8A', dateAdded: '2026-03-14', duration: 335 },
-        { id: 103, title: 'Strobe', artist: 'deadmau5', bpm: 128, key: '5A', dateAdded: '2026-03-18', duration: 637 },
-        { id: 104, title: 'Around the World', artist: 'Daft Punk', bpm: 121, key: '4A', dateAdded: '2026-03-20', duration: 429 },
-        { id: 105, title: 'Titanium', artist: 'David Guetta', bpm: 126, key: '9A', dateAdded: '2026-03-22', duration: 245 },
-        { id: 106, title: 'Levels', artist: 'Avicii', bpm: 126, key: '2B', dateAdded: '2026-03-25', duration: 198 },
-        { id: 107, title: 'Clarity', artist: 'Zedd', bpm: 128, key: '8A', dateAdded: '2026-03-28', duration: 271 }
-      ],
-      'pl-super-a': [
-        { id: 101, title: 'Midnight City', artist: 'M83', bpm: 105, key: '11B', dateAdded: '2026-03-12', duration: 243 },
-        { id: 103, title: 'Strobe', artist: 'deadmau5', bpm: 128, key: '5A', dateAdded: '2026-03-18', duration: 637 },
-        { id: 108, title: 'One More Time', artist: 'Daft Punk', bpm: 123, key: '11B', dateAdded: '2026-04-01', duration: 320 },
-        { id: 109, title: 'Ghosts n Stuff', artist: 'deadmau5', bpm: 128, key: '4A', dateAdded: '2026-04-05', duration: 328 }
-      ],
-      'pl-andy': [
-        { id: 102, title: 'Breathe', artist: 'The Prodigy', bpm: 130, key: '8A', dateAdded: '2026-03-14', duration: 335 },
-        { id: 108, title: 'One More Time', artist: 'Daft Punk', bpm: 123, key: '11B', dateAdded: '2026-04-01', duration: 320 },
-        { id: 110, title: 'Firestarter', artist: 'The Prodigy', bpm: 140, key: '7A', dateAdded: '2026-04-10', duration: 280 }
-      ],
-      'pl-showcase': [
-        { id: 106, title: 'Levels', artist: 'Avicii', bpm: 126, key: '2B', dateAdded: '2026-03-25', duration: 198 },
-        { id: 111, title: 'Wake Me Up', artist: 'Avicii', bpm: 124, key: '9A', dateAdded: '2026-04-15', duration: 247 }
-      ]
-    };
-
-    return { tracks: mockDb[uuid], source: 'demo' };
-  }
-
-  // Create new playlist with filtered tracks. Reports success only when Tidal confirmed both steps.
-  async function createPlaylistWithTracks(name, trackIds) {
-    if (!isTidal) {
-      return { success: false, error: 'This is demo data, so nothing was created. Open Tidal in a tab to use your real playlists.' };
-    }
-    const session = getTidalSession();
-    if (!session || !session.token || !session.userId) {
-      return { success: false, error: 'No Tidal session was found in the Tidal tab, so nothing was created.' };
-    }
-    try {
-      const createResp = await fetch(`https://listen.tidal.com/v1/users/${session.userId}/playlists`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.token}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          title: name,
-          description: 'Generated by Tidal DJ Bass & Mini-Player Set-Theory Studio'
-        })
-      });
-
-      if (!createResp.ok) {
-        return { success: false, error: `Tidal refused to create the playlist (HTTP ${createResp.status}).` };
-      }
-      const newPl = await createResp.json();
-      if (!newPl.uuid) {
-        return { success: false, error: 'Tidal did not return the new playlist.' };
-      }
-      if (trackIds.length > 0) {
-        const addResp = await fetch(`https://listen.tidal.com/v1/playlists/${newPl.uuid}/tracks`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${session.token}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({ trackIds })
-        });
-        if (!addResp.ok) {
-          return { success: false, uuid: newPl.uuid, error: `The playlist "${name}" was created, but adding tracks failed (HTTP ${addResp.status}).` };
-        }
-      }
-      return { success: true, uuid: newPl.uuid, name };
-    } catch (e) {
-      return { success: false, error: `Could not reach Tidal: ${e.message}` };
-    }
-  }
-
-  // Playlist membership and per-track add/remove are not implemented yet; say so instead of pretending.
-  const NOT_BUILT = 'Adding or removing the current track from here is not built yet. Use Tidal\'s own menu.';
-
-  async function checkTrackInPlaylist(playlistUuid) {
-    return { isInPlaylist: false, supported: false };
-  }
-
-  async function addTrackToPlaylist(playlistUuid) {
-    return { success: false, supported: false, error: NOT_BUILT };
-  }
-
-  async function removeTrackFromPlaylist(playlistUuid) {
-    return { success: false, supported: false, error: NOT_BUILT };
-  }
-
-  // 3. Floating Button on Webpage
+  // 2. Floating Button on Webpage
   function injectFloatingButton() {
     if (floatingBtn || document.getElementById('tidal-pip-floating-btn')) return;
 
@@ -533,7 +266,7 @@
     }
   }
 
-  // 4. Native Document Picture-in-Picture Mini-Player
+  // 3. Native Document Picture-in-Picture Mini-Player
   async function toggleDocumentPiP() {
     if (pipWindow) {
       pipWindow.close();
@@ -575,6 +308,7 @@
 
     doc.body.innerHTML = `
       <div class="popup-container">
+       <div class="popup-main">
         <!-- Header -->
         <header class="header">
           <div class="logo">
@@ -598,7 +332,6 @@
             <div class="micro-artist" id="micro-artist">Media Tab</div>
           </div>
           <div class="micro-actions">
-            <button class="micro-btn" id="micro-btn-fav" title="Favorite / Like">🤍</button>
             <button class="micro-btn" id="micro-btn-prev" title="Previous Track">⏮</button>
             <button class="micro-btn micro-btn-play" id="micro-btn-play" title="Play / Pause">▶</button>
             <button class="micro-btn" id="micro-btn-next" title="Next Track">⏭</button>
@@ -622,7 +355,6 @@
             </div>
           </div>
           <div class="player-controls">
-            <button id="player-btn-fav" class="player-ctrl-btn" title="Favorite">🤍</button>
             <button id="player-btn-prev" class="player-ctrl-btn" title="Previous Track">⏮</button>
             <button id="player-btn-play" class="player-ctrl-btn player-play" title="Play / Pause">▶</button>
             <button id="player-btn-next" class="player-ctrl-btn" title="Next Track">⏭</button>
@@ -641,14 +373,8 @@
           </div>
         </div>
 
-        <!-- Tabs Bar -->
-        <div class="popup-tab-bar">
-          <button class="popup-tab-btn active" id="tab-btn-eq">🎧 DJ BASS</button>
-          <button class="popup-tab-btn" id="tab-btn-playlists">📁 PLAYLISTS</button>
-        </div>
-
-        <!-- Tab 1: EQ Controls -->
-        <div id="popup-tab-eq" class="tab-pane active">
+        <!-- EQ Controls -->
+        <div class="eq-pane">
           <section class="section preset-section">
             <div class="section-title-row">
               <div style="display: flex; align-items: center; gap: 6px;">
@@ -699,6 +425,7 @@
             </div>
           </main>
         </div>
+       </div>
       </div>
     `;
 
@@ -738,7 +465,6 @@
     const playerProgress = doc.getElementById('player-progress');
     const playerTimeCur = doc.getElementById('player-time-cur');
     const playerTimeDur = doc.getElementById('player-time-dur');
-    const playerBtnFav = doc.getElementById('player-btn-fav');
     const playerBtnPrev = doc.getElementById('player-btn-prev');
     const playerBtnPlay = doc.getElementById('player-btn-play');
     const playerBtnNext = doc.getElementById('player-btn-next');
@@ -746,7 +472,6 @@
     const microArt = doc.getElementById('micro-art');
     const microTitle = doc.getElementById('micro-title');
     const microArtist = doc.getElementById('micro-artist');
-    const microBtnFav = doc.getElementById('micro-btn-fav');
     const microBtnPrev = doc.getElementById('micro-btn-prev');
     const microBtnPlay = doc.getElementById('micro-btn-play');
     const microBtnNext = doc.getElementById('micro-btn-next');
@@ -781,7 +506,6 @@
     const doPlay = () => { togglePlayPause(); syncTrack(); };
     const doPrev = () => { prevTrack(); syncTrack(); };
     const doNext = () => { nextTrack(); syncTrack(); };
-    const doFav = () => { toggleFavorite(); syncTrack(); };
 
     playerBtnPlay.onclick = doPlay;
     if (microBtnPlay) microBtnPlay.onclick = doPlay;
@@ -789,8 +513,6 @@
     if (microBtnPrev) microBtnPrev.onclick = doPrev;
     playerBtnNext.onclick = doNext;
     if (microBtnNext) microBtnNext.onclick = doNext;
-    playerBtnFav.onclick = doFav;
-    if (microBtnFav) microBtnFav.onclick = doFav;
 
     function syncTrack() {
       const info = getTrackInfo();
@@ -811,10 +533,6 @@
       const playSym = info.isPlaying ? '⏸' : '▶';
       playerBtnPlay.textContent = playSym;
       if (microBtnPlay) microBtnPlay.textContent = playSym;
-
-      const favSym = info.isFavorite ? '❤️' : '🤍';
-      playerBtnFav.textContent = favSym;
-      if (microBtnFav) microBtnFav.textContent = favSym;
 
       if (info.duration > 0) {
         playerProgress.value = (info.currentTime / info.duration) * 100;
@@ -1068,7 +786,7 @@
     if (routerVisualizer) routerVisualizer.updateState(params, isEqActive);
   }
 
-  // 5. Message Dispatcher
+  // 4. Message Dispatcher
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     switch (message.type) {
       case 'GET_TRACK_INFO':
@@ -1086,9 +804,6 @@
         nextTrack();
         sendResponse(getTrackInfo());
         return true;
-      case 'TOGGLE_FAVORITE':
-        sendResponse({ isFavorite: toggleFavorite() });
-        return true;
       case 'SEEK_AUDIO':
         seekAudio(message.time);
         sendResponse({ success: true });
@@ -1104,24 +819,6 @@
       case 'SET_VOLUME':
         setMediaVolume(message.volume);
         sendResponse({ success: true, volume: message.volume });
-        return true;
-      case 'FETCH_USER_PLAYLISTS':
-        fetchUserPlaylists().then(res => sendResponse(res));
-        return true;
-      case 'FETCH_PLAYLIST_TRACKS':
-        fetchPlaylistTracks(message.playlistUuid).then(res => sendResponse(res));
-        return true;
-      case 'CREATE_PLAYLIST_WITH_TRACKS':
-        createPlaylistWithTracks(message.name, message.trackIds).then(res => sendResponse(res));
-        return true;
-      case 'CHECK_TRACK_IN_PLAYLIST':
-        checkTrackInPlaylist(message.playlistUuid).then(res => sendResponse(res));
-        return true;
-      case 'ADD_TO_PLAYLIST':
-        addTrackToPlaylist(message.playlistUuid).then(res => sendResponse(res));
-        return true;
-      case 'REMOVE_FROM_PLAYLIST':
-        removeTrackFromPlaylist(message.playlistUuid).then(res => sendResponse(res));
         return true;
       case 'TOGGLE_MINIPLAYER':
       case 'TOGGLE_PIP_MINIPLAYER':

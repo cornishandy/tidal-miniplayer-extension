@@ -376,11 +376,12 @@ async function openFallbackWindow() {
     await chrome.windows.update(existing.windowId, { focused: true });
     return;
   }
+  // Initial size only; the page then fits the window to its content (popup.js fitUndockedWindow).
   await chrome.windows.create({
     url: chrome.runtime.getURL(FALLBACK_WINDOW_URL),
     type: 'popup',
     width: 360,
-    height: 540
+    height: 420
   });
 }
 

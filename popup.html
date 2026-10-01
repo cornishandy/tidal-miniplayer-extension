@@ -8,6 +8,8 @@
 </head>
 <body>
   <div class="popup-container">
+    <!-- Main column. The Physics side panel is added after it by router-visualizer.js. -->
+    <div class="popup-main">
     <!-- Header -->
     <header class="header">
       <div class="logo">
@@ -18,7 +20,7 @@
         <button id="btn-size-toggle" class="btn-icon" title="Toggle Compact (360px) / Wide (490px) Window (Double-click to reset)">
           ↔️ <span class="btn-lbl">Size</span>
         </button>
-        <button id="btn-open-router" class="btn-icon" title="Audio Signal Path & Physics (Slide Out)">
+        <button id="btn-open-router" class="btn-icon" title="Show or hide the Signal Path & Physics panel beside the controls">
           🔬 <span class="btn-lbl">Physics</span>
         </button>
         <button id="btn-micro-toggle" class="btn-icon" title="Switch to Micro Player Mode">
@@ -44,7 +46,6 @@
         <div class="micro-artist" id="micro-artist">Media Tab</div>
       </div>
       <div class="micro-actions">
-        <button class="micro-btn" id="micro-btn-fav" title="Favorite / Like">🤍</button>
         <button class="micro-btn" id="micro-btn-prev" title="Previous Track">⏮</button>
         <button class="micro-btn micro-btn-play" id="micro-btn-play" title="Play / Pause">▶</button>
         <button class="micro-btn" id="micro-btn-next" title="Next Track">⏭</button>
@@ -77,12 +78,6 @@
         </div>
       </div>
       <div class="player-controls">
-        <button id="player-btn-fav" class="player-ctrl-btn player-fav-btn" title="Favorite / Add to Collection">
-          <svg class="heart-icon" viewBox="0 0 24 24" width="13" height="13">
-            <path class="heart-path" d="M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z"/>
-          </svg>
-        </button>
-
         <!-- Track Prev (Subtle Nudge Button) -->
         <button id="player-btn-prev" class="player-step-btn" title="Previous Track (Jump Track)">⏮</button>
 
@@ -129,15 +124,8 @@
       </div>
     </div>
 
-    <!-- Tabs Bar -->
-    <div class="popup-tab-bar">
-      <button class="popup-tab-btn active" id="tab-btn-eq">🎧 DJ BASS</button>
-      <button class="popup-tab-btn" id="tab-btn-playlists">📁 PLAYLISTS</button>
-      <button class="popup-tab-btn" id="tab-btn-lab">🧪 PLAYLIST LAB</button>
-    </div>
-
-    <!-- Tab 1: EQ Controls (Auto-fit, Zero Scroll) -->
-    <div id="popup-tab-eq" class="tab-pane active">
+    <!-- EQ Controls -->
+    <div class="eq-pane">
       <!-- Presets Section with Saved / Modified Status Indicator -->
       <section class="section preset-section">
         <div class="section-title-row">
@@ -155,7 +143,7 @@
         <select id="preset-select" class="preset-dropdown"></select>
       </section>
 
-      <!-- EQ Controls Grid (Zero Scroll Auto-Fit) -->
+      <!-- EQ Controls Grid -->
       <main class="controls-area">
         <!-- Bass Boost Slider -->
         <div class="eq-row">
@@ -224,105 +212,6 @@
         </div>
       </main>
     </div>
-
-    <!-- Tab 2: Playlists Manager (Smooth vertical scroll) -->
-    <div id="popup-tab-playlists" class="tab-pane" style="display: none;">
-      <div class="playlists-header">
-        <span>Checked = Track in Playlist</span>
-        <button id="popup-btn-refresh-pl" class="btn-text">↺ Refresh</button>
-      </div>
-      <div id="pl-data-notice" class="data-notice" role="status" style="display: none;"></div>
-      <div id="popup-playlist-container" class="playlist-scroll-list">
-        <div class="loading-pl">Loading your Tidal playlists...</div>
-      </div>
-    </div>
-
-    <!-- Tab 3: Playlist Lab & Set-Theory Studio -->
-    <div id="popup-tab-lab" class="tab-pane" style="display: none;">
-      <div class="lab-container">
-        <div id="lab-data-notice" class="data-notice" role="status" style="display: none;"></div>
-        <!-- Playlist Selectors -->
-        <div class="lab-section">
-          <div class="lab-row">
-            <span class="lab-label">Base (A):</span>
-            <select id="lab-select-a" class="lab-select">
-              <option value="">Select Base Playlist (e.g. A+)</option>
-            </select>
-          </div>
-          <div class="lab-row">
-            <span class="lab-label">Filter (B):</span>
-            <select id="lab-select-b" class="lab-select">
-              <option value="">Select Filter Playlist (e.g. Super A+)</option>
-            </select>
-          </div>
-          <div class="lab-row">
-            <span class="lab-label">Filter 2 (C):</span>
-            <select id="lab-select-c" class="lab-select">
-              <option value="">(Optional) Filter 2 (e.g. Showcase)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Set-Theory Operation Pills -->
-        <div class="lab-section">
-          <div style="font-size: 8.5px; font-weight: 700; color: var(--text-muted, #888); margin-bottom: 2px;">SET OPERATION:</div>
-          <div class="lab-op-pills">
-            <button class="lab-pill active" data-op="diff" title="Tracks only in A (excluding B and C)">Only in A (A \ B)</button>
-            <button class="lab-pill" data-op="intersect" title="Tracks common to both A and B">Overlap (A ∩ B)</button>
-            <button class="lab-pill" data-op="disunion" title="Tracks in A or B, but NOT both">Exclusive Either (A Δ B)</button>
-            <button class="lab-pill" data-op="union" title="Combine unique tracks from all selected">All Unique (A ∪ B)</button>
-          </div>
-        </div>
-
-        <!-- Stats Grid -->
-        <div class="lab-stats-grid">
-          <div class="lab-stat-box">
-            <div class="lab-stat-val" id="lab-count-a">0</div>
-            <div class="lab-stat-lbl">In Playlist A</div>
-          </div>
-          <div class="lab-stat-box">
-            <div class="lab-stat-val" id="lab-count-b">0</div>
-            <div class="lab-stat-lbl">In Playlist B</div>
-          </div>
-          <div class="lab-stat-box">
-            <div class="lab-stat-val" id="lab-count-res" style="color: #00e5ff;">0</div>
-            <div class="lab-stat-lbl">Filtered Tracks</div>
-          </div>
-        </div>
-
-        <!-- Sortable Filtered Tracks Table -->
-        <div class="lab-track-table-wrap">
-          <table class="lab-table" id="lab-track-table">
-            <thead>
-              <tr>
-                <th data-sort="idx">#</th>
-                <th data-sort="title">Title ↕</th>
-                <th data-sort="artist">Artist ↕</th>
-                <th data-sort="bpm">BPM ↕</th>
-                <th data-sort="key">Key ↕</th>
-                <th data-sort="date">Added ↕</th>
-              </tr>
-            </thead>
-            <tbody id="lab-table-body">
-              <tr>
-                <td colspan="6" style="text-align:center; padding: 20px 0; color: #777;">
-                  Select playlists above to calculate set-theory tracks
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-
-        <!-- Create New Playlist Action -->
-        <div class="lab-section" style="margin-top: auto;">
-          <div class="lab-row" style="margin-bottom: 4px;">
-            <input type="text" id="lab-new-pl-name" class="lab-select" placeholder="New Playlist Name (e.g. Only A+)" style="font-weight: 600;">
-          </div>
-          <button id="lab-btn-create" class="lab-btn-create">
-            ✨ Create New Playlist in Tidal (<span id="lab-btn-track-count">0</span> tracks)
-          </button>
-        </div>
-      </div>
     </div>
   </div>
 

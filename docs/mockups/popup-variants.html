@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<!--
+  Design mockups for the popup (not shipped). Opens straight from disk and reuses the real popup.css
+  and themes.css, so what you see is what the extension would look like.
+
+  Pick a variant with ?variant=…  (pa | pb | pc | h1 | h2 | h3), or use the switcher at the top.
+  tools/mockshot.mjs renders each variant to docs/mockups/<variant>.png.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Popup design mockups</title>
+  <link rel="stylesheet" href="../../popup.css">
+  <link rel="stylesheet" href="../../themes.css">
+  <style>
+    html { background: #2a2a2e; }
+    body { margin: 0; }
+    body.page { padding: 18px 0 18px 18px; width: auto; min-width: 0; overflow: visible; background: #2a2a2e; }
+    body.page .popup-container { width: 360px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border-radius: 6px; }
+    .switcher { font: 12px -apple-system, sans-serif; color: #ccc; margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
+    .switcher a { color: #7fe8ff; }
+    .switcher a.on { color: #fff; font-weight: 700; text-decoration: none; }
+    .caption { font: 11px -apple-system, sans-serif; color: #aaa; margin-top: 8px; width: 360px; }
+
+    /* ---------- Player option A: one strip (EQ switch + what's playing + play/pause) ---------- */
+    .np-strip {
+      display: flex; align-items: center; gap: 10px; padding: 9px 10px 7px;
+      background: linear-gradient(180deg, var(--bg-surface, #1e1e26) 0%, var(--bg-secondary, #18181f) 100%);
+    }
+    .np-switch { width: 40px; height: 22px; }
+    .np-switch .slider-round:before { height: 18px; width: 18px; }
+    .np-switch input:checked + .slider-round:before { transform: translateX(18px); }
+    .np-text { flex: 1; min-width: 0; }
+    .np-state { font-size: 9px; font-weight: 800; letter-spacing: 0.8px; color: var(--accent, #00e5ff); }
+    .np-state.off { color: var(--text-muted, #888); }
+    .np-title { font-size: 15px; font-weight: 700; line-height: 1.2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main, #fff); }
+    .np-artist { font-size: 11px; color: var(--text-muted, #888); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .np-play {
+      width: 34px; height: 34px; border-radius: 50%; border: none; background: var(--accent, #00e5ff); color: #000;
+      font-size: 14px; font-weight: bold; cursor: pointer; flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+    }
+    .np-progress { height: 2px; background: #2a2a35; }
+    .np-progress > div { height: 100%; background: var(--accent, #00e5ff); }
+    .np-divider { border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08)); }
+
+    /* ---------- Player option B: a single status line, no controls ---------- */
+    .np-line {
+      display: flex; align-items: center; gap: 9px; padding: 8px 10px;
+      background: var(--bg-surface, #1e1e24); border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+    }
+    .np-line .np-words { flex: 1; min-width: 0; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--text-main, #fff); }
+    .np-line .np-words b { color: var(--accent, #00e5ff); font-weight: 800; letter-spacing: 0.5px; }
+    .np-line .np-words span { color: var(--text-muted, #888); }
+
+    /* ---------- Player option C: title/artist + ⏮ ▶ ⏭ (no seek, skips, art or volume) ---------- */
+    .np-c {
+      display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+      background: linear-gradient(180deg, var(--bg-surface, #1e1e26) 0%, var(--bg-secondary, #18181f) 100%);
+      border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+    }
+    .np-c .np-title { font-size: 14px; }
+    .np-c .np-btn { background: none; border: none; color: var(--text-main, #fff); font-size: 15px; cursor: pointer; padding: 2px 4px; }
+    .np-c .np-play { width: 30px; height: 30px; font-size: 12px; }
+
+    /* ---------- Header option 1: words, not icons, plus a ⋯ menu ---------- */
+    .btn-word {
+      background: var(--bg-surface, #1e1e26); border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+      color: var(--text-main, #fff); border-radius: 6px; padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    }
+    .btn-word.active { background: var(--accent-glow, rgba(0,229,255,0.2)); border-color: var(--accent, #00e5ff); color: var(--accent, #00e5ff); }
+    .menu {
+      position: absolute; top: 36px; right: 8px; width: 190px; z-index: 10; padding: 6px;
+      background: var(--bg-secondary, #18181f); border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+      border-radius: 8px; box-shadow: 0 10px 28px rgba(0,0,0,0.7); font-size: 11px; color: var(--text-main, #fff);
+    }
+    .menu div { padding: 6px 8px; border-radius: 5px; display: flex; justify-content: space-between; align-items: center; }
+    .menu div:hover { background: rgba(255,255,255,0.06); }
+    .menu .sep { border-top: 1px solid var(--border-color, rgba(255,255,255,0.1)); margin: 4px 0; padding: 0; }
+    .menu .hint { color: var(--text-muted, #888); font-size: 9.5px; padding: 0 8px 4px; display: block; }
+    .menu .val { color: var(--text-muted, #888); }
+    .popup-main { position: relative; }
+
+    /* ---------- Header option 3: icons with captions ---------- */
+    .btn-cap {
+      display: flex; flex-direction: column; align-items: center; gap: 0; background: none; border: none;
+      color: var(--text-main, #fff); font-size: 8px; padding: 1px 6px; cursor: pointer; line-height: 1.1;
+    }
+    .btn-cap .i { font-size: 14px; }
+    .btn-cap.active { color: var(--accent, #00e5ff); }
+  </style>
+</head>
+<body class="page">
+  <div class="switcher" id="switcher"></div>
+  <div class="popup-container"><div class="popup-main" id="main"></div></div>
+  <div class="caption" id="caption"></div>
+
+  <!-- ===== Current header (unchanged in this slice) ===== -->
+  <template id="header-current">
+    <header class="header">
+      <div class="logo"><span class="logo-icon">🎧</span><span class="logo-text">TIDAL DJ</span></div>
+      <div class="header-actions">
+        <button class="btn-icon" title="Size">↔️</button>
+        <button class="btn-icon" title="Physics">🔬</button>
+        <button class="btn-icon" title="Micro">▫️</button>
+        <button class="btn-icon" title="On Top">📌</button>
+        <button class="btn-icon" title="Undock">🗗</button>
+        <button class="btn-icon" title="Theme">🎨</button>
+      </div>
+    </header>
+  </template>
+
+  <!-- ===== H1: words + ⋯ menu (shown open) ===== -->
+  <template id="header-h1">
+    <header class="header">
+      <div class="logo"><span class="logo-icon">🎧</span><span class="logo-text">TIDAL DJ</span></div>
+      <div class="header-actions" style="gap:5px;">
+        <button class="btn-word">Physics</button>
+        <button class="btn-word">Window ↗</button>
+        <button class="btn-word active">⋯</button>
+      </div>
+    </header>
+    <div class="menu">
+      <div>Theme <span class="val">Cyan ▸</span></div>
+      <div>Floating button <span class="val">off</span></div>
+      <span class="hint">Shows a button on the Tidal page that opens an always-on-top mini window</span>
+      <div>Compact bar <span class="val">▫️</span></div>
+      <div class="sep"></div>
+      <div>Shortcuts <span class="val">Alt+E · Alt+M</span></div>
+    </div>
+  </template>
+
+  <!-- ===== H2: two buttons only ===== -->
+  <template id="header-h2">
+    <header class="header">
+      <div class="logo"><span class="logo-icon">🎧</span><span class="logo-text">TIDAL DJ</span></div>
+      <div class="header-actions" style="gap:5px;">
+        <button class="btn-word">Physics</button>
+        <button class="btn-word">Window ↗</button>
+      </div>
+    </header>
+  </template>
+
+  <!-- ===== H3: icons with captions ===== -->
+  <template id="header-h3">
+    <header class="header">
+      <div class="logo"><span class="logo-icon">🎧</span><span class="logo-text">TIDAL DJ</span></div>
+      <div class="header-actions" style="gap:2px;">
+        <button class="btn-cap"><span class="i">🔬</span>Physics</button>
+        <button class="btn-cap"><span class="i">▫️</span>Compact</button>
+        <button class="btn-cap"><span class="i">🗗</span>Window</button>
+        <button class="btn-cap"><span class="i">🎨</span>Theme</button>
+      </div>
+    </header>
+  </template>
+
+  <!-- ===== PA: one strip ===== -->
+  <template id="player-pa">
+    <div class="np-strip">
+      <label class="switch np-switch" title="EQ on / off"><input type="checkbox" checked><span class="slider-round"></span></label>
+      <div class="np-text">
+        <div class="np-state">EQ ON · TIDAL</div>
+        <div class="np-title">Innerbloom (What So Not Remix)</div>
+        <div class="np-artist">RÜFÜS DU SOL</div>
+      </div>
+      <button class="np-play">⏸</button>
+    </div>
+    <div class="np-progress"><div style="width:38%"></div></div>
+    <div class="np-divider"></div>
+  </template>
+
+  <!-- ===== PB: status line only ===== -->
+  <template id="player-pb">
+    <div class="np-line">
+      <label class="switch np-switch" title="EQ on / off"><input type="checkbox" checked><span class="slider-round"></span></label>
+      <div class="np-words"><b>EQ ON</b> · Innerbloom (What So Not Remix) <span>— RÜFÜS DU SOL</span></div>
+    </div>
+  </template>
+
+  <!-- ===== PC: title + ⏮ ▶ ⏭, EQ row stays separate ===== -->
+  <template id="player-pc">
+    <div class="np-c">
+      <div class="np-text">
+        <div class="np-title">Innerbloom (What So Not Remix)</div>
+        <div class="np-artist">RÜFÜS DU SOL · 2:41 / 9:38</div>
+      </div>
+      <button class="np-btn">⏮</button>
+      <button class="np-play">⏸</button>
+      <button class="np-btn">⏭</button>
+    </div>
+    <div class="status-bar">
+      <div class="eq-power-group">
+        <span class="power-title">AUDIO EQ:</span>
+        <label class="switch power-switch"><input type="checkbox" checked><span class="slider-round"></span></label>
+        <span class="power-badge on">● ON · Tidal</span>
+      </div>
+    </div>
+  </template>
+
+  <!-- ===== EQ section (as shipped) ===== -->
+  <template id="eq">
+    <div class="eq-pane">
+      <section class="section preset-section">
+        <div class="section-title-row">
+          <div style="display: flex; align-items: center; gap: 6px;">
+            <label class="section-title">PRESETS</label>
+            <span class="preset-badge-saved">● Saved</span>
+          </div>
+          <div class="preset-actions">
+            <button class="btn-text">+ Save As New</button>
+            <button class="btn-text">↺ Reset to Default</button>
+          </div>
+        </div>
+        <select class="preset-dropdown"><option>Punchy Bass & Clarity</option></select>
+      </section>
+      <main class="controls-area">
+        <div class="eq-row"><div class="eq-label">🔊 Bass Boost</div><button class="eq-nudge-btn">-</button><input type="range" class="eq-slider" min="0" max="14" step="0.5" value="5"><button class="eq-nudge-btn">+</button><span class="eq-val">+5.0 dB</span></div>
+        <div class="eq-row"><div class="eq-label">🛡️ HPF (Anti-Distort)</div><button class="eq-nudge-btn">-</button><input type="range" class="eq-slider" min="20" max="200" step="5" value="30"><button class="eq-nudge-btn">+</button><span class="eq-val">30 Hz</span></div>
+        <div class="eq-row"><div class="eq-label">🎤 Mid (Vocals / Body)</div><button class="eq-nudge-btn">-</button><input type="range" class="eq-slider" min="-6" max="6" step="0.5" value="1.5"><button class="eq-nudge-btn">+</button><span class="eq-val">+1.5 dB</span></div>
+        <div class="eq-row"><div class="eq-label">✨ High (Sparkle)</div><button class="eq-nudge-btn">-</button><input type="range" class="eq-slider" min="-6" max="6" step="0.5" value="2"><button class="eq-nudge-btn">+</button><span class="eq-val">+2.0 dB</span></div>
+        <div class="toggle-row"><div class="eq-label"><span>⚖️ Auto-Balancing</span><span style="font-size: 9px; color: var(--text-muted, #888); font-weight: normal;">(Leveler)</span></div><label class="switch"><input type="checkbox" checked><span class="slider-round"></span></label></div>
+        <div class="eq-row"><div class="eq-label">🚀 Master Volume</div><button class="eq-nudge-btn">-</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+        <div class="eq-row"><div class="eq-label">🎛️ Pitch / Speed</div><button class="eq-nudge-btn">-</button><input type="range" class="eq-slider" min="0.75" max="1.3" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">1.00x</span></div>
+      </main>
+    </div>
+  </template>
+
+  <script>
+    const VARIANTS = {
+      pa: { header: 'header-current', player: 'player-pa', caption: 'Player A (recommended): one strip. Big EQ switch, big title, play/pause. No art, seek bar, skips, volume or favourite.' },
+      pb: { header: 'header-current', player: 'player-pb', caption: 'Player B: a single status line, no playback controls at all.' },
+      pc: { header: 'header-current', player: 'player-pc', caption: 'Player C: bigger title with ⏮ ▶ ⏭; the EQ row stays separate. No seek bar, skips, art or volume.' },
+      h1: { header: 'header-h1', player: 'player-pa', caption: 'Header 1 (recommended): three words. Physics · Window · ⋯ (menu shown open). Removes Size, Micro and On Top buttons.' },
+      h2: { header: 'header-h2', player: 'player-pa', caption: 'Header 2: two buttons only. Theme moves into the Physics panel; floating button and compact bar are dropped.' },
+      h3: { header: 'header-h3', player: 'player-pa', caption: 'Header 3: today\'s icons with captions. On Top and Size removed (On Top only opened the same window).' }
+    };
+    const params = new URLSearchParams(location.search);
+    const v = VARIANTS[params.get('variant')] ? params.get('variant') : 'pa';
+    const main = document.getElementById('main');
+    for (const id of [VARIANTS[v].header, VARIANTS[v].player, 'eq']) {
+      main.appendChild(document.getElementById(id).content.cloneNode(true));
+    }
+    document.getElementById('caption').textContent = VARIANTS[v].caption;
+    const sw = document.getElementById('switcher');
+    if (params.get('shot')) { sw.remove(); document.getElementById('caption').remove(); }
+    else {
+      sw.innerHTML = 'Variant: ' + Object.keys(VARIANTS).map((k) => `<a class="${k === v ? 'on' : ''}" href="?variant=${k}">${k.toUpperCase()}</a>`).join(' ');
+    }
+  </script>
+</body>
+</html>
