@@ -12,10 +12,10 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 | EQ section | Popup | Presets row (badge Saved/Modified, Update, Save As New, ✕, Reset) · Bass · HPF · Mid · High · Auto-Balancing · Master Volume · Pitch/Speed (each: label, −, slider, +, value) | ✔ dead space removed (R-03); content not yet reviewed |
 | ~~PLAYLISTS tab~~ | — | — | ✖ R-01 |
 | ~~PLAYLIST LAB tab~~ | — | — | ✖ R-01 |
-| **Physics side panel** | Header 🔬 | Signal pipeline (animated model) · stage ON/BYPASS buttons · response curve · readout · Guide | ✔ R-02; your visual check pending |
+| **Physics side panel** | Header 🔬 | Signal pipeline (animated model) · stage ON/BYPASS buttons · response curve · readout · Guide | ✔ R-02; to be replaced by on-screen physics (R-12, options out) |
 | Micro mode | Header ▫️ | One row: art, title, ⏮ ▶ ⏭, EQ pill, ↗ expand | ◐ fate depends on R-06 |
 | Standalone window | Header 🗗 Undock, 📌 On Top, or Alt+M | Same as popup; sizes itself to the content; Dock closes it | ◐ R-06 |
-| In-page floating button | “Floating Button” switch (default off) | Draggable “🎧 Mini-Player” pill on every http(s) page | ◐ R-06 |
+| In-page floating button | “Floating Button” switch (default off) | Draggable “🎧 Mini-Player” pill on every http(s) page | ● R-13: remove |
 | Document PiP window | Click the floating button (needs an in-page click) | Reduced popup copy: no skips, nudges, volume; Physics as an overlay drawer | ○ |
 | Keyboard shortcuts | Alt+M, Alt+E | Show/hide standalone window · toggle EQ | ○ |
 | Themes | Header 🎨 | Cyan, Amber, Synthwave, Matrix, OLED (Physics canvases follow) | ◐ R-06 |
@@ -36,7 +36,8 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 ## Batches
 
 1. ~~Purpose and everyday journey~~ → overtaken by your round-1 feedback (2026-10-01); Q1.1–Q1.4 folded into R-05/R-06.
-2. **Round 1 (current)**: R-05 player bar options, R-06 header options, R-07 presets. ← **waiting on you**
+2. Round 1: R-05 → C chosen; R-06 → header removed (decided); R-07 presets (export pending).
+2b. **Round 2 (current)**: C1/C2 · physics p1/p2/p3 · icons i1/i2/i3 · Stay-open and Mini-bar rules · heart HTML · year source. ← **waiting on you**
 3. EQ section: main vs advanced controls, Pitch vs Speed, preset buttons, reset/undo, units, bigger type.
 4. Status and feedback: badge/icon state, errors, loading and empty states, what persists.
 5. PiP window and floating button: keep or drop; parity with the popup.
@@ -45,8 +46,8 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 
 ## Open questions (round 1, asked 2026-10-01)
 
-- R-05 Player bar: A / B / C (mockups `pa.png`, `pb.png`, `pc.png`). Does the title and ▶ work on real Tidal today?
-- R-06 Header: 1 / 2 / 3 (mockups `h1.png`, `h2.png`, `h3.png`).
+- Round 1 (answered): C chosen; title/▶ work on real Tidal; header: remove everything but stay-open and theme.
+- Round 2 (`round2.html`): C1 / C2 · p1 / p2 / p3 · i1 / i2 / i3 · OK on the Stay-open window and the Mini-bar rule · the heart button's HTML · year source.
 - R-07 Presets: send the preset list from your everyday copy (one console line, see REVIEW_READY), or name the defaults you want.
 
 ## Next review point
