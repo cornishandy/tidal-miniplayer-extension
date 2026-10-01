@@ -28,7 +28,8 @@ test('every manifest command has a handler in background.js', () => {
 });
 
 test('permissions have not been broadened', () => {
-  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'offscreen', 'scripting', 'storage', 'tabCapture', 'tabs']);
+  // sidePanel was added on 2026-10-01 (decision R-20): a UI-only permission, no access to pages or devices.
+  assert.deepEqual([...manifest.permissions].sort(), ['activeTab', 'offscreen', 'scripting', 'sidePanel', 'storage', 'tabCapture', 'tabs']);
   assert.deepEqual(manifest.host_permissions, ['<all_urls>']);
   assert.equal(manifest.content_security_policy, undefined, 'CSP must stay at the MV3 default unless explicitly approved');
 });

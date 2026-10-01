@@ -778,3 +778,64 @@ body.minibar {
   cursor: pointer;
   padding: 4px;
 }
+
+/* ---------- Side panel (Stay open): fills the panel, scrolls, roomier drawings ---------- */
+body.panel {
+  width: auto;
+  min-width: 300px;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+body.panel .phys-canvas.live {
+  height: 84px;
+}
+
+body.panel .phys-canvas.bode {
+  height: 68px;
+}
+
+body.panel .controls-area {
+  gap: 10px;
+}
+
+body.panel .section-title-row {
+  height: auto;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+body.panel .preset-actions {
+  flex-basis: 100%;
+  justify-content: flex-end;
+}
+
+/* The panel is tall and may be narrow: each slider row becomes two lines, with a full-width slider. */
+body.panel .eq-row:not(.toggle-row) {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 62px;
+  grid-template-areas:
+    "tag label label val"
+    "down slider slider up";
+  gap: 4px 8px;
+  align-items: center;
+}
+
+body.panel .eq-row:not(.toggle-row) .band-tag { grid-area: tag; }
+body.panel .eq-row:not(.toggle-row) .eq-label { grid-area: label; width: auto; }
+body.panel .eq-row:not(.toggle-row) .eq-val { grid-area: val; width: auto; min-width: 0; }
+body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="down"] { grid-area: down; justify-self: end; }
+body.panel .eq-row:not(.toggle-row) .eq-slider { grid-area: slider; }
+body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="up"] { grid-area: up; justify-self: start; }
+
+@media (max-width: 400px) {
+  body.panel .art-strip {
+    width: 44px;
+    flex: 0 0 44px;
+  }
+
+  body.panel .np-cover {
+    width: 64px;
+    height: 64px;
+  }
+}
