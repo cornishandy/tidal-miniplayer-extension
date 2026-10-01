@@ -43,10 +43,10 @@ Current review build: **v1.2.0**, runtime commit `a92a3c0`, fingerprint `467808d
 | U-NO-NETWORK | No `fetch`/XHR/Tidal API in shipped scripts | unit | — | — | PASS |
 | U-RETIRED | Playlists/Lab/favourite markup and commands stay out | unit | — | — | PASS |
 | W-TOOLBAR-INVOKE | EQ via a real toolbar click (activeTab grant) | user | NOT RUN | NOT RUN | NOT RUN |
-| W-PHYSICS-VISUAL | Side panel looks right in your Chrome (width, animation, Retina) | user-visual | — | — | NOT RUN |
+| W-PHYSICS-VISUAL | Side panel looks right in your Chrome (width, animation, Retina) | user-visual | — | — | NOT RUN (1.2.0 is now loaded in your review profile) |
 | W-PIP-FLOATING | Document PiP from the in-page floating button | user | NOT RUN | NOT RUN | NOT RUN |
 | W-SHORTCUTS | Alt+M / Alt+E in real Chrome | user | NOT RUN | NOT RUN | NOT RUN |
-| W-REAL-TIDAL-TRANSPORT | Transport and metadata on real listen.tidal.com | real-tidal | BLOCKED | BLOCKED | BLOCKED (needs your session; I don't contact Tidal). Your answer to R-05 tells us whether title/▶ work today. |
+| W-REAL-TIDAL-TRANSPORT | Transport and metadata on real listen.tidal.com | real-tidal | BLOCKED | BLOCKED | **PARTLY PASS (your report, 2026-10-01)**: title and artist correct, play/pause works. Prev/next, seek, skips and volume not yet reported. |
 | ~~W-REAL-TIDAL-PLAYLISTS~~ | Lab on real playlists | real-tidal | BLOCKED | BLOCKED | RETIRED |
 | W-LISTEN | Sound quality, presets, no pumping or distortion | user-listening | NOT RUN | NOT RUN | **PARTLY**: you reported liking the sound (2026-10-01); extreme-boost check still open |
 | W-LIVE-INSTALL | Everyday install untouched | static | PASS | PASS | PASS (old folder byte-identical; profile unreadable, so ID unconfirmed) |

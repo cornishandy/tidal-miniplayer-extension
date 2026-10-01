@@ -12,7 +12,7 @@ const CHROME = process.env.CHROME_BIN || join(process.env.HOME,
 const variants = process.argv.slice(2).length ? process.argv.slice(2) : ['pa', 'pb', 'pc', 'h1', 'h2', 'h3'];
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND'] });
-const ctx = await browser.newContext({ viewport: { width: 420, height: 600 }, deviceScaleFactor: 2 });
+const ctx = await browser.newContext({ viewport: { width: 560, height: 700 }, deviceScaleFactor: 2 });
 const tab = await ctx.newPage();
 for (const v of variants) {
   await tab.goto(`${page}?variant=${v}&shot=1`);
