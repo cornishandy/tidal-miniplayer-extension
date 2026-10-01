@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<!--
+  Round-3 mockups (2026-10-01): the per-band on/off control in the SIDE PANEL's two-line rows,
+  as icon/image buttons instead of the LOW/HPF/MID/HI/AUTO/VOL/SPD text tags. Panel width 360 px.
+  Variants (?variant=…): a (band icons) · b (power symbols) · c (icon + LED) · d (small switches).
+  In every variant the HIGH row is shown switched off, so the off state is visible.
+  tools/mockshot.mjs --page round3.html renders each to docs/mockups/r3-<variant>.png.
+-->
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Round 3 mockups: band buttons in the side panel</title>
+  <style>
+    :root { --bg: #121216; --surface: #1e1e26; --accent: #00e5ff; --glow: rgba(0,229,255,0.35); --text: #fff; --muted: #9a9aa5; --line: rgba(255,255,255,0.08); }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    html { background: #2a2a2e; }
+    body { padding: 18px; color: var(--text); font-size: 12.5px; }
+    .switcher { font-size: 12px; color: #ccc; margin-bottom: 12px; display: flex; gap: 10px; }
+    .switcher a { color: #7fe8ff; } .switcher a.on { color: #fff; font-weight: 700; text-decoration: none; }
+    .caption { font-size: 11px; color: #aaa; margin-top: 8px; width: 360px; }
+
+    .shot { width: 360px; background: var(--bg); border-radius: 6px; overflow: hidden; box-shadow: 0 10px 40px rgba(0,0,0,0.6); padding: 10px 12px 12px; }
+    .hdr { font-size: 10px; font-weight: 800; letter-spacing: 0.8px; color: var(--muted); margin-bottom: 10px; }
+    .rows { display: flex; flex-direction: column; gap: 12px; }
+
+    /* two-line row, as in the real side panel */
+    .row { display: grid; grid-template-columns: 40px 1fr 1fr 62px; grid-template-areas: "tag label label val" "down slider slider up"; gap: 5px 8px; align-items: center; }
+    .row.toggle { grid-template-areas: "tag label label val"; }
+    .label { grid-area: label; font-size: 12.5px; font-weight: 500; white-space: nowrap; }
+    .label small { color: var(--muted); font-size: 10.5px; font-weight: 400; margin-left: 4px; }
+    .val { grid-area: val; text-align: right; font-size: 12.5px; font-weight: 700; color: var(--accent); }
+    .nudge { width: 20px; height: 20px; border-radius: 4px; background: var(--surface); border: 1px solid rgba(255,255,255,0.12); color: #aaa; font-size: 13px; line-height: 18px; text-align: center; }
+    .nudge.down { grid-area: down; justify-self: end; } .nudge.up { grid-area: up; justify-self: start; }
+    .track { grid-area: slider; height: 6px; border-radius: 3px; background: #2a2a35; position: relative; }
+    .track i { position: absolute; top: 50%; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); transform: translate(-50%, -50%); }
+    .row.off .label, .row.off .val { opacity: 0.45; }
+
+    /* the control under review */
+    .ctl { grid-area: tag; width: 28px; height: 28px; border-radius: 7px; display: flex; align-items: center; justify-content: center; position: relative; cursor: pointer; }
+    .ctl svg { width: 17px; height: 17px; fill: none; stroke: var(--accent); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+
+    /* A: band icons; off = grey with a slash */
+    .a .ctl { background: rgba(0,229,255,0.10); border: 1px solid rgba(0,229,255,0.45); }
+    .a .off .ctl { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.12); }
+    .a .off .ctl svg { stroke: #6f6f7a; }
+    .a .off .ctl::after { content: ""; position: absolute; left: 5px; right: 5px; top: 50%; height: 1.6px; background: #8a8a96; transform: rotate(-40deg); border-radius: 1px; }
+
+    /* B: one power symbol for every row; state by colour */
+    .b .ctl { background: rgba(0,229,255,0.10); border: 1px solid var(--accent); box-shadow: 0 0 8px var(--glow); }
+    .b .off .ctl { background: rgba(255,255,255,0.04); border-color: rgba(255,255,255,0.15); box-shadow: none; }
+    .b .off .ctl svg { stroke: #6f6f7a; }
+
+    /* C: band icon (always neutral) + LED dot */
+    .c .ctl { background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12); }
+    .c .ctl svg { stroke: #cfcfd8; }
+    .c .ctl::after { content: ""; position: absolute; right: -3px; top: -3px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 6px var(--accent); border: 1.5px solid var(--bg); }
+    .c .off .ctl::after { background: #3a3a44; box-shadow: none; }
+    .c .off .ctl svg { stroke: #6f6f7a; }
+
+    /* D: a small switch */
+    .d .ctl { width: 30px; height: 17px; border-radius: 10px; background: var(--accent); border: none; }
+    .d .ctl::before { content: ""; position: absolute; width: 13px; height: 13px; border-radius: 50%; background: #000; right: 2px; top: 2px; }
+    .d .off .ctl { background: #333; }
+    .d .off .ctl::before { background: #fff; right: auto; left: 2px; }
+    .d .ctl svg { display: none; }
+  </style>
+</head>
+<body>
+  <div class="switcher" id="switcher"></div>
+  <div id="root"></div>
+  <div class="caption" id="caption"></div>
+
+  <svg width="0" height="0" style="position:absolute">
+    <symbol id="i-bass" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.2"/><circle cx="8" cy="8" r="2.2"/></symbol>
+    <symbol id="i-hpf" viewBox="0 0 16 16"><path d="M2 13.5C5.5 13.5 6 3 14 3"/><path d="M2 3v10.5"/></symbol>
+    <symbol id="i-mid" viewBox="0 0 16 16"><rect x="5.5" y="1.5" width="5" height="8" rx="2.5"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5"/></symbol>
+    <symbol id="i-high" viewBox="0 0 16 16"><path d="M8 1.5 9.6 6.4 14.5 8 9.6 9.6 8 14.5 6.4 9.6 1.5 8l4.9-1.6z"/></symbol>
+    <symbol id="i-auto" viewBox="0 0 16 16"><path d="M8 2v12M3 5.5h10"/><path d="M3 5.5 1.5 10h3zM13 5.5l-1.5 4.5h3z"/></symbol>
+    <symbol id="i-vol" viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11.5 6a3 3 0 0 1 0 4"/></symbol>
+    <symbol id="i-speed" viewBox="0 0 16 16"><path d="M2.5 12.5a6 6 0 1 1 11 0"/><path d="M8 12.5l3-4.5"/></symbol>
+    <symbol id="i-power" viewBox="0 0 16 16"><path d="M8 2v6"/><path d="M4.6 4.6a5 5 0 1 0 6.8 0"/></symbol>
+  </svg>
+
+  <script>
+    const ROWS = [
+      ['bass', 'Bass Boost', '', '+5.0 dB', 36, false],
+      ['hpf', 'HPF', 'anti-distort', '30 Hz', 6, false],
+      ['mid', 'Mid', 'vocals / body', '+1.5 dB', 62, false],
+      ['high', 'High', 'sparkle', '+2.0 dB', 67, true],
+      ['auto', 'Auto-Balancing', 'leveler', 'on', null, false],
+      ['vol', 'Master Volume', '', '100%', 25, false],
+      ['speed', 'Pitch / Speed', '', '1.00x', 45, false]
+    ];
+    const VARIANTS = {
+      a: { icon: (k) => `i-${k}`, caption: 'A (recommended): a line icon per band in a small button. Off = grey with a slash, row dims. You can tell the band and its state at a glance.' },
+      b: { icon: () => 'i-power', caption: 'B: the same power symbol on every row; on = lit, off = grey. Unmistakably an on/off, but the band is only known from the label.' },
+      c: { icon: (k) => `i-${k}`, caption: 'C: a neutral band icon with a small LED dot in the corner; lit = on, dark = off. Hardware feel.' },
+      d: { icon: () => 'i-power', caption: 'D: a small switch per row, like the Stay-open switch. Most literal, no icon.' }
+    };
+    const params = new URLSearchParams(location.search);
+    const v = VARIANTS[params.get('variant')] ? params.get('variant') : 'a';
+    const V = VARIANTS[v];
+    const shot = document.createElement('div'); shot.className = `shot ${v}`;
+    shot.innerHTML = '<div class="hdr">SIDE PANEL · SLIDERS</div><div class="rows"></div>';
+    const rows = shot.querySelector('.rows');
+    for (const [key, label, hint, val, pos, off] of ROWS) {
+      const r = document.createElement('div');
+      r.className = `row${pos === null ? ' toggle' : ''}${off ? ' off' : ''}`;
+      r.innerHTML = `<div class="ctl"><svg><use href="#${V.icon(key)}"/></svg></div>
+        <div class="label">${label}${hint ? `<small>${hint}</small>` : ''}</div>
+        <div class="val">${off ? (pos === null ? 'off' : val) : val}</div>` +
+        (pos === null ? '' : `<span class="nudge down">−</span><div class="track"><i style="left:${pos}%"></i></div><span class="nudge up">+</span>`);
+      rows.appendChild(r);
+    }
+    document.getElementById('root').appendChild(shot);
+    document.getElementById('caption').textContent = V.caption;
+    const sw = document.getElementById('switcher');
+    if (params.get('shot')) { sw.remove(); document.getElementById('caption').remove(); }
+    else sw.innerHTML = 'Variant: ' + Object.keys(VARIANTS).map((k) => `<a class="${k === v ? 'on' : ''}" href="?variant=${k}">${k.toUpperCase()}</a>`).join(' ');
+  </script>
+</body>
+</html>

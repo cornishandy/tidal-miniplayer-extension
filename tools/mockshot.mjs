@@ -15,10 +15,10 @@ const tag = tagIdx >= 0 ? argv[tagIdx + 1] : '';
 const pageIdx = argv.indexOf('--page');
 const pageFile = pageIdx >= 0 ? argv[pageIdx + 1] : 'popup-variants.html';
 const rest = argv.filter((a, i) => i !== tagIdx && i !== tagIdx + 1 && i !== pageIdx && i !== pageIdx + 1);
-const DEFAULTS = { 'popup-variants.html': ['pa', 'pb', 'pc', 'h1', 'h2', 'h3'], 'round2.html': ['c2', 'c1', 'p1', 'p2', 'p3', 'i2', 'i3', 'micro'] };
+const DEFAULTS = { 'popup-variants.html': ['pa', 'pb', 'pc', 'h1', 'h2', 'h3'], 'round2.html': ['c2', 'c1', 'p1', 'p2', 'p3', 'i2', 'i3', 'micro'], 'round3.html': ['a', 'b', 'c', 'd'] };
 const variants = rest.length ? rest : (DEFAULTS[pageFile] || []);
 const page = pathToFileURL(join(root, 'docs/mockups', pageFile)).href;
-const prefix = pageFile === 'round2.html' ? 'r2-' : '';
+const prefix = (/^round(\d+)\.html$/.exec(pageFile) || [])[1] ? `r${/^round(\d+)\.html$/.exec(pageFile)[1]}-` : '';
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND'] });
 const ctx = await browser.newContext({ viewport: { width: 560, height: 700 }, deviceScaleFactor: 2 });
