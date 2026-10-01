@@ -16,7 +16,18 @@
     html { background: #2a2a2e; }
     body { margin: 0; }
     body.page { padding: 18px 0 18px 18px; width: auto; min-width: 0; overflow: visible; background: #2a2a2e; }
-    body.page .popup-container { width: 360px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border-radius: 6px; }
+    body.page .popup-container { width: 416px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); border-radius: 6px; }
+    body.page .popup-main { width: 416px; flex-basis: 416px; }
+    .body-row { display: flex; flex-direction: row; align-items: stretch; }
+    .col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+    /* Cover-art strip: the square cover at the top, the same art blurred as a spine down the side.
+       Placeholder art (a gradient) stands in for the real cover. */
+    :root { --cover: radial-gradient(circle at 30% 28%, #ffd166 0, #ef476f 32%, #4b1d6e 68%, #0b0b16 100%); }
+    .art-strip { width: 56px; flex: 0 0 56px; position: relative; overflow: hidden; background: #0e0e12; border-right: 1px solid rgba(255,255,255,0.06); }
+    .art-strip .art-bg { position: absolute; inset: -20px; background: var(--cover); background-size: cover; filter: blur(16px) saturate(1.2) brightness(0.42); }
+    .art-strip .art-cover { position: relative; width: 56px; height: 56px; background: var(--cover); background-size: cover; box-shadow: 0 3px 10px rgba(0,0,0,0.6); }
+    .art-strip .art-cover::after { content: ""; position: absolute; inset: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08); }
     .switcher { font: 12px -apple-system, sans-serif; color: #ccc; margin-bottom: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
     .switcher a { color: #7fe8ff; }
     .switcher a.on { color: #fff; font-weight: 700; text-decoration: none; }
@@ -160,7 +171,7 @@
       <div class="np-text">
         <div class="np-state">EQ ON · TIDAL</div>
         <div class="np-title">Innerbloom (What So Not Remix)</div>
-        <div class="np-artist">RÜFÜS DU SOL</div>
+        <div class="np-artist">RÜFÜS DU SOL · 2015</div>
       </div>
       <button class="np-play">⏸</button>
     </div>
@@ -172,7 +183,7 @@
   <template id="player-pb">
     <div class="np-line">
       <label class="switch np-switch" title="EQ on / off"><input type="checkbox" checked><span class="slider-round"></span></label>
-      <div class="np-words"><b>EQ ON</b> · Innerbloom (What So Not Remix) <span>— RÜFÜS DU SOL</span></div>
+      <div class="np-words"><b>EQ ON</b> · Innerbloom (What So Not Remix) <span>— RÜFÜS DU SOL · 2015</span></div>
     </div>
   </template>
 
@@ -181,7 +192,7 @@
     <div class="np-c">
       <div class="np-text">
         <div class="np-title">Innerbloom (What So Not Remix)</div>
-        <div class="np-artist">RÜFÜS DU SOL · 2:41 / 9:38</div>
+        <div class="np-artist">RÜFÜS DU SOL · 2015 · 2:41 / 9:38</div>
       </div>
       <button class="np-btn">⏮</button>
       <button class="np-play">⏸</button>
@@ -226,9 +237,9 @@
 
   <script>
     const VARIANTS = {
-      pa: { header: 'header-current', player: 'player-pa', caption: 'Player A (recommended): one strip. Big EQ switch, big title, play/pause. No art, seek bar, skips, volume or favourite.' },
-      pb: { header: 'header-current', player: 'player-pb', caption: 'Player B: a single status line, no playback controls at all.' },
-      pc: { header: 'header-current', player: 'player-pc', caption: 'Player C: bigger title with ⏮ ▶ ⏭; the EQ row stays separate. No seek bar, skips, art or volume.' },
+      pa: { header: 'header-current', player: 'player-pa', caption: 'Player A (recommended): cover-art strip on the left, big EQ switch, big title, year, play/pause. No seek bar, skips, volume or favourite.' },
+      pb: { header: 'header-current', player: 'player-pb', caption: 'Player B: cover-art strip on the left, a single status line with the year, no playback controls.' },
+      pc: { header: 'header-current', player: 'player-pc', caption: 'Player C: cover-art strip on the left, bigger title with year and ⏮ ▶ ⏭; the EQ row stays separate. No seek bar, skips or volume.' },
       h1: { header: 'header-h1', player: 'player-pa', caption: 'Header 1 (recommended): three words. Physics · Window · ⋯ (menu shown open). Removes Size, Micro and On Top buttons.' },
       h2: { header: 'header-h2', player: 'player-pa', caption: 'Header 2: two buttons only. Theme moves into the Physics panel; floating button and compact bar are dropped.' },
       h3: { header: 'header-h3', player: 'player-pa', caption: 'Header 3: today\'s icons with captions. On Top and Size removed (On Top only opened the same window).' }
@@ -236,9 +247,14 @@
     const params = new URLSearchParams(location.search);
     const v = VARIANTS[params.get('variant')] ? params.get('variant') : 'pa';
     const main = document.getElementById('main');
-    for (const id of [VARIANTS[v].header, VARIANTS[v].player, 'eq']) {
-      main.appendChild(document.getElementById(id).content.cloneNode(true));
-    }
+    main.appendChild(document.getElementById(VARIANTS[v].header).content.cloneNode(true));
+    const row = document.createElement('div'); row.className = 'body-row';
+    const strip = document.createElement('div'); strip.className = 'art-strip';
+    strip.innerHTML = '<div class="art-bg"></div><div class="art-cover" title="Album cover (placeholder)"></div>';
+    const col = document.createElement('div'); col.className = 'col';
+    for (const id of [VARIANTS[v].player, 'eq']) col.appendChild(document.getElementById(id).content.cloneNode(true));
+    row.append(strip, col);
+    main.appendChild(row);
     document.getElementById('caption').textContent = VARIANTS[v].caption;
     const sw = document.getElementById('switcher');
     if (params.get('shot')) { sw.remove(); document.getElementById('caption').remove(); }

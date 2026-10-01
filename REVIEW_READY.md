@@ -49,9 +49,10 @@ Toolbar popup (player bar · AUDIO EQ · presets · sliders), Physics side panel
 
 ## What I need from you
 
-1. Click **Reload** on the review card; confirm **1.2.0**; open 🔬 and tell me if the side panel looks right.
-2. Pick a player bar (A/B/C) and a header (1/2/3) from the mockups, or say what you'd change.
-3. For the presets: the list from your everyday copy. In the everyday Chrome profile, right-click the extension icon → **Inspect popup** → **Console** tab → paste the line below → copy what it prints into our chat. It only reads; it changes nothing.
+1. ~~Load 1.2.0~~ Done (2026-10-01): loaded in your review profile; title/artist and play/pause confirmed on real Tidal. Still open: open 🔬 and tell me if the side panel looks right.
+2. Pick a player bar (A/B/C) and a header (1/2/3) from the mockups (now with the cover-art strip and year), or say what you'd change.
+3. **Year of original release: pick a source.** Tidal's player bar has no year, so one of: (a) Tidal's own album data: the year of the album edition you're playing (remasters show the remaster year), fetched from Tidal using your signed-in session (this re-adds a Tidal request, which 1.2.0 removed); (b) **MusicBrainz** first-release year: the real original year, but the extension would send each track's title and artist to musicbrainz.org (free, no account, no key); (c) no year. Assistant's recommendation: (b) if you're comfortable with that lookup, otherwise (a).
+4. For the presets: the list from your everyday copy. In the everyday Chrome profile, right-click the extension icon → **Inspect popup** → **Console** tab → paste the line below → copy what it prints into our chat. It only reads; it changes nothing.
    `chrome.storage.local.get(['presets','currentPreset'], d => console.log(JSON.stringify(d, null, 1)))`
 
 ## Remaining known issues
