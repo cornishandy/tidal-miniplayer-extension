@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-01 (round 4: live display, art, jumps)
+# Review Ready: 2026-10-01 (round 5: side panel, full-size art)
 
 ## Identity
 
@@ -14,13 +14,18 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` |
-| Version | **1.3.1** (the live install is 1.1.0) |
+| Version | **1.3.2** (the live install is 1.1.0) |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (unchanged: same folder) |
-| Runtime source commit | `ca30d42` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `eeb25589c3f28315…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `18bc5d1` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `5f6c2c2e0600961e…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.3.2
+
+- **Stay open** now docks the screen into **Chrome's side panel** beside the page. It stays there while you click anything on the site; the toolbar icon opens it while Stay open is on. (The separate window went behind the browser on the first click; it remains only as a fallback.) New permission: `sidePanel` (UI-only).
+- **Cover art** is requested at full size (1280 px) instead of the 80 px thumbnail.
 
 ## What changed in 1.3.1
 
@@ -40,15 +45,15 @@ Your rounds 1–3 built: one legible screen (440 px), no header; cover-art strip
 
 ## Tests
 
-- **Executed**: 30 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.1/`.
+- **Executed**: 33 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.2/`.
 - **Not run**: your look at the screen, the mini bar on your desktop, a real toolbar-click capture, Alt+M/Alt+E, the extreme-boost listening check.
 - **Blocked**: anything on real Tidal (heart, jumps, cover art). It needs your signed-in session, and I don't contact Tidal.
 
 ## What I need from you
 
-1. Click **Reload** on the review card; confirm **1.3.1**. On real Tidal: do the jumps work now, and does the time (e.g. 1:23 / 4:56) show next to the artist?
-2. **Stay open**: you said it doesn't work. What happens when you flip it on: (a) the popup closes and a separate window opens, (b) nothing, or (c) the popup closes and no window appears? And with it on, does the toolbar icon open the popup or the window?
-3. Then click **Mini bar** in the Stay-open window and tell me if it floats over other apps.
+1. Click **Reload** on the review card; confirm **1.3.2**. Flip **Stay open**: the screen should move into a panel on the right of the browser window and stay there while you click around Tidal. Drag the panel's edge to make it wider or narrower. Tell me if it holds.
+2. On real Tidal: is the cover sharp now? Do the jumps work, and does the time (e.g. 1:23 / 4:56) show next to the artist?
+3. Click **Mini bar** in the panel and tell me if it floats over other apps.
 4. If the heart stays dimmed on real Tidal: right-click the heart in Tidal's bottom bar → **Inspect** → right-click the highlighted line → **Copy** → **Copy outerHTML** → paste it here.
 5. **Year of original release: pick a source.** (a) Tidal's album edition year via your session (re-adds a Tidal request); (b) MusicBrainz first-release year (sends title + artist to musicbrainz.org); (c) no year.
 6. For the presets: the list from your everyday copy. Everyday profile → right-click the icon → **Inspect popup** → **Console** → paste: `chrome.storage.local.get(['presets','currentPreset'], d => console.log(JSON.stringify(d, null, 1)))` → copy what it prints.
