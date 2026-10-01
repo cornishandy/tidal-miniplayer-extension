@@ -485,7 +485,12 @@ input:checked + .slider-round:before {
   min-height: 22px;
 }
 
-/* Band tag: the on/off switch for that stage. Off keeps the value but takes the stage out of the chain. */
+/* Band tag: the on/off switch for that stage. Off keeps the value but takes the stage out of the chain.
+   The popup shows the text (LOW, HPF, …); the side panel shows an icon button instead (below). */
+.band-tag .band-icon {
+  display: none;
+}
+
 .band-tag {
   font-size: 9px;
   font-weight: 800;
@@ -838,4 +843,62 @@ body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="up"] { grid-area:
     width: 64px;
     height: 64px;
   }
+}
+
+/* ---------- Side panel: band icon buttons (round-3 option A) ---------- */
+body.panel .band-tag {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  justify-self: start;
+  background: rgba(0, 229, 255, 0.10);
+  border: 1px solid var(--accent-glow, rgba(0, 229, 255, 0.45));
+  text-decoration: none;
+}
+
+body.panel .band-tag .band-text {
+  display: none;
+}
+
+body.panel .band-tag .band-icon {
+  display: block;
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: var(--accent, #00e5ff);
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+body.panel .band-tag.off {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.12);
+  text-decoration: none;
+}
+
+body.panel .band-tag.off .band-icon {
+  stroke: #6f6f7a;
+}
+
+/* the slash: switched off */
+body.panel .band-tag.off::after {
+  content: "";
+  position: absolute;
+  left: 5px;
+  right: 5px;
+  top: 50%;
+  height: 1.6px;
+  background: #8a8a96;
+  border-radius: 1px;
+  transform: rotate(-40deg);
+}
+
+body.panel .eq-row.toggle-row .band-tag {
+  margin-right: 4px;
 }

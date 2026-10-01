@@ -493,13 +493,29 @@ try {
     }));
   };
   const narrow = await layoutAt(360);
+  // Band buttons in the panel are icons (option A): icon visible, text hidden, slash when off.
+  const bandBtn = await panelPage.evaluate(() => {
+    const b = document.querySelector('.band-tag[data-band="mid"]');
+    const icon = b.querySelector('.band-icon').getBoundingClientRect();
+    const textHidden = getComputedStyle(b.querySelector('.band-text')).display === 'none';
+    return { iconW: Math.round(icon.width), textHidden, size: Math.round(b.getBoundingClientRect().width) };
+  });
+  await panelPage.click('.band-tag[data-band="mid"]');
+  await sleep(300);
+  const bandOff = await panelPage.evaluate(() => {
+    const b = document.querySelector('.band-tag[data-band="mid"]');
+    return { off: b.classList.contains('off'), slash: getComputedStyle(b, '::after').content !== 'none', rowDim: b.closest('.eq-row').classList.contains('is-off') };
+  });
   await panelPage.screenshot({ path: join(outDir, 'panel-360.png') });
+  await panelPage.click('.band-tag[data-band="mid"]'); // back on
+  await sleep(200);
   const wide = await layoutAt(480);
   await panelPage.screenshot({ path: join(outDir, 'panel-480.png') });
   await panelPage.close();
-  record('W-PANEL-LAYOUT', 'Side-panel page adapts: no horizontal overflow at 360 or 480 px, sliders stay usable, no errors',
-    narrow.panelClass && narrow.scrollW <= narrow.clientW && wide.scrollW <= wide.clientW && narrow.sliderW >= 150 && wide.sliderW >= 250 && panelErrors.length === 0 ? 'PASS' : 'FAIL',
-    { narrow, wide, panelErrors, screenshots: [`results/${label}/panel-360.png`, `results/${label}/panel-480.png`] });
+  record('W-PANEL-LAYOUT', 'Side-panel page adapts: no horizontal overflow at 360 or 480 px, sliders stay usable, band icon buttons toggle, no errors',
+    narrow.panelClass && narrow.scrollW <= narrow.clientW && wide.scrollW <= wide.clientW && narrow.sliderW >= 150 && wide.sliderW >= 250 && panelErrors.length === 0
+      && bandBtn.iconW >= 14 && bandBtn.textHidden && bandBtn.size >= 26 && bandOff.off && bandOff.slash && bandOff.rowDim ? 'PASS' : 'FAIL',
+    { narrow, wide, bandBtn, bandOff, panelErrors, screenshots: [`results/${label}/panel-360.png`, `results/${label}/panel-480.png`] });
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();
