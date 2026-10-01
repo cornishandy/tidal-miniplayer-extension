@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Universal Mini-Player & DJ Bass Booster",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "description": "Floating macOS Mini-Player for Tidal, YouTube, Movies, and Any Tab with DJ Bass Boost, Anti-Distortion HPF, Auto-Balancing, and Physics Visualizer.",
   "permissions": [
     "tabCapture",

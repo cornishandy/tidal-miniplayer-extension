@@ -1,4 +1,4 @@
-/* popup.css - Modern Responsive DJ Bass Booster & Mini-Player UI */
+/* popup.css - DJ Bass Booster toolbar popup and standalone window */
 
 :root {
   --bg-primary: #121216;
@@ -34,13 +34,37 @@ body.size-wide {
   width: 490px;
 }
 
+/* The Physics side panel (300px) opens beside the main column; the popup widens to fit. */
+body.physics-open {
+  width: 660px;
+}
+
+body.size-wide.physics-open {
+  width: 790px;
+}
+
+/* Height follows the content: no fixed height, so there is no slack above or below the sliders. */
 .popup-container {
   display: flex;
-  flex-direction: column;
-  height: 540px;
+  flex-direction: row;
+  align-items: stretch;
   position: relative;
   overflow: hidden;
   width: 100%;
+}
+
+.popup-main {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 360px;
+  width: 360px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.size-wide .popup-main {
+  flex-basis: 490px;
+  width: 490px;
 }
 
 /* Header */
@@ -99,14 +123,13 @@ body.size-wide {
   flex-shrink: 0;
 }
 
+/* Icon-only unless the main column is wide (the labels are the subject of the header review). */
 .btn-icon .btn-lbl {
-  display: inline;
+  display: none;
 }
 
-@media (max-width: 400px) {
-  .btn-icon .btn-lbl {
-    display: none;
-  }
+.size-wide .btn-icon .btn-lbl {
+  display: inline;
 }
 
 .btn-icon:hover {
@@ -142,8 +165,7 @@ body.micro-mode .popup-container {
 body.micro-mode .header,
 body.micro-mode .toolbar-player,
 body.micro-mode .status-bar,
-body.micro-mode .popup-tab-bar,
-body.micro-mode .tab-pane {
+body.micro-mode .eq-pane {
   display: none !important;
 }
 
@@ -448,36 +470,6 @@ body.micro-mode .micro-container {
   transform: scale(1.15);
 }
 
-/* White Solid Heart (Favorited) vs Outline (Unfavorited) */
-.player-fav-btn {
-  background: none;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 3px;
-  border-radius: 50%;
-  color: var(--text-main, #fff);
-  transition: transform 0.1s;
-}
-
-.player-fav-btn:hover {
-  transform: scale(1.15);
-}
-
-.player-fav-btn .heart-path {
-  fill: none;
-  stroke: #fff;
-  stroke-width: 2.2;
-  transition: fill 0.15s, stroke 0.15s;
-}
-
-.player-fav-btn.is-favorite .heart-path {
-  fill: #fff;
-  stroke: #fff;
-}
-
 /* Compact Volume Control & 100% Indicator */
 .player-vol-wrap {
   position: relative;
@@ -645,40 +637,12 @@ input:checked + .slider-round:before {
   background-color: #000;
 }
 
-/* Popup Tabs */
-.popup-tab-bar {
-  display: flex;
-  background: var(--bg-secondary, #17171d);
-  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
-  flex-shrink: 0;
-}
-
-.popup-tab-btn {
-  flex: 1;
-  padding: 6px 0;
-  background: none;
-  border: none;
-  color: var(--text-muted, #888);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.4px;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.popup-tab-btn.active {
-  color: var(--accent, #00e5ff);
-  border-bottom: 2px solid var(--accent, #00e5ff);
-  background: rgba(255, 255, 255, 0.02);
-}
-
-/* Tab Panes */
-.tab-pane {
-  flex: 1;
+/* EQ pane: presets + sliders */
+.eq-pane {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  padding: 6px 10px;
+  padding: 6px 10px 8px;
 }
 
 /* Presets Section */
@@ -762,14 +726,11 @@ input:checked + .slider-round:before {
   outline: none;
 }
 
-/* EQ Controls Grid - Proportional Scaling, No Gap Blowout */
+/* EQ Controls Grid: rows pack from the top; nothing is centred in leftover space */
 .controls-area {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  flex: 1;
-  min-height: 0;
-  justify-content: center;
 }
 
 .size-wide .controls-area {
@@ -879,248 +840,4 @@ input:checked + .slider-round:before {
   align-items: center;
   width: 100%;
   padding: 1px 0;
-}
-
-/* Playlists Tab */
-.playlists-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 6px;
-  font-size: 10px;
-  color: var(--text-muted, #aaa);
-}
-
-.playlist-scroll-list {
-  flex: 1;
-  overflow-y: auto;
-  min-height: 0;
-}
-
-.playlist-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 8px;
-  border-radius: 5px;
-  margin-bottom: 4px;
-  background: var(--bg-card, rgba(255,255,255,0.02));
-  transition: background 0.15s;
-}
-
-.playlist-item:hover {
-  background: rgba(255,255,255,0.05);
-}
-
-.pl-title {
-  font-size: 11px;
-  font-weight: 500;
-}
-
-.pl-count {
-  font-size: 9px;
-  color: var(--text-muted, #777);
-  margin-top: 1px;
-}
-
-.pl-checkbox {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent, #00e5ff);
-  cursor: pointer;
-}
-
-.pl-badge-in {
-  font-size: 8px;
-  padding: 1.5px 4px;
-  border-radius: 3px;
-  background: var(--accent-glow, #00e5ff22);
-  color: var(--accent, #00e5ff);
-  border: 1px solid var(--accent, #00e5ff55);
-  margin-left: 4px;
-}
-
-/* PLAYLIST LAB & SET-THEORY STUDIO */
-.lab-container {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  gap: 6px;
-  overflow-y: auto;
-}
-
-.lab-section {
-  background: var(--bg-card, rgba(255,255,255,0.02));
-  border: 1px solid var(--border-color, rgba(255,255,255,0.08));
-  border-radius: 6px;
-  padding: 6px 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.lab-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.lab-label {
-  font-size: 9.5px;
-  font-weight: 700;
-  color: var(--text-muted, #aaa);
-  width: 75px;
-  flex-shrink: 0;
-}
-
-.lab-select {
-  flex: 1;
-  min-width: 0;
-  padding: 3px 5px;
-  background: var(--bg-surface, #1e1e26);
-  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
-  border-radius: 4px;
-  color: var(--text-main, #fff);
-  font-size: 10px;
-  outline: none;
-}
-
-.lab-op-pills {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.lab-pill {
-  padding: 2.5px 6px;
-  border-radius: 10px;
-  font-size: 8.5px;
-  font-weight: 600;
-  background: var(--bg-surface, #22222a);
-  border: 1px solid var(--border-color, rgba(255,255,255,0.1));
-  color: var(--text-muted, #aaa);
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.lab-pill:hover {
-  color: #fff;
-  border-color: var(--accent, #00e5ff);
-}
-
-.lab-pill.active {
-  background: var(--accent-glow, rgba(0,229,255,0.15));
-  color: var(--accent, #00e5ff);
-  border-color: var(--accent, #00e5ff);
-}
-
-.lab-stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 4px;
-  text-align: center;
-}
-
-.lab-stat-box {
-  background: var(--bg-surface, #1c1c22);
-  border-radius: 4px;
-  padding: 4px 2px;
-  border: 1px solid var(--border-color, rgba(255,255,255,0.06));
-}
-
-.lab-stat-val {
-  font-size: 11px;
-  font-weight: 800;
-  color: var(--accent, #00e5ff);
-}
-
-.lab-stat-lbl {
-  font-size: 8px;
-  color: var(--text-muted, #888);
-}
-
-.lab-track-table-wrap {
-  flex: 1;
-  min-height: 120px;
-  overflow-y: auto;
-  border: 1px solid var(--border-color, rgba(255,255,255,0.08));
-  border-radius: 5px;
-  background: #0f0f13;
-}
-
-.lab-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 9.5px;
-}
-
-.lab-table th {
-  position: sticky;
-  top: 0;
-  background: var(--bg-secondary, #181820);
-  color: var(--text-muted, #aaa);
-  padding: 4px 6px;
-  text-align: left;
-  font-size: 8.5px;
-  cursor: pointer;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
-  white-space: nowrap;
-}
-
-.lab-table th:hover {
-  color: var(--accent, #00e5ff);
-}
-
-.lab-table td {
-  padding: 3px 6px;
-  border-bottom: 1px solid rgba(255,255,255,0.03);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 130px;
-}
-
-.lab-table tr:hover {
-  background: rgba(255,255,255,0.04);
-}
-
-.lab-btn-create {
-  background: var(--accent-gradient, linear-gradient(135deg, #00e5ff, #0077ff));
-  border: none;
-  border-radius: 5px;
-  padding: 6px 10px;
-  color: #000;
-  font-size: 10.5px;
-  font-weight: 700;
-  cursor: pointer;
-  width: 100%;
-  transition: transform 0.15s, box-shadow 0.15s;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-}
-
-.lab-btn-create:hover {
-  transform: scale(1.02);
-  box-shadow: 0 4px 12px rgba(0,229,255,0.3);
-}
-
-/* Data-source / error notice for Playlists and Playlist Lab */
-.data-notice {
-  margin: 4px 0 6px;
-  padding: 5px 8px;
-  border-radius: 6px;
-  font-size: 10px;
-  line-height: 1.4;
-  color: #ffd27a;
-  background: rgba(255, 196, 0, 0.08);
-  border: 1px solid rgba(255, 196, 0, 0.35);
-}
-
-.data-notice.is-error {
-  color: #ff9e9e;
-  background: rgba(255, 82, 82, 0.08);
-  border-color: rgba(255, 82, 82, 0.4);
 }

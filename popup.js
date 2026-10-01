@@ -1,4 +1,4 @@
-// popup.js - Controller for Tidal DJ Bass Booster & Mini-Player Toolbar Popup
+// popup.js - Controller for the Tidal DJ Bass Booster toolbar popup and its standalone window
 
 let currentParams = {};
 let currentPresetName = "Punchy Bass & Clarity";
@@ -37,7 +37,6 @@ const playerArtist = document.getElementById('player-artist');
 const playerProgress = document.getElementById('player-progress');
 const playerTimeCur = document.getElementById('player-time-cur');
 const playerTimeDur = document.getElementById('player-time-dur');
-const playerBtnFav = document.getElementById('player-btn-fav');
 const playerBtnPrev = document.getElementById('player-btn-prev');
 const playerBtnPlay = document.getElementById('player-btn-play');
 const playerBtnNext = document.getElementById('player-btn-next');
@@ -55,33 +54,11 @@ const microContainer = document.getElementById('micro-container');
 const microArt = document.getElementById('micro-art');
 const microTitle = document.getElementById('micro-title');
 const microArtist = document.getElementById('micro-artist');
-const microBtnFav = document.getElementById('micro-btn-fav');
 const microBtnPrev = document.getElementById('micro-btn-prev');
 const microBtnPlay = document.getElementById('micro-btn-play');
 const microBtnNext = document.getElementById('micro-btn-next');
 const microEqPill = document.getElementById('micro-eq-pill');
 const btnExitMicro = document.getElementById('btn-exit-micro');
-
-// Tabs
-const tabBtnEq = document.getElementById('tab-btn-eq');
-const tabBtnPlaylists = document.getElementById('tab-btn-playlists');
-const tabBtnLab = document.getElementById('tab-btn-lab');
-const paneEq = document.getElementById('popup-tab-eq');
-const panePlaylists = document.getElementById('popup-tab-playlists');
-const paneLab = document.getElementById('popup-tab-lab');
-const popupPlaylistContainer = document.getElementById('popup-playlist-container');
-const popupBtnRefreshPl = document.getElementById('popup-btn-refresh-pl');
-
-// Playlist Lab Elements
-const labSelectA = document.getElementById('lab-select-a');
-const labSelectB = document.getElementById('lab-select-b');
-const labSelectC = document.getElementById('lab-select-c');
-const labCountA = document.getElementById('lab-count-a');
-const labCountB = document.getElementById('lab-count-b');
-const labCountRes = document.getElementById('lab-count-res');
-const labTableBody = document.getElementById('lab-table-body');
-const labNewPlName = document.getElementById('lab-new-pl-name');
-const labBtnCreate = document.getElementById('lab-btn-create');
 
 // EQ Sliders
 const sliderBass = document.getElementById('slider-bass');
@@ -100,26 +77,48 @@ const valHigh = document.getElementById('val-high');
 const valGain = document.getElementById('val-gain');
 const valPitch = document.getElementById('val-pitch');
 
-// Initialize Visualizer Slide-Out Drawer
+// Standalone window only: size the window to its content. (Chrome sizes the toolbar popup itself.)
+function fitUndockedWindow() {
+  if (!isUndocked || !chrome.windows) return;
+  const main = document.querySelector('.popup-main');
+  const physicsOpen = document.body.classList.contains('physics-open');
+  const targetW = (document.body.classList.contains('size-wide') ? 490 : 360) + (physicsOpen ? 300 : 0);
+  const targetH = isMicroMode ? 95 : (main ? main.offsetHeight : document.body.offsetHeight);
+  chrome.windows.getCurrent((win) => {
+    if (chrome.runtime.lastError || !win || win.type !== 'popup') return;
+    const chromeW = Math.max(0, window.outerWidth - window.innerWidth);
+    const chromeH = Math.max(0, window.outerHeight - window.innerHeight);
+    chrome.windows.update(win.id, { width: targetW + chromeW, height: targetH + chromeH });
+  });
+}
+
+// Physics side panel: docked beside the controls so both are visible. Its open state is remembered.
 const routerVisualizer = new AudioRouterVisualizer({
-  container: document.querySelector('.popup-container')
+  container: document.querySelector('.popup-container'),
+  mode: 'side',
+  onToggle: (open) => {
+    document.body.classList.toggle('physics-open', open);
+    btnOpenRouter.classList.toggle('btn-active', open);
+    chrome.storage.local.set({ physicsPanelOpen: open });
+    fitUndockedWindow();
+  }
 });
 
 btnOpenRouter.onclick = () => routerVisualizer.toggle();
 
+chrome.storage.local.get('physicsPanelOpen', (data) => {
+  if (data.physicsPanelOpen && !routerVisualizer.isOpen) routerVisualizer.open({ instant: true });
+});
+
 // Sizing & Reset Size Controls
 if (btnSizeToggle) {
   btnSizeToggle.onclick = () => {
-    const isWide = document.body.classList.toggle('size-wide');
-    if (isUndocked) {
-      window.resizeTo(isWide ? 490 : 360, 540);
-    }
+    document.body.classList.toggle('size-wide');
+    fitUndockedWindow();
   };
   btnSizeToggle.ondblclick = () => {
     document.body.classList.remove('size-wide');
-    if (isUndocked) {
-      window.resizeTo(360, 540);
-    }
+    fitUndockedWindow();
   };
 }
 
@@ -127,7 +126,7 @@ if (btnSizeToggle) {
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
 let currentThemeIndex = 0;
 
-// Swap only the theme class so layout classes (size-wide, micro-mode) survive.
+// Swap only the theme class so layout classes (size-wide, micro-mode, physics-open) survive.
 function applyTheme(theme) {
   document.body.classList.remove(...THEMES);
   document.body.classList.add(theme);
@@ -167,6 +166,7 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   checkPresetModificationState();
 
   routerVisualizer.updateState(currentParams, isCapturingActive);
+  requestAnimationFrame(fitUndockedWindow);
 });
 
 // 2. Poll Active Track Info for Toolbar Player & Sync Capture Status
@@ -217,33 +217,10 @@ function updatePlayerUI(info) {
   playerBtnPlay.textContent = playSymbol;
   if (microBtnPlay) microBtnPlay.textContent = playSymbol;
 
-  updateHeartUI(info.isFavorite);
-
   if (!isSeeking && typeof info.currentTime === 'number' && typeof info.duration === 'number' && info.duration > 0) {
     playerProgress.value = (info.currentTime / info.duration) * 100;
     playerTimeCur.textContent = formatTime(info.currentTime);
     playerTimeDur.textContent = formatTime(info.duration);
-  }
-}
-
-function updateHeartUI(isFav) {
-  if (playerBtnFav) {
-    if (isFav) {
-      playerBtnFav.classList.add('is-favorite');
-      playerBtnFav.title = 'Favorited (Click to remove from My Collection)';
-    } else {
-      playerBtnFav.classList.remove('is-favorite');
-      playerBtnFav.title = 'Add to My Collection';
-    }
-  }
-  if (microBtnFav) {
-    if (isFav) {
-      microBtnFav.classList.add('is-favorite');
-      microBtnFav.title = 'Favorited (Click to remove from My Collection)';
-    } else {
-      microBtnFav.classList.remove('is-favorite');
-      microBtnFav.title = 'Add to My Collection';
-    }
   }
 }
 
@@ -294,21 +271,6 @@ function handleNext() {
 }
 playerBtnNext.onclick = handleNext;
 if (microBtnNext) microBtnNext.onclick = handleNext;
-
-function handleFav() {
-  chrome.runtime.sendMessage({
-    type: 'FORWARD_PLAYER_COMMAND',
-    command: { type: 'TOGGLE_FAVORITE' }
-  }, (res) => {
-    if (res && typeof res.isFavorite === 'boolean') {
-      updateHeartUI(res.isFavorite);
-    } else {
-      setTimeout(refreshTrackInfo, 300);
-    }
-  });
-}
-playerBtnFav.onclick = handleFav;
-if (microBtnFav) microBtnFav.onclick = handleFav;
 
 function handleSkip(pctDelta) {
   if (!currentTrackInfo || !currentTrackInfo.duration) return;
@@ -388,7 +350,7 @@ if (btnUndock) {
         url: chrome.runtime.getURL('popup.html?undocked=true'),
         type: 'popup',
         width: 360,
-        height: 540
+        height: 420
       });
       window.close();
     };
@@ -404,404 +366,18 @@ if (btnAlwaysOnTop) {
 function setMicroMode(active) {
   isMicroMode = active;
   if (isMicroMode) {
+    if (routerVisualizer.isOpen) routerVisualizer.close();
     document.body.classList.add('micro-mode');
-    if (isUndocked) window.resizeTo(360, 105);
   } else {
     document.body.classList.remove('micro-mode');
-    if (isUndocked) window.resizeTo(360, 540);
   }
+  fitUndockedWindow();
 }
 
 if (btnMicroToggle) btnMicroToggle.onclick = () => setMicroMode(!isMicroMode);
 if (btnExitMicro) btnExitMicro.onclick = () => setMicroMode(false);
 
-// 6. Tab Switching (EQ, Playlists, Playlist Lab)
-tabBtnEq.onclick = () => {
-  tabBtnEq.classList.add('active');
-  tabBtnPlaylists.classList.remove('active');
-  tabBtnLab.classList.remove('active');
-  paneEq.style.display = 'flex';
-  panePlaylists.style.display = 'none';
-  paneLab.style.display = 'none';
-};
-
-tabBtnPlaylists.onclick = () => {
-  tabBtnPlaylists.classList.add('active');
-  tabBtnEq.classList.remove('active');
-  tabBtnLab.classList.remove('active');
-  panePlaylists.style.display = 'flex';
-  paneEq.style.display = 'none';
-  paneLab.style.display = 'none';
-  loadPlaylists();
-};
-
-tabBtnLab.onclick = () => {
-  tabBtnLab.classList.add('active');
-  tabBtnEq.classList.remove('active');
-  tabBtnPlaylists.classList.remove('active');
-  paneLab.style.display = 'flex';
-  paneEq.style.display = 'none';
-  panePlaylists.style.display = 'none';
-  initPlaylistLab();
-};
-
-// Where playlist data came from, in plain words. Empty string = real Tidal data, nothing to flag.
-function describeSource(source) {
-  if (source === 'demo') return 'DEMO DATA: sample playlists, not your Tidal library. Open Tidal in a tab to use your own.';
-  if (source === 'page-links') return 'Playlist names were read from the Tidal page. Track counts are not available.';
-  return '';
-}
-
-function showNotice(el, text, isError = false) {
-  if (!el) return;
-  el.textContent = text || '';
-  el.style.display = text ? 'block' : 'none';
-  el.classList.toggle('is-error', !!isError);
-}
-
-const plDataNotice = document.getElementById('pl-data-notice');
-const labDataNotice = document.getElementById('lab-data-notice');
-
-// 7. Playlists Manager
-async function loadPlaylists() {
-  popupPlaylistContainer.innerHTML = `
-    <div style="text-align: center; color: var(--text-muted, #777); font-size: 11px; padding: 25px 10px;">
-      Loading Tidal playlists...
-    </div>
-  `;
-
-  chrome.runtime.sendMessage({
-    type: 'FORWARD_PLAYER_COMMAND',
-    command: { type: 'FETCH_USER_PLAYLISTS' }
-  }, async (res) => {
-    if (!res || !res.playlists || res.playlists.length === 0) {
-      showNotice(plDataNotice, res?.error || '', !!res?.error);
-      popupPlaylistContainer.innerHTML = `
-        <div style="text-align: center; color: var(--text-muted, #777); font-size: 11px; padding: 25px 10px; line-height: 1.5;">
-          No Tidal playlists detected.<br>
-          <span style="font-size: 10px; color: #555;">(Ensure Tidal is open in a tab and refresh).</span>
-        </div>
-      `;
-      return;
-    }
-
-    const playlists = res.playlists;
-    showNotice(plDataNotice, describeSource(res.source));
-    popupPlaylistContainer.innerHTML = '';
-
-    playlists.forEach(pl => {
-      const item = document.createElement('div');
-      item.className = 'playlist-item';
-      item.innerHTML = `
-        <div>
-          <div class="pl-title"></div>
-          <div class="pl-count"></div>
-        </div>
-        <input type="checkbox" class="pl-checkbox">
-      `;
-      // Titles come from Tidal/page data: always insert as text.
-      item.querySelector('.pl-title').textContent = pl.title || 'Untitled Playlist';
-      item.querySelector('.pl-count').textContent =
-        typeof pl.numberOfTracks === 'number' ? `${pl.numberOfTracks} tracks` : 'track count unknown';
-
-      const cb = item.querySelector('.pl-checkbox');
-      cb.dataset.uuid = pl.uuid;
-
-      chrome.runtime.sendMessage({
-        type: 'FORWARD_PLAYER_COMMAND',
-        command: { type: 'CHECK_TRACK_IN_PLAYLIST', playlistUuid: pl.uuid }
-      }, (checkRes) => {
-        if (checkRes && checkRes.isInPlaylist) {
-          cb.checked = true;
-          const badge = document.createElement('span');
-          badge.className = 'pl-badge-in';
-          badge.textContent = 'In Playlist';
-          item.querySelector('.pl-title').appendChild(badge);
-        }
-      });
-
-      cb.onchange = () => {
-        const willAdd = cb.checked;
-        cb.disabled = true;
-        chrome.runtime.sendMessage({
-          type: 'FORWARD_PLAYER_COMMAND',
-          command: {
-            type: willAdd ? 'ADD_TO_PLAYLIST' : 'REMOVE_FROM_PLAYLIST',
-            playlistUuid: pl.uuid
-          }
-        }, (addRes) => {
-          cb.disabled = false;
-          if (addRes?.success) {
-            loadPlaylists();
-          } else {
-            // Nothing changed in Tidal: put the checkbox back and say why.
-            cb.checked = !willAdd;
-            showNotice(plDataNotice, addRes?.error || 'Tidal did not confirm the change.', true);
-          }
-        });
-      };
-
-      popupPlaylistContainer.appendChild(item);
-    });
-  });
-}
-
-popupBtnRefreshPl.onclick = loadPlaylists;
-
-// 8. Playlist Lab & Set-Theory Studio
-let labAllPlaylists = [];
-let labTracksA = [];
-let labTracksB = [];
-let labTracksC = [];
-let labComputedTracks = [];
-let labCurrentOp = 'diff'; // 'diff', 'intersect', 'disunion', 'union'
-let labCurrentSort = { col: 'idx', asc: true };
-let labSourceNote = '';
-const labKey = (t) => t.id || (t.title || '').toLowerCase();
-
-async function initPlaylistLab() {
-  chrome.runtime.sendMessage({
-    type: 'FORWARD_PLAYER_COMMAND',
-    command: { type: 'FETCH_USER_PLAYLISTS' }
-  }, (res) => {
-    if (!res || !res.playlists || res.playlists.length === 0) {
-      showNotice(labDataNotice, res?.error || 'No Tidal playlists detected. Open Tidal in a tab and try again.', true);
-      return;
-    }
-    labAllPlaylists = res.playlists;
-    labSourceNote = describeSource(res.source);
-    showNotice(labDataNotice, labSourceNote);
-
-    populateLabDropdown(labSelectA, 'Select Base Playlist (A)', 'A+');
-    populateLabDropdown(labSelectB, 'Select Filter Playlist (B)', 'Super A+');
-    populateLabDropdown(labSelectC, '(Optional) Filter 2 (C)', '');
-
-    setupLabListeners();
-    recalculateLab();
-  });
-}
-
-function populateLabDropdown(selectEl, defaultText, autoSelectName) {
-  selectEl.innerHTML = `<option value="">${defaultText}</option>`;
-  let matchUuid = '';
-
-  const wanted = (autoSelectName || '').toLowerCase();
-  labAllPlaylists.forEach(pl => {
-    const opt = document.createElement('option');
-    opt.value = pl.uuid;
-    const count = typeof pl.numberOfTracks === 'number' ? `${pl.numberOfTracks} tracks` : 'count unknown';
-    opt.textContent = `${pl.title} (${count})`;
-    selectEl.appendChild(opt);
-  });
-
-  // Exact title match first ("A+" must not pick "Super A+"), then the first partial match.
-  if (wanted) {
-    const exact = labAllPlaylists.find(pl => (pl.title || '').toLowerCase() === wanted);
-    const partial = labAllPlaylists.find(pl => (pl.title || '').toLowerCase().includes(wanted));
-    matchUuid = (exact || partial)?.uuid || '';
-  }
-
-  if (matchUuid) selectEl.value = matchUuid;
-}
-
-function setupLabListeners() {
-  labSelectA.onchange = recalculateLab;
-  labSelectB.onchange = recalculateLab;
-  labSelectC.onchange = recalculateLab;
-
-  // Operation Pills
-  const pills = document.querySelectorAll('.lab-pill');
-  pills.forEach(pill => {
-    pill.onclick = () => {
-      pills.forEach(p => p.classList.remove('active'));
-      pill.classList.add('active');
-      labCurrentOp = pill.getAttribute('data-op');
-      recalculateLab();
-    };
-  });
-
-  // Table Header Sorts
-  const ths = document.querySelectorAll('#lab-track-table th');
-  ths.forEach(th => {
-    th.onclick = () => {
-      const col = th.getAttribute('data-sort');
-      if (labCurrentSort.col === col) {
-        labCurrentSort.asc = !labCurrentSort.asc;
-      } else {
-        labCurrentSort.col = col;
-        labCurrentSort.asc = true;
-      }
-      renderLabTable();
-    };
-  });
-
-  // Create Playlist Button
-  labBtnCreate.onclick = handleCreateLabPlaylist;
-}
-
-let labTrackErrors = [];
-
-async function fetchTracksForUuid(uuid) {
-  if (!uuid) return [];
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({
-      type: 'FORWARD_PLAYER_COMMAND',
-      command: { type: 'FETCH_PLAYLIST_TRACKS', playlistUuid: uuid }
-    }, (res) => {
-      if (res?.error) labTrackErrors.push(res.error);
-      resolve(res?.tracks || []);
-    });
-  });
-}
-
-async function recalculateLab() {
-  const uuidA = labSelectA.value;
-  const uuidB = labSelectB.value;
-  const uuidC = labSelectC.value;
-
-  labTrackErrors = [];
-  labTracksA = await fetchTracksForUuid(uuidA);
-  labTracksB = await fetchTracksForUuid(uuidB);
-  labTracksC = await fetchTracksForUuid(uuidC);
-
-  const trackError = [...new Set(labTrackErrors)].join(' ');
-  showNotice(labDataNotice, trackError || labSourceNote, !!trackError);
-
-  labCountA.textContent = labTracksA.length;
-  labCountB.textContent = labTracksB.length;
-
-  const setBIds = new Set(labTracksB.map(labKey));
-  const setCIds = new Set(labTracksC.map(labKey));
-
-  const nameA = labSelectA.options[labSelectA.selectedIndex]?.text.split(' (')[0] || 'A';
-  const nameB = labSelectB.options[labSelectB.selectedIndex]?.text.split(' (')[0] || 'B';
-
-  if (labCurrentOp === 'diff') {
-    labComputedTracks = labTracksA.filter(t => !setBIds.has(labKey(t)) && !setCIds.has(labKey(t)));
-    labNewPlName.value = `Only ${nameA} (not in ${nameB})`;
-  } else if (labCurrentOp === 'intersect') {
-    labComputedTracks = labTracksA.filter(t => setBIds.has(labKey(t)));
-    labNewPlName.value = `Common (${nameA} ∩ ${nameB})`;
-  } else if (labCurrentOp === 'disunion') {
-    const setAIds = new Set(labTracksA.map(labKey));
-    const onlyA = labTracksA.filter(t => !setBIds.has(labKey(t)));
-    const onlyB = labTracksB.filter(t => !setAIds.has(labKey(t)));
-    labComputedTracks = [...onlyA, ...onlyB];
-    labNewPlName.value = `Exclusive (${nameA} Δ ${nameB})`;
-  } else if (labCurrentOp === 'union') {
-    const map = new Map();
-    [...labTracksA, ...labTracksB, ...labTracksC].forEach(t => {
-      const key = labKey(t);
-      if (!map.has(key)) map.set(key, t);
-    });
-    labComputedTracks = Array.from(map.values());
-    labNewPlName.value = `Combined (${nameA} + ${nameB})`;
-  }
-
-  labCountRes.textContent = labComputedTracks.length;
-  // Look the span up each time: the Create button rebuilds its contents after use.
-  document.getElementById('lab-btn-track-count').textContent = labComputedTracks.length;
-
-  renderLabTable();
-}
-
-function renderLabTable() {
-  if (labComputedTracks.length === 0) {
-    labTableBody.innerHTML = `
-      <tr>
-        <td colspan="6" style="text-align:center; padding: 20px 0; color: #777;">
-          No matching tracks found for this set operation.
-        </td>
-      </tr>
-    `;
-    return;
-  }
-
-  const sorted = [...labComputedTracks];
-  const { col, asc } = labCurrentSort;
-
-  sorted.sort((a, b) => {
-    let valA = a[col];
-    let valB = b[col];
-
-    if (col === 'date') {
-      valA = new Date(a.dateAdded || 0).getTime();
-      valB = new Date(b.dateAdded || 0).getTime();
-    } else if (col === 'bpm') {
-      valA = a.bpm || 0;
-      valB = b.bpm || 0;
-    } else if (typeof valA === 'string') {
-      valA = valA.toLowerCase();
-      valB = (valB || '').toLowerCase();
-    }
-
-    if (valA < valB) return asc ? -1 : 1;
-    if (valA > valB) return asc ? 1 : -1;
-    return 0;
-  });
-
-  labTableBody.innerHTML = '';
-  sorted.forEach((track, idx) => {
-    const tr = document.createElement('tr');
-    // Track data comes from Tidal: build cells as text, never as HTML.
-    const cells = [
-      [String(idx + 1), 'color:#666;'],
-      [track.title || '', 'font-weight:600; color:#fff;', true],
-      [track.artist || '', 'color:#aaa;', true],
-      [track.bpm ? String(track.bpm) : '-', 'color:var(--accent, #00e5ff); font-weight:700;'],
-      [track.key || '-', 'color:#ffcc00; font-weight:700;'],
-      [(track.dateAdded || '').slice(0, 10) || '-', 'color:#777;']
-    ];
-    cells.forEach(([text, style, withTitle]) => {
-      const td = document.createElement('td');
-      td.style.cssText = style;
-      td.textContent = text;
-      if (withTitle) td.title = text;
-      tr.appendChild(td);
-    });
-    labTableBody.appendChild(tr);
-  });
-}
-
-function handleCreateLabPlaylist() {
-  const name = labNewPlName.value.trim();
-  if (!name) {
-    alert('Please enter a name for the new playlist.');
-    return;
-  }
-  if (labComputedTracks.length === 0) {
-    alert('No tracks to add to the new playlist.');
-    return;
-  }
-
-  const trackIds = labComputedTracks.map(t => t.id).filter(Boolean);
-  labBtnCreate.disabled = true;
-  labBtnCreate.textContent = '⏳ Creating playlist in Tidal...';
-
-  chrome.runtime.sendMessage({
-    type: 'FORWARD_PLAYER_COMMAND',
-    command: {
-      type: 'CREATE_PLAYLIST_WITH_TRACKS',
-      name,
-      trackIds
-    }
-  }, (res) => {
-    labBtnCreate.disabled = false;
-    labBtnCreate.textContent = '✨ Create New Playlist in Tidal (';
-    const countSpan = document.createElement('span');
-    countSpan.id = 'lab-btn-track-count';
-    countSpan.textContent = labComputedTracks.length;
-    labBtnCreate.append(countSpan, ' tracks)');
-
-    if (res?.success) {
-      alert(`Created playlist "${name}" with ${trackIds.length} tracks in your Tidal library.\n\n(Original playlists were not changed.)`);
-    } else {
-      alert(`Nothing was created. ${res?.error || 'Tidal did not confirm the playlist.'}`);
-    }
-  });
-}
-
-// 9. Master EQ Power Switch
+// 6. Master EQ Power Switch
 function updateEqPowerUI(active) {
   isCapturingActive = !!active;
   if (toggleEqPower) {
@@ -855,7 +431,7 @@ if (microEqPill) {
   microEqPill.onclick = () => handleToggleEqPower();
 }
 
-// 10. Floating Button Visibility Switch
+// 7. Floating Button Visibility Switch
 toggleFloatingBtn.onchange = (e) => {
   chrome.runtime.sendMessage({
     type: 'TOGGLE_FLOATING_BUTTON',
@@ -863,7 +439,7 @@ toggleFloatingBtn.onchange = (e) => {
   });
 };
 
-// 11. Presets Management
+// 8. Presets Management
 function populatePresets(selectedName) {
   presetSelect.innerHTML = '';
   const optGroupFactory = document.createElement('optgroup');
@@ -1025,7 +601,7 @@ btnResetDefaults.onclick = () => {
   }
 };
 
-// 12. EQ Parameter Sliders & Double-Click Reset/Restore Logic
+// 9. EQ Parameter Sliders & Double-Click Reset/Restore Logic
 function applyParamsToUI(p) {
   if (typeof p.bass === 'number') {
     sliderBass.value = p.bass;
@@ -1068,7 +644,7 @@ function getParamsFromUI() {
     pitch: parseFloat(sliderPitch.value),
     autoBalance: toggleAutoBalance.checked,
     bypass: isBypass,
-    // Keep the Physics drawer's A/B stage bypass with every save so it is not silently dropped.
+    // Keep the Physics panel's A/B stage bypass with every save so it is not silently dropped.
     stageBypass: { ...routerVisualizer.currentParams.stageBypass }
   };
 }

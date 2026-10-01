@@ -1,10 +1,17 @@
-// router-visualizer.js - Audio Signal Path & Dynamic DSP Physics Visualizer
-// Animates audio flow, particles, biquad filter transfer curves, and cumulative waveform mechanics.
+// router-visualizer.js - Audio Signal Path & DSP Physics Visualizer
+// Animates signal flow, particles and the combined filter response curve for the current settings.
+// It is an illustration driven by the slider values, not a meter of the live audio.
+//
+// Two layouts:
+//   'side'    - a panel docked beside the controls (popup and standalone window). Both stay visible.
+//   'overlay' - a drawer that slides over the content (the Document PiP window, which is too narrow).
 
 var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouterVisualizer) || class AudioRouterVisualizer {
   constructor(options = {}) {
     this.container = options.container || document.body;
     this.doc = options.doc || document;
+    this.mode = options.mode === 'side' ? 'side' : 'overlay';
+    this.onToggle = typeof options.onToggle === 'function' ? options.onToggle : null;
     this.isOpen = false;
     this.animFrameId = null;
 
@@ -25,10 +32,10 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     this.particleCount = 50;
     this.time = 0;
 
-    // Active color scheme
-    this.activeTheme = 'theme-cyber';
+    // Canvas palettes follow the popup's visual theme (body.theme-*). No class = cyan.
+    this.activeTheme = 'theme-cyan';
     this.themeColors = {
-      'theme-cyber': { line: '#00e5ff', glow: 'rgba(0,229,255,0.4)', p1: '#00e5ff', p2: '#ff007f', p3: '#ffe600' },
+      'theme-cyan': { line: '#00e5ff', glow: 'rgba(0,229,255,0.4)', p1: '#00e5ff', p2: '#ff007f', p3: '#ffe600' },
       'theme-amber': { line: '#ff9d00', glow: 'rgba(255,157,0,0.4)', p1: '#ff9d00', p2: '#ffcc00', p3: '#ff5500' },
       'theme-synthwave': { line: '#ff007f', glow: 'rgba(255,0,127,0.45)', p1: '#ff007f', p2: '#a855f7', p3: '#00e5ff' },
       'theme-matrix': { line: '#00ff66', glow: 'rgba(0,255,102,0.4)', p1: '#00ff66', p2: '#adff2f', p3: '#32cd32' },
@@ -36,120 +43,84 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     };
 
     this.initDOM();
-    this.initParticles();
     this.setupListeners();
+    this.resizeCanvases();
   }
 
   initDOM() {
-    // Drawer Overlay
-    this.overlay = this.doc.createElement('div');
-    this.overlay.className = 'router-drawer-overlay';
+    const side = this.mode === 'side';
 
-    // Slide-out Drawer Panel
-    this.drawer = this.doc.createElement('div');
-    this.drawer.className = 'router-drawer slide-from-left';
+    if (!side) {
+      this.overlay = this.doc.createElement('div');
+      this.overlay.className = 'router-drawer-overlay';
+    }
+
+    this.drawer = this.doc.createElement('aside');
+    this.drawer.id = 'physics-panel';
+    this.drawer.className = side ? 'router-drawer side-panel' : 'router-drawer slide-from-left';
 
     this.drawer.innerHTML = `
+      <div class="drawer-inner">
       <div class="drawer-header">
         <div class="drawer-title-group">
           <span class="drawer-icon">🔬</span>
           <div style="min-width:0; overflow:hidden;">
-            <h3 class="drawer-title">Audio Signal Path & Physics</h3>
-            <p class="drawer-subtitle">Dynamic DSP signal flow & biquad physics</p>
+            <h3 class="drawer-title">Signal Path & Physics</h3>
+            <p class="drawer-subtitle">Animated model of your settings (not a live meter)</p>
           </div>
         </div>
         <div style="display: flex; align-items: center; gap: 4px; flex-shrink:0;">
-          <button class="btn-info-guide" id="btn-guide-toggle" title="How This Visual Works & Physics Guide">ℹ️ Guide</button>
-          <button class="btn-close-drawer" id="btn-close-drawer" title="Close Physics Drawer">✕</button>
+          <button class="btn-info-guide" id="btn-guide-toggle" title="How this visual works">ℹ️ Guide</button>
+          <button class="btn-close-drawer" id="btn-close-drawer" title="Hide the Physics panel">✕</button>
         </div>
       </div>
 
       <div class="drawer-body">
-        <!-- Visual Theme Selector -->
-        <div class="drawer-section">
-          <div class="section-label">🎨 VISUAL THEME</div>
-          <div class="theme-pills">
-            <button class="theme-pill active" data-theme="theme-cyber">
-              <span class="theme-dot" style="background:#00e5ff;"></span> Cyber Neon
-            </button>
-            <button class="theme-pill" data-theme="theme-amber">
-              <span class="theme-dot" style="background:#ff9d00;"></span> Technics 1200
-            </button>
-            <button class="theme-pill" data-theme="theme-synthwave">
-              <span class="theme-dot" style="background:#ff007f;"></span> Synthwave 80s
-            </button>
-            <button class="theme-pill" data-theme="theme-matrix">
-              <span class="theme-dot" style="background:#00ff66;"></span> Matrix Terminal
-            </button>
-            <button class="theme-pill" data-theme="theme-oled">
-              <span class="theme-dot" style="background:#b388ff;"></span> Midnight OLED
-            </button>
-          </div>
-        </div>
-
-        <!-- Dynamic Animated Signal Flow Canvas -->
+        <!-- Animated Signal Flow Canvas -->
         <div class="drawer-section">
           <div class="pipeline-header-row">
-            <span class="section-label">⚡ LIVE SIGNAL PIPELINE</span>
-            <span class="physics-legend"><span class="legend-dot"></span> 60 FPS Real-Time Physics</span>
+            <span class="section-label">⚡ SIGNAL PIPELINE</span>
+            <span class="physics-legend"><span class="legend-dot"></span> Animated</span>
           </div>
 
           <div class="canvas-wrapper">
             <canvas id="pipeline-canvas" width="620" height="220"></canvas>
           </div>
 
-          <!-- Interactive Stage Columns with Bypass Toggles & Info -->
+          <!-- Stage columns with A/B bypass toggles -->
           <div class="stage-labels-grid">
             <div class="stage-label-col" data-stage="source">
-              <div class="stage-col-header">
-                <b>1. In</b>
-                <button class="stage-info-btn" data-stage-info="1" title="Stage 1 Specs">ℹ️</button>
-              </div>
+              <b>1. In</b>
               <span class="stage-sub">PCM</span>
               <span class="stage-fixed-badge">Fixed</span>
             </div>
 
             <div class="stage-label-col" data-stage="hpf">
-              <div class="stage-col-header">
-                <b>2. HPF</b>
-                <button class="stage-info-btn" data-stage-info="2" title="Stage 2 Specs">ℹ️</button>
-              </div>
+              <b>2. HPF</b>
               <span class="stage-sub">Barrier</span>
               <button class="stage-toggle-btn active" id="toggle-stage-hpf" title="Click to toggle HPF bypass (A/B test)">● ON</button>
             </div>
 
             <div class="stage-label-col" data-stage="eq">
-              <div class="stage-col-header">
-                <b>3. EQ</b>
-                <button class="stage-info-btn" data-stage-info="3" title="Stage 3 Specs">ℹ️</button>
-              </div>
+              <b>3. EQ</b>
               <span class="stage-sub">3-Band</span>
               <button class="stage-toggle-btn active" id="toggle-stage-eq" title="Click to toggle EQ bypass (A/B test)">● ON</button>
             </div>
 
             <div class="stage-label-col" data-stage="comp">
-              <div class="stage-col-header">
-                <b>4. Comp</b>
-                <button class="stage-info-btn" data-stage-info="4" title="Stage 4 Specs">ℹ️</button>
-              </div>
+              <b>4. Comp</b>
               <span class="stage-sub">Leveler</span>
               <button class="stage-toggle-btn active" id="toggle-stage-comp" title="Click to toggle Compressor bypass (A/B test)">● ON</button>
             </div>
 
             <div class="stage-label-col" data-stage="gain">
-              <div class="stage-col-header">
-                <b>5. Gain</b>
-                <button class="stage-info-btn" data-stage-info="5" title="Stage 5 Specs">ℹ️</button>
-              </div>
+              <b>5. Gain</b>
               <span class="stage-sub">Boost</span>
               <button class="stage-toggle-btn active" id="toggle-stage-gain" title="Click to toggle Master Boost bypass (A/B test)">● ON</button>
             </div>
 
             <div class="stage-label-col" data-stage="speaker">
-              <div class="stage-col-header">
-                <b>6. Out</b>
-                <button class="stage-info-btn" data-stage-info="6" title="Stage 6 Specs">ℹ️</button>
-              </div>
+              <b>6. Out</b>
               <span class="stage-sub">Acoustic</span>
               <span class="stage-fixed-badge">Output</span>
             </div>
@@ -160,22 +131,22 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
         <div class="drawer-section">
           <div class="section-label-row">
             <span class="section-label">📈 FREQUENCY RESPONSE H(f)</span>
-            <span class="physics-legend"><span class="legend-dot"></span> Combined Magnitude (dB)</span>
+            <span class="physics-legend"><span class="legend-dot"></span> Magnitude (dB)</span>
           </div>
           <div class="canvas-wrapper">
             <canvas id="bode-canvas" width="620" height="150"></canvas>
           </div>
           <div class="physics-readout" id="physics-readout">
-            HPF: <span>30 Hz</span> | Bass: <span>+5.0 dB</span> @ 65Hz | Mid: <span>+1.5 dB</span> | High: <span>+2.0 dB</span>
+            HPF: <span>30 Hz</span> | Bass: <span>+5.0 dB</span> @ 120 Hz | Mid: <span>+1.5 dB</span> | High: <span>+2.0 dB</span>
           </div>
         </div>
       </div>
 
-      <!-- Technical Physics & Router Guide Modal -->
+      <!-- Physics guide (covers the panel while open) -->
       <div class="guide-modal" id="guide-modal">
         <div class="guide-modal-content">
           <div class="guide-modal-header">
-            <h4>🔬 Physics Visualizer & Router Guide</h4>
+            <h4>🔬 Physics Visualizer Guide</h4>
             <button class="btn-close-modal" id="btn-close-guide">✕</button>
           </div>
           <div class="guide-modal-body" id="guide-modal-body">
@@ -183,11 +154,13 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
           </div>
         </div>
       </div>
+      </div>
     `;
 
     // Inject Styles into the target document
     const style = this.doc.createElement('style');
     style.textContent = `
+      /* Overlay drawer (PiP window) */
       .router-drawer-overlay {
         position: fixed; inset: 0; background: rgba(0,0,0,0.7); backdrop-filter: blur(4px);
         z-index: 99990; opacity: 0; pointer-events: none; transition: opacity 0.25s ease;
@@ -205,6 +178,35 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       .router-drawer.slide-from-left.open {
         transform: translateX(0);
       }
+      .router-drawer.slide-from-left .drawer-inner {
+        display: flex; flex-direction: column; height: 100%; width: 100%; position: relative; overflow: hidden;
+      }
+
+      /* Side panel (popup and standalone window): docked beside the controls, both visible at once */
+      .router-drawer.side-panel {
+        position: relative; flex: 0 0 auto; width: 0; overflow: hidden;
+        background: var(--bg-primary, #121216); color: var(--text-main, #fff);
+        border-left: 0 solid var(--border-color, rgba(255,255,255,0.08));
+        transition: width 0.25s ease, border-left-width 0.25s ease;
+        box-sizing: border-box;
+      }
+      .router-drawer.side-panel.open {
+        width: 300px; border-left-width: 1px;
+      }
+      .router-drawer.side-panel.no-anim {
+        transition: none;
+      }
+      /* Fixed-width inner so the canvases have their final size even while the panel animates. */
+      .router-drawer.side-panel .drawer-inner {
+        position: absolute; top: 0; bottom: 0; right: 0; width: 299px;
+        display: flex; flex-direction: column; overflow: hidden;
+      }
+      .side-panel #pipeline-canvas { height: 104px; }
+      .side-panel #bode-canvas { height: 74px; }
+      .side-panel .drawer-body { padding: 4px 8px 6px; gap: 4px; }
+      .side-panel .drawer-header { padding: 4px 8px; }
+      .side-panel .stage-label-col { min-height: 40px; padding: 2px 1px; }
+
       .drawer-header {
         display: flex; align-items: center; justify-content: space-between;
         padding: 6px 10px; border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
@@ -227,34 +229,18 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       }
       .btn-info-guide:hover { background: var(--accent, #00e5ff); color: #000; }
 
-      .drawer-body { flex: 1; overflow-y: auto; padding: 6px 10px; display: flex; flex-direction: column; gap: 8px; width: 100%; box-sizing: border-box; }
+      .drawer-body { flex: 1; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 6px; width: 100%; box-sizing: border-box; }
       .drawer-section { display: flex; flex-direction: column; gap: 4px; width: 100%; box-sizing: border-box; }
       .section-label { font-size: 9px; font-weight: 700; color: var(--text-muted, #888); letter-spacing: 0.8px; white-space: nowrap; }
       .section-label-row { display: flex; justify-content: space-between; align-items: center; width: 100%; }
       .pipeline-header-row {
         display: flex; justify-content: space-between; align-items: center; width: 100%; min-width: 0; overflow: hidden;
       }
-      .pipeline-title-group { display: flex; align-items: center; gap: 5px; }
       .physics-legend {
         font-size: 8px; color: var(--accent, #00e5ff); display: flex; align-items: center;
         gap: 3px; white-space: nowrap; flex-shrink: 0;
       }
       .legend-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--accent, #00e5ff); flex-shrink: 0; }
-
-      /* Themes */
-      .theme-pills { display: flex; flex-wrap: wrap; gap: 3px; }
-      .theme-pill {
-        display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px;
-        background: var(--bg-surface, #1e1e26); border: 1px solid var(--border-color, rgba(255,255,255,0.1));
-        border-radius: 10px; font-size: 8.5px; font-weight: 600; color: var(--text-muted, #aaa);
-        cursor: pointer; transition: all 0.2s;
-      }
-      .theme-pill:hover { border-color: var(--accent, #00e5ff); color: var(--text-main, #fff); }
-      .theme-pill.active {
-        background: var(--accent-glow, rgba(0,229,255,0.15)); border-color: var(--accent, #00e5ff);
-        color: var(--accent, #00e5ff); box-shadow: 0 0 6px var(--accent-glow, rgba(0,229,255,0.25));
-      }
-      .theme-dot { width: 5px; height: 5px; border-radius: 50%; }
 
       /* Canvas Wrappers */
       .canvas-wrapper {
@@ -265,7 +251,7 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       }
       .canvas-wrapper canvas { width: 100%; height: auto; display: block; }
 
-      /* Interactive Stage Columns Grid (Strict 100% Fit) */
+      /* Stage Columns Grid (Strict 100% Fit) */
       .stage-labels-grid {
         display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px;
         text-align: center; margin-top: 2px; width: 100%; max-width: 100%;
@@ -275,19 +261,11 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
         font-size: 8px; color: var(--text-muted, #888); line-height: 1.1;
         background: var(--bg-card, rgba(255,255,255,0.02)); padding: 3px 1px; border-radius: 4px;
         display: flex; flex-direction: column; align-items: center; justify-content: space-between;
-        gap: 2px; min-height: 48px; min-width: 0; overflow: hidden; border: 1px solid transparent;
+        gap: 2px; min-height: 44px; min-width: 0; overflow: hidden; border: 1px solid transparent;
         box-sizing: border-box;
       }
-      .stage-col-header {
-        display: flex; align-items: center; justify-content: center; gap: 1px; width: 100%; min-width: 0;
-      }
-      .stage-label-col b { color: var(--text-main, #fff); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .stage-label-col b { color: var(--text-main, #fff); font-size: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
       .stage-sub { font-size: 7px; color: #777; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-      .stage-info-btn {
-        background: none; border: none; font-size: 7.5px; cursor: pointer; padding: 0;
-        opacity: 0.7; transition: opacity 0.15s; flex-shrink: 0;
-      }
-      .stage-info-btn:hover { opacity: 1; transform: scale(1.1); }
       .stage-fixed-badge {
         font-size: 7px; color: #666; padding: 1px 2px; border-radius: 4px;
         background: rgba(255,255,255,0.04); white-space: nowrap;
@@ -346,7 +324,7 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     `;
     this.doc.head.appendChild(style);
 
-    this.container.appendChild(this.overlay);
+    if (this.overlay) this.container.appendChild(this.overlay);
     this.container.appendChild(this.drawer);
 
     this.pipelineCanvas = this.drawer.querySelector('#pipeline-canvas');
@@ -360,11 +338,35 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     this.guideModalBody = this.drawer.querySelector('#guide-modal-body');
   }
 
-  initParticles() {
-    this.particles = [];
-    const width = 620;
-    const height = 220;
+  // Logical (CSS px) drawing size of a canvas. Overlay mode draws at the intrinsic 620-wide
+  // bitmap and lets CSS scale it; side mode draws 1:1 at the panel's size (crisp on Retina).
+  logicalSize(canvas) {
+    return { w: canvas._logicalW || canvas.width, h: canvas._logicalH || canvas.height };
+  }
 
+  resizeCanvases() {
+    const win = this.doc.defaultView;
+    const dpr = (win && win.devicePixelRatio) || 1;
+    for (const c of [this.pipelineCanvas, this.bodeCanvas]) {
+      if (!c) continue;
+      if (this.mode !== 'side') {
+        if (c === this.pipelineCanvas && this.particles.length === 0) this.initParticles(c.width, c.height);
+        continue;
+      }
+      const rect = c.getBoundingClientRect();
+      const w = Math.max(1, Math.round(rect.width || (c === this.pipelineCanvas ? 283 : 283)));
+      const h = Math.max(1, Math.round(rect.height || (c === this.pipelineCanvas ? 104 : 74)));
+      if (c._logicalW === w && c._logicalH === h && c._dpr === dpr) continue;
+      c.width = Math.round(w * dpr);
+      c.height = Math.round(h * dpr);
+      c._logicalW = w; c._logicalH = h; c._dpr = dpr;
+      c.getContext('2d').setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (c === this.pipelineCanvas) this.initParticles(w, h);
+    }
+  }
+
+  initParticles(width = 620, height = 220) {
+    this.particles = [];
     for (let i = 0; i < this.particleCount; i++) {
       this.particles.push({
         x: Math.random() * width,
@@ -382,17 +384,7 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
   setupListeners() {
     const btnClose = this.drawer.querySelector('#btn-close-drawer');
     if (btnClose) btnClose.onclick = () => this.close();
-    this.overlay.onclick = () => this.close();
-
-    // Theme selector
-    const themePills = this.drawer.querySelectorAll('.theme-pill');
-    themePills.forEach(pill => {
-      pill.onclick = () => {
-        themePills.forEach(p => p.classList.remove('active'));
-        pill.classList.add('active');
-        this.activeTheme = pill.getAttribute('data-theme');
-      };
-    });
+    if (this.overlay) this.overlay.onclick = () => this.close();
 
     // Stage bypass toggles
     this.setupStageBypass('toggle-stage-hpf', 'hpf');
@@ -405,16 +397,6 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     const btnCloseGuide = this.drawer.querySelector('#btn-close-guide');
     if (btnGuide) btnGuide.onclick = () => this.openGuide();
     if (btnCloseGuide) btnCloseGuide.onclick = () => this.closeGuide();
-
-    // Stage Info Buttons
-    const infoBtns = this.drawer.querySelectorAll('.stage-info-btn');
-    infoBtns.forEach(btn => {
-      btn.onclick = (e) => {
-        e.stopPropagation();
-        const stageNum = btn.getAttribute('data-stage-info');
-        this.openGuide(stageNum);
-      };
-    });
   }
 
   setupStageBypass(btnId, stageKey) {
@@ -447,35 +429,40 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     };
   }
 
-  openGuide(highlightStage = null) {
+  openGuide() {
     if (!this.guideModal || !this.guideModalBody) return;
 
     this.guideModalBody.innerHTML = `
       <div class="guide-card">
-        <h5>🌊 Why the Wave Enlarges Up and Down (Stage 3 Superposition)</h5>
-        <p>The audio signal is mathematically calculated via Fourier wave superposition:
-        <span class="guide-highlight">y(x, t) = A_bass·sin(ω₁x - t) + A_mid·sin(ω₂x - t) + A_high·sin(ω₃x - t)</span>.<br>
-        When you boost the <b>Bass</b> (+5dB to +14dB) or <b>Mid</b> sliders, the voltage amplitude (<span class="guide-highlight">V_peak</span>) physically increases. In physics, voltage directly controls speaker cone excursion—the wave expands vertically to show the increased air displacement you hear!</p>
+        <h5>What this shows</h5>
+        <p>An animated model built from your slider values: the wave and dots react to the settings, not to the music itself. Use it to see which stage does what, and to A/B each stage with the <span class="guide-highlight">● ON / ○ BYPASS</span> buttons.</p>
       </div>
 
       <div class="guide-card">
-        <h5>🛡️ Stage 2: HPF (High Pass Filter) Barrier Explained</h5>
-        <p>Sub-bass below <span class="guide-highlight">30 Hz</span> is mostly inaudible mud that robs amplifier wattage and forces speaker voice coils into mechanical distortion. The vertical barrier reflects and blocks sub-audible low-frequency waves, leaving clean, punchy musical bass.</p>
+        <h5>🌊 Why the Wave Grows (Stage 3 Superposition)</h5>
+        <p>The drawn signal is a sum of sine waves:
+        <span class="guide-highlight">y(x, t) = A_bass·sin(ω₁x - t) + A_mid·sin(ω₂x - t) + A_high·sin(ω₃x - t)</span>.<br>
+        Raising <b>Bass</b> (+5 dB to +14 dB) or <b>Mid</b> increases the amplitude, so the wave expands vertically, the way more voltage moves a speaker cone further.</p>
+      </div>
+
+      <div class="guide-card">
+        <h5>🛡️ Stage 2: HPF (High Pass Filter) Barrier</h5>
+        <p>Sub-bass below the cutoff (default <span class="guide-highlight">30 Hz</span>) is mostly inaudible rumble that wastes amplifier power and pushes drivers into distortion. The barrier reflects those low-frequency packets and lets clean, punchy bass through.</p>
       </div>
 
       <div class="guide-card">
         <h5>✨ Moving Dots (Audio Energy Packets)</h5>
-        <p>The glowing dots represent discrete <b>32-bit floating-point audio sample buffers</b> moving through the DSP pipeline. Their vertical jitter represents instantaneous voltage energy, and their speed corresponds to playback pitch/speed.</p>
+        <p>The dots stand for audio sample buffers moving through the DSP chain. Their vertical jitter grows with bass energy and their speed follows Pitch / Speed.</p>
       </div>
 
       <div class="guide-card">
         <h5>⚖️ Stage 4: Dynamics Compressor Ceiling</h5>
-        <p>The dashed horizontal lines show the dynamic compression ceiling. When bass or explosions surge, the compressor clamps the peak to prevent digital clipping (0 dBFS inter-sample overshoot) while raising quiet vocal whispers.</p>
+        <p>The dashed lines mark the Auto-Balancing ceiling and floor. Peaks are clamped so heavy bass boosts stay balanced, and quieter passages are lifted.</p>
       </div>
 
       <div class="guide-card">
-        <h5>🎛️ Stage Bypass A/B Testing</h5>
-        <p>Click any stage toggle (<span class="guide-highlight">● ON / ○ BYPASS</span>) to mute or isolate that individual DSP stage and immediately hear how it transforms your sound in real time.</p>
+        <h5>📈 Frequency Response H(f)</h5>
+        <p>The curve combines HPF, Bass, Mid, High and Master Volume into one magnitude plot (±24 dB) from 20 Hz to 20 kHz.</p>
       </div>
     `;
 
@@ -532,29 +519,53 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     this.readoutEl.innerHTML = `HPF: ${hpfStr} | Bass: ${bassStr} @ 120 Hz | Mid: ${midStr} | High: ${highStr}`;
   }
 
+  // Pick the canvas palette from the document's theme class.
+  syncTheme() {
+    const body = this.doc.body;
+    if (!body) return;
+    let found = 'theme-cyan';
+    for (const cls of body.classList) {
+      if (this.themeColors[cls]) { found = cls; break; }
+    }
+    this.activeTheme = found;
+  }
+
   toggle() {
     if (this.isOpen) this.close();
     else this.open();
   }
 
-  open() {
+  open(opts = {}) {
     this.isOpen = true;
-    this.overlay.classList.add('open');
+    const instant = !!opts.instant && this.mode === 'side';
+    if (instant) {
+      this.drawer.classList.add('no-anim');
+      void this.drawer.offsetWidth; // apply "no transition" before the width changes
+    }
+    if (this.overlay) this.overlay.classList.add('open');
     this.drawer.classList.add('open');
+    if (instant) {
+      void this.drawer.offsetWidth;
+      this.drawer.classList.remove('no-anim');
+    }
+    this.resizeCanvases();
     this.startAnimation();
+    if (this.onToggle) this.onToggle(true);
   }
 
   close() {
     this.isOpen = false;
-    this.overlay.classList.remove('open');
+    if (this.overlay) this.overlay.classList.remove('open');
     this.drawer.classList.remove('open');
     this.closeGuide();
     this.stopAnimation();
+    if (this.onToggle) this.onToggle(false);
   }
 
   startAnimation() {
     if (this.animFrameId) return;
     const render = () => {
+      this.syncTheme();
       this.drawPipeline();
       this.drawBode();
       this.time += 0.04 * (this.currentParams.pitch || 1.0);
@@ -573,9 +584,9 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
   drawPipeline() {
     if (!this.pipelineCtx || !this.pipelineCanvas) return;
     const ctx = this.pipelineCtx;
-    const w = this.pipelineCanvas.width;
-    const h = this.pipelineCanvas.height;
-    const theme = this.themeColors[this.activeTheme] || this.themeColors['theme-cyber'];
+    const { w, h } = this.logicalSize(this.pipelineCanvas);
+    const theme = this.themeColors[this.activeTheme] || this.themeColors['theme-cyan'];
+    const compact = w < 400; // side panel: smaller margins and labels
 
     ctx.clearRect(0, 0, w, h);
 
@@ -592,8 +603,9 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     const stageWidth = w / 6;
     const p = this.currentParams;
     const bypass = p.stageBypass || {};
+    const ampScale = h / 220; // the wave was designed for a 220px-tall canvas
 
-    // 1. Stage Divider Lines & Labels
+    // 1. Stage Divider Lines
     for (let i = 1; i < 6; i++) {
       const sx = i * stageWidth;
       ctx.strokeStyle = 'rgba(255,255,255,0.08)';
@@ -609,7 +621,7 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     const hpfX = stageWidth * 1.5;
     const hpfActive = !bypass.hpf;
     const hpfFreq = p.hpf || 30;
-    const barrierHeight = hpfActive ? Math.min(180, 40 + (hpfFreq / 200) * 140) : 0;
+    const barrierHeight = hpfActive ? Math.min(h * 0.82, (40 + (hpfFreq / 200) * 140) * ampScale) : 0;
 
     if (hpfActive) {
       ctx.fillStyle = 'rgba(255, 68, 68, 0.12)';
@@ -622,9 +634,9 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       ctx.stroke();
 
       ctx.fillStyle = '#ff4444';
-      ctx.font = '8.5px sans-serif';
+      ctx.font = `${compact ? 7.5 : 8.5}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText(`< ${Math.round(hpfFreq)}Hz Cut`, hpfX, h - 8);
+      ctx.fillText(`< ${Math.round(hpfFreq)}Hz`, hpfX, h - 5);
     }
 
     // 3. Stage 4: Compressor Ceiling / Floor Lines
@@ -632,8 +644,8 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
     if (compActive) {
       const compX1 = stageWidth * 3;
       const compX2 = stageWidth * 4;
-      const ceilingY = 35;
-      const floorY = h - 35;
+      const ceilingY = 35 * ampScale;
+      const floorY = h - 35 * ampScale;
 
       ctx.strokeStyle = 'rgba(255, 170, 0, 0.5)';
       ctx.setLineDash([4, 4]);
@@ -648,20 +660,21 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       ctx.setLineDash([]);
 
       ctx.fillStyle = '#ffaa00';
-      ctx.font = '8px sans-serif';
+      ctx.font = `${compact ? 7 : 8}px sans-serif`;
       ctx.textAlign = 'center';
-      ctx.fillText('Ceiling', (compX1 + compX2) / 2, ceilingY - 4);
-      ctx.fillText('Floor', (compX1 + compX2) / 2, floorY + 11);
+      ctx.fillText('Ceiling', (compX1 + compX2) / 2, ceilingY - 3);
+      ctx.fillText('Floor', (compX1 + compX2) / 2, floorY + 9);
     }
 
     // 4. Cumulative Waveform Math (Left to Right)
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = compact ? 2 : 2.5;
     ctx.strokeStyle = this.isCapturing ? theme.line : 'rgba(255,255,255,0.2)';
     ctx.shadowColor = this.isCapturing ? theme.glow : 'transparent';
     ctx.shadowBlur = 10;
     ctx.beginPath();
 
     const baselineY = h / 2;
+    const xScale = 620 / w; // keep the same number of wave cycles across the canvas at any width
 
     for (let x = 0; x < w; x += 2) {
       const stageIdx = Math.floor(x / stageWidth);
@@ -702,9 +715,11 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
         amp *= 1.05;
       }
 
+      amp *= ampScale;
+
       // Superposition Formula: y(x, t) = A * [sin(w1*x - t) + 0.4*sin(w2*x - t)]
-      const freq1 = 0.04 * (p.pitch || 1.0);
-      const freq2 = 0.08 * (p.pitch || 1.0);
+      const freq1 = 0.04 * (p.pitch || 1.0) * xScale;
+      const freq2 = 0.08 * (p.pitch || 1.0) * xScale;
       const y = baselineY +
         Math.sin(x * freq1 - this.time * 3) * amp +
         Math.sin(x * freq2 - this.time * 5) * (amp * 0.35);
@@ -717,14 +732,14 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
 
     // 5. Signal Particles Simulation
     this.particles.forEach(pt => {
-      pt.x += pt.speed * (p.pitch || 1.0);
+      pt.x += pt.speed * (p.pitch || 1.0) / xScale;
       if (pt.x > w) {
         pt.x = 0;
-        pt.y = pt.baseY + (Math.random() - 0.5) * 30;
+        pt.y = pt.baseY + (Math.random() - 0.5) * 30 * ampScale;
       }
 
       const curStage = Math.floor(pt.x / stageWidth);
-      let yJitter = Math.sin(pt.x * 0.05 - this.time * 4 + pt.phase) * (8 + (p.bass || 0) * 2);
+      let yJitter = Math.sin(pt.x * 0.05 * xScale - this.time * 4 + pt.phase) * (8 + (p.bass || 0) * 2) * ampScale;
 
       // HPF collision reflection for sub-bass particles
       if (!bypass.hpf && curStage === 1 && pt.x > hpfX - 15 && pt.x < hpfX + 5 && pt.colorType === 0) {
@@ -733,13 +748,13 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
 
       // Comp clamp
       if (!bypass.comp && p.autoBalance && curStage >= 3) {
-        yJitter = Math.max(-42, Math.min(42, yJitter));
+        yJitter = Math.max(-42 * ampScale, Math.min(42 * ampScale, yJitter));
       }
 
       const renderY = pt.baseY + yJitter;
 
       ctx.beginPath();
-      ctx.arc(pt.x, renderY, pt.radius, 0, Math.PI * 2);
+      ctx.arc(pt.x, renderY, pt.radius * (compact ? 0.8 : 1), 0, Math.PI * 2);
 
       if (pt.colorType === 0) ctx.fillStyle = theme.p1;
       else if (pt.colorType === 1) ctx.fillStyle = theme.p2;
@@ -752,30 +767,27 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
   drawBode() {
     if (!this.bodeCtx || !this.bodeCanvas) return;
     const ctx = this.bodeCtx;
-    const w = this.bodeCanvas.width;
-    const h = this.bodeCanvas.height;
-    const theme = this.themeColors[this.activeTheme] || this.themeColors['theme-cyber'];
+    const { w, h } = this.logicalSize(this.bodeCanvas);
+    const theme = this.themeColors[this.activeTheme] || this.themeColors['theme-cyan'];
+    const compact = w < 400;
 
     ctx.clearRect(0, 0, w, h);
 
     const p = this.currentParams;
     const bypass = p.stageBypass || {};
 
-    // Grid lines (dB and Frequencies)
-    ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-    ctx.lineWidth = 1;
-
     // Zero dB center line
     const zeroY = h / 2;
+    ctx.lineWidth = 1;
     ctx.strokeStyle = 'rgba(255,255,255,0.15)';
     ctx.beginPath();
     ctx.moveTo(0, zeroY);
     ctx.lineTo(w, zeroY);
     ctx.stroke();
 
-    // Frequency markers (20Hz, 100Hz, 1kHz, 10kHz, 20kHz)
+    // Frequency markers
     const freqs = [20, 60, 200, 1000, 5000, 20000];
-    ctx.font = '8px sans-serif';
+    ctx.font = `${compact ? 7 : 8}px sans-serif`;
     ctx.fillStyle = '#666';
     ctx.textAlign = 'center';
 
@@ -786,15 +798,20 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       ctx.moveTo(x, 0);
       ctx.lineTo(x, h);
       ctx.stroke();
-      ctx.fillText(f >= 1000 ? `${f / 1000}k` : `${f}Hz`, x, h - 4);
+      const label = f >= 1000 ? `${f / 1000}k` : `${f}Hz`;
+      const tx = Math.min(w - 10, Math.max(10, x));
+      ctx.fillText(label, tx, h - 3);
     });
 
     // Plot Frequency Response Transfer Function |H(f)| (in dB)
     ctx.beginPath();
-    ctx.lineWidth = 2.5;
+    ctx.lineWidth = compact ? 2 : 2.5;
     ctx.strokeStyle = theme.line;
     ctx.shadowColor = theme.glow;
     ctx.shadowBlur = 8;
+
+    const topPad = 6;
+    const bottomPad = 12;
 
     for (let px = 0; px < w; px += 2) {
       const f = 20 * Math.pow(1000, px / w);
@@ -807,7 +824,7 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
         totalDb += 20 * Math.log10(Math.max(0.001, hpfMag));
       }
 
-      // 2. Bass Boost (Peaking / Low-shelf @ 65Hz)
+      // 2. Bass Boost (low-shelf; drawn as a bump centred near the shelf corner)
       if (!bypass.eq) {
         const bassGain = p.bass || 0;
         const fb = 65;
@@ -835,8 +852,8 @@ var AudioRouterVisualizer = (typeof window !== 'undefined' && window.AudioRouter
       }
 
       // Scale dB to Canvas Y (±24 dB range)
-      const y = zeroY - (totalDb / 24) * (h / 2 - 15);
-      const clampedY = Math.max(8, Math.min(h - 15, y));
+      const y = zeroY - (totalDb / 24) * (h / 2 - bottomPad);
+      const clampedY = Math.max(topPad, Math.min(h - bottomPad, y));
 
       if (px === 0) ctx.moveTo(px, clampedY);
       else ctx.lineTo(px, clampedY);

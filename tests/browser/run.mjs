@@ -98,6 +98,22 @@ const context = await chromium.launchPersistentContext(profile, {
 });
 
 const results = [];
+// Every request made by pages and extension documents during the run (privacy check at the end).
+const allRequests = [];
+const watchRequests = (page) => page.on('request', (r) => allRequests.push(r.url()));
+
+// Screenshot at the document's own size (the popup is sized by its content).
+async function shot(page, name) {
+  const { w, h } = await page.evaluate(() => {
+    const b = document.body.getBoundingClientRect();
+    return { w: Math.ceil(b.width), h: Math.ceil(b.height) };
+  });
+  await page.setViewportSize({ width: Math.min(800, Math.max(320, w)), height: Math.min(600, Math.max(100, h)) });
+  await sleep(150);
+  await page.screenshot({ path: join(outDir, name) });
+  return `results/${label}/${name}`;
+}
+
 function record(id, title, status, evidence, level = 'installed-browser') {
   results.push({ id, title, status, level, evidence });
   console.log(`${status.padEnd(8)} ${id.padEnd(22)} ${title}${evidence ? `\n         ${typeof evidence === 'string' ? evidence : JSON.stringify(evidence)}` : ''}`);
@@ -125,6 +141,7 @@ async function openPopup() {
   const dialogs = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('dialog', async (d) => { dialogs.push(`${d.type()}: ${d.message()}`); await d.accept(d.type() === 'prompt' ? 'Harness Preset' : undefined); });
+  watchRequests(page);
   await page.goto(`chrome-extension://${EXT_ID}/popup.html`);
   await sleep(1200);
   return { page, errors, dialogs };
@@ -147,16 +164,39 @@ try {
   const tidal = await context.newPage();
   const tidalErrors = [];
   tidal.on('pageerror', (e) => tidalErrors.push(String(e)));
+  watchRequests(tidal);
   await tidal.goto(TIDAL_URL);
   await sleep(800);
 
   // ---- W-POPUP-RENDER ----
   const { page: popup, errors: popupErrors, dialogs } = await openPopup();
   const presetCount = await popup.locator('#preset-select option').count();
-  await popup.setViewportSize({ width: 360, height: 600 });
-  await popup.screenshot({ path: join(outDir, 'popup-default.png') });
+  const shotDefault = await shot(popup, 'popup-default.png');
   record('W-POPUP-RENDER', 'Popup renders, state loads, presets populate', popupErrors.length === 0 && presetCount >= 8 ? 'PASS' : 'FAIL',
-    { presetCount, pageErrors: popupErrors, screenshot: `results/${label}/popup-default.png` });
+    { presetCount, pageErrors: popupErrors, screenshot: shotDefault });
+
+  // ---- W-SURFACES-REMOVED: Playlists, Playlist Lab and the favorite button are gone (2026-10-01 decision) ----
+  const stillPresent = await popup.evaluate(() => ['#tab-btn-playlists', '#tab-btn-lab', '#popup-tab-playlists', '#popup-tab-lab',
+    '.popup-tab-bar', '#player-btn-fav', '#micro-btn-fav', '#pl-data-notice', '#lab-data-notice'].filter((s) => document.querySelector(s)));
+  const plReply = await sw.evaluate(async (u) => {
+    const [t] = await chrome.tabs.query({ url: u + '*' });
+    try { return (await chrome.tabs.sendMessage(t.id, { type: 'FETCH_USER_PLAYLISTS' })) ?? null; } catch (e) { return { unsupported: String(e.message || e) }; }
+  }, TIDAL_URL.split('?')[0]);
+  record('W-SURFACES-REMOVED', 'Playlists, Playlist Lab and favorite are gone from the popup and the page script',
+    stillPresent.length === 0 && !plReply?.playlists ? 'PASS' : 'FAIL', { stillPresent, plReply });
+
+  // ---- W-NO-DEAD-SPACE: the sliders pack from the top; the popup is only as tall as its content ----
+  const space = await popup.evaluate(() => {
+    const c = document.querySelector('.controls-area');
+    const kids = [...c.children];
+    const first = kids[0].getBoundingClientRect(), last = kids[kids.length - 1].getBoundingClientRect();
+    const slack = c.getBoundingClientRect().height - (last.bottom - first.top);
+    const above = first.top - document.querySelector('.preset-section').getBoundingClientRect().bottom;
+    const bodyH = document.body.getBoundingClientRect().height;
+    return { slack: +slack.toFixed(1), above: +above.toFixed(1), below: +(bodyH - last.bottom).toFixed(1), bodyH: +bodyH.toFixed(1) };
+  });
+  record('W-NO-DEAD-SPACE', 'No empty band above or below the EQ sliders; popup height follows content',
+    space.slack < 4 && space.above < 16 && space.below < 16 && space.bodyH < 420 ? 'PASS' : 'FAIL', space);
 
   // ---- W-TRACK-INFO: metadata scraped from the footer only ----
   await sleep(1500);
@@ -165,15 +205,14 @@ try {
   record('W-TRACK-INFO', 'Popup shows track metadata from the Tidal footer',
     shownTitle === 'Synthetic Tone' && shownArtist === 'Test Generator' ? 'PASS' : 'FAIL', { shownTitle, shownArtist });
 
-  // ---- W-TRANSPORT-SCOPE: Play/Prev/Next/Fav hit the footer, never the decoy card ----
+  // ---- W-TRANSPORT-SCOPE: Play/Prev/Next hit the footer, never the decoy card; the page's favorite button is never touched ----
   await popup.click('#player-btn-play'); await sleep(500);
   await popup.click('#player-btn-next'); await sleep(400);
   await popup.click('#player-btn-prev'); await sleep(400);
-  await popup.click('#player-btn-fav'); await sleep(400);
   const clicks = await tidal.evaluate(() => window.clicks);
   const playing = await tidal.evaluate(() => !document.getElementById('a').paused);
-  record('W-TRANSPORT-SCOPE', 'Transport commands target footer controls only (decoy untouched)',
-    clicks.decoy === 0 && clicks.footerPlay === 1 && clicks.next === 1 && clicks.prev === 1 && clicks.fav === 1 && playing ? 'PASS' : 'FAIL',
+  record('W-TRANSPORT-SCOPE', 'Transport commands target footer controls only (decoy and favorite untouched)',
+    clicks.decoy === 0 && clicks.footerPlay === 1 && clicks.next === 1 && clicks.prev === 1 && clicks.fav === 0 && playing ? 'PASS' : 'FAIL',
     { clicks, playing });
 
   // ---- W-SKIP-25 (tone is 20 s, so +25% = +5 s) ----
@@ -211,8 +250,33 @@ try {
     savedNames.includes('Harness Preset') && storedAfterReset.includes('Harness Preset') ? 'PASS' : 'FAIL',
     { savedNames, storedAfterReset, dialogs: [...dialogs] });
 
+  // ---- W-PHYSICS-SIDE: the Physics panel docks beside the controls (both visible), then closes ----
+  await popup.setViewportSize({ width: 800, height: 600 });
+  const widthBefore = await popup.evaluate(() => document.body.getBoundingClientRect().width);
+  await popup.click('#btn-open-router');
+  await sleep(600);
+  const side = await popup.evaluate(() => {
+    const panel = document.getElementById('physics-panel').getBoundingClientRect();
+    const main = document.querySelector('.popup-main').getBoundingClientRect();
+    const slider = document.getElementById('slider-bass');
+    const r = slider.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    const canvas = document.getElementById('pipeline-canvas').getBoundingClientRect();
+    return { open: document.body.classList.contains('physics-open'), bodyW: document.body.getBoundingClientRect().width,
+      panelW: +panel.width.toFixed(1), panelStartsAfterMain: panel.left >= main.right - 1, sliderClickable: hit === slider,
+      canvasW: +canvas.width.toFixed(1), canvasH: +canvas.height.toFixed(1), panelH: +panel.height.toFixed(1), mainH: +main.height.toFixed(1) };
+  });
+  const shotPhysics = await shot(popup, 'popup-physics.png');
+  await popup.click('#btn-open-router');
+  await sleep(600);
+  const widthAfter = await popup.evaluate(() => document.body.getBoundingClientRect().width);
+  const persisted = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('physicsPanelOpen', (d) => r(d.physicsPanelOpen))));
+  record('W-PHYSICS-SIDE', 'Physics opens as a side panel beside the controls (sliders stay clickable) and closes back to 360px',
+    side.open && side.bodyW >= 650 && side.panelW >= 290 && side.panelStartsAfterMain && side.sliderClickable && side.canvasW > 250
+      && Math.abs(side.panelH - side.mainH) < 2 && widthAfter < 400 && persisted === false ? 'PASS' : 'FAIL',
+    { widthBefore, ...side, widthAfter, persistedAfterClose: persisted, screenshot: shotPhysics });
+
   // ---- W-STAGE-BYPASS-SYNC: A/B bypass state survives a slider move and popup reopen ----
-  // Direct element clicks: the drawer overlay covers the sliders by design.
   const clickEl = (pg, sel) => pg.evaluate((q) => document.querySelector(q).click(), sel);
   await clickEl(popup, '#btn-open-router');
   await sleep(300);
@@ -338,6 +402,7 @@ try {
   const fbPage = await context.newPage();
   const fbErrors = [];
   fbPage.on('pageerror', (e) => fbErrors.push(String(e)));
+  watchRequests(fbPage);
   const fbUrl = await sw.evaluate(() => typeof FALLBACK_WINDOW_URL !== 'undefined' ? FALLBACK_WINDOW_URL : 'miniplayer.html');
   await fbPage.goto(`chrome-extension://${EXT_ID}/${fbUrl}`);
   await sleep(1500);
@@ -357,43 +422,12 @@ try {
   record('W-FALLBACK-SINGLE', 'Opening the standalone mini-player twice keeps a single window', fbCount === 1 ? 'PASS' : 'FAIL', { fbCount });
   for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
 
-  // ---- W-PLAYLISTS-HONESTY / W-LAB-HONESTY (no Tidal session exists in this profile) ----
-  await popup.click('#tab-btn-playlists');
-  await sleep(1500);
-  const plText = await popup.locator('#popup-playlist-container').innerText();
-  const plHtml = await popup.locator('#popup-playlist-container').innerHTML();
-  const escaped = plText.includes('<b>Bold</b> & Co');
-  record('W-PLAYLIST-ESCAPE', 'Playlist titles render as text (no HTML injection)', escaped ? 'PASS' : 'FAIL',
-    { visibleText: plText.slice(0, 200), htmlHasBoldTag: /<b>Bold<\/b>/.test(plHtml) });
+  // ---- W-NO-REMOTE-REQUESTS: nothing is contacted beyond the local fixture server ----
+  const remote = allRequests.filter((u) => !/^(chrome-extension:|http:\/\/127\.0\.0\.1:|http:\/\/fake-tidal\.com:|data:|blob:|about:)/.test(u));
+  record('W-NO-REMOTE-REQUESTS', 'Popup, windows and page script make no requests beyond the local fixture server (no Tidal API, no telemetry)',
+    remote.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remote.slice(0, 10) });
 
-  // ---- W-PLAYLIST-ADD-HONEST: add/remove is not built; the UI must not pretend it worked ----
-  await popup.locator('.pl-checkbox').first().click();
-  await sleep(800);
-  const cbChecked = await popup.locator('.pl-checkbox').first().isChecked();
-  const plNotice = await popup.locator('#pl-data-notice').innerText().catch(() => '');
-  record('W-PLAYLIST-ADD-HONEST', 'Checking a playlist does not claim the track was added (checkbox reverts, reason shown)',
-    !cbChecked && /not built/i.test(plNotice) ? 'PASS' : 'FAIL', { cbCheckedAfter: cbChecked, plNotice });
-
-  await popup.click('#tab-btn-lab');
-  await sleep(2000);
-  const labA = await popup.evaluate(() => document.getElementById('lab-select-a').selectedOptions[0]?.textContent || '');
-  const labB = await popup.evaluate(() => document.getElementById('lab-select-b').selectedOptions[0]?.textContent || '');
-  record('W-LAB-AUTOSELECT', 'Lab pre-selects A = "A+" and B = "Super A+" (exact match first)',
-    labA.startsWith('A+ (') && labB.startsWith('Super A+ (') ? 'PASS' : 'FAIL', { labA, labB });
-  await popup.click('.lab-pill[data-op="union"]');
-  await sleep(1500);
-  const labRows = await popup.locator('#lab-table-body tr').allInnerTexts();
-  const labNotice = await popup.locator('#lab-data-notice').innerText().catch(() => '');
-  dialogs.length = 0;
-  await popup.click('#lab-btn-create');
-  await sleep(800);
-  const createDialog = dialogs.join(' | ');
-  const fakeSuccess = /Successfully created/i.test(createDialog);
-  record('W-LAB-HONESTY', 'Without a Tidal session, Lab does not fabricate tracks/BPM/key or report fake playlist creation',
-    !fakeSuccess && !labRows.some((r) => /Deep Tech Groove|Sub-Bass Odyssey/.test(r)) ? 'PASS' : 'FAIL',
-    { labRowsSample: labRows.slice(0, 3), labNotice, createDialog });
-
-  await popup.screenshot({ path: join(outDir, 'popup-lab.png') });
+  await shot(popup, 'popup-final.png');
   record('W-NO-PAGE-ERRORS', 'No uncaught errors in popup / fake Tidal page during run',
     popupErrors.length === 0 && tidalErrors.length === 0 ? 'PASS' : 'FAIL', { popupErrors, tidalErrors });
 } catch (e) {
