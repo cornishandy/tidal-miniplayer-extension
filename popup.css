@@ -52,7 +52,7 @@ button {
   position: relative;
 }
 
-/* Cover-art strip */
+/* Cover-art strip: the full cover scaled to the strip's height, showing its centre slice */
 .art-strip {
   width: 56px;
   flex: 0 0 56px;
@@ -62,33 +62,46 @@ button {
   border-right: 1px solid rgba(255, 255, 255, 0.06);
 }
 
-.art-bg {
+.art-slice {
   position: absolute;
-  inset: -20px;
-  background-size: cover;
-  background-position: center;
-  filter: blur(16px) saturate(1.2) brightness(0.42);
-}
-
-.art-cover {
-  position: relative;
-  display: block;
-  width: 56px;
-  height: 56px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   object-fit: cover;
-  background: #222;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.6);
+  object-position: center;
 }
 
-.art-cover[hidden] {
+.art-slice[hidden] {
   display: none;
 }
 
-/* Now playing */
+/* Now playing: text and transport on the left, the full cover on the right */
 .np {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 10px;
   padding: 8px 12px 6px;
   background: linear-gradient(180deg, var(--bg-surface, #1e1e26) 0%, var(--bg-secondary, #18181f) 100%);
   border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+
+.np-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.np-cover {
+  width: 76px;
+  height: 76px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.6);
+}
+
+.np-cover[hidden] {
+  display: none;
 }
 
 .np-title {
@@ -211,6 +224,7 @@ button {
 }
 
 .progress {
+  flex: 0 0 100%;
   height: 2px;
   background: #2a2a35;
   margin: 6px -12px -6px;
@@ -448,12 +462,12 @@ input:checked + .slider-round:before {
   width: 100%;
 }
 
-.phys-canvas.pipeline {
-  height: 46px;
+.phys-canvas.live {
+  height: 56px;
 }
 
 .phys-canvas.bode {
-  height: 62px;
+  height: 52px;
 }
 
 /* Sliders */

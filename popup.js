@@ -16,7 +16,7 @@ const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 
 
 // DOM: player
 const artCover = document.getElementById('art-cover');
-const artBg = document.getElementById('art-bg');
+const artSlice = document.getElementById('art-slice');
 const playerTitle = document.getElementById('player-title');
 const playerArtist = document.getElementById('player-artist');
 const playerMeta = document.getElementById('player-meta');
@@ -63,10 +63,28 @@ const valAuto = document.getElementById('val-auto');
 let bandOff = { hpf: false, bass: false, mid: false, high: false, comp: false, gain: false, speed: false };
 
 const physics = new PhysicsView({
-  pipelineCanvas: document.getElementById('pipeline-canvas'),
+  liveCanvas: document.getElementById('live-canvas'),
   bodeCanvas: document.getElementById('bode-canvas'),
   readoutEl: document.getElementById('physics-readout')
 });
+
+// Live spectrum frames come straight from the offscreen audio document while the EQ is on.
+let frameTimer = null;
+function startFrames() {
+  if (frameTimer) return;
+  frameTimer = setInterval(() => {
+    chrome.runtime.sendMessage({ target: 'offscreen', type: 'GET_AUDIO_FRAME' }, (res) => {
+      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); return; }
+      physics.setFrame(res);
+    });
+  }, 66);
+}
+function stopFrames() {
+  if (frameTimer) clearInterval(frameTimer);
+  frameTimer = null;
+  physics.setFrame(null);
+}
+window.addEventListener('unload', stopFrames);
 
 function showHint(text, ms = 4000) {
   if (!hintEl) return;
@@ -134,7 +152,7 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   checkPresetModificationState();
 
   physics.updateState(currentParams, isCapturingActive);
-  physics.start();
+  if (isCapturingActive) startFrames();
   requestAnimationFrame(fitUndockedWindow);
 
   if (query.get('minibar') === '1') {
@@ -181,14 +199,9 @@ function updatePlayerUI(info) {
 
   if (info.artwork !== lastArtwork) {
     lastArtwork = info.artwork;
-    if (info.artwork) {
-      artCover.src = info.artwork;
-      artCover.hidden = false;
-      artBg.style.backgroundImage = `url("${info.artwork.replace(/"/g, '%22')}")`;
-    } else {
-      artCover.hidden = true;
-      artCover.removeAttribute('src');
-      artBg.style.backgroundImage = '';
+    for (const img of [artCover, artSlice]) {
+      if (info.artwork) { img.src = info.artwork; img.hidden = false; }
+      else { img.hidden = true; img.removeAttribute('src'); }
     }
   }
 
@@ -224,11 +237,18 @@ function handlePrev() { playerCommand({ type: 'PREV_TRACK' }, 300); }
 function handleNext() { playerCommand({ type: 'NEXT_TRACK' }, 300); }
 
 function handleJump(deltaSecs) {
-  if (!currentTrackInfo || !currentTrackInfo.duration) return;
+  if (!currentTrackInfo || !currentTrackInfo.duration) {
+    showHint("The track length isn't known on this page, so the jump can't be placed.");
+    return;
+  }
   const dur = currentTrackInfo.duration;
   const cur = currentTrackInfo.currentTime || 0;
   const newTime = Math.max(0, Math.min(dur, cur + deltaSecs));
-  chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SEEK_AUDIO', time: newTime } }, () => {
+  chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SEEK_AUDIO', time: newTime } }, (res) => {
+    if (res && res.seeked === false) {
+      showHint("Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
+      return;
+    }
     currentTrackInfo.currentTime = newTime;
     updatePlayerUI(currentTrackInfo);
     setTimeout(refreshTrackInfo, 250);
@@ -257,6 +277,7 @@ playerBtnFav.onclick = handleFav;
 function updateEqPowerUI(active, tabTitle) {
   isCapturingActive = !!active;
   toggleEqPower.checked = isCapturingActive;
+  if (isCapturingActive) startFrames(); else stopFrames();
   if (isCapturingActive) {
     eqPowerStatusBadge.className = 'power-badge on';
     eqPowerStatusBadge.textContent = tabTitle ? `● ON · ${tabTitle}` : '● ON';

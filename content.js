@@ -186,12 +186,49 @@
     });
   }
 
+  // Seek: a reachable media element first; otherwise drive the page's own seek bar in the footer
+  // (Tidal keeps its player element out of reach). Reports which route worked, or false.
   function seekAudio(targetSecs) {
+    if (isNaN(targetSecs)) return { seeked: false };
     const media = document.querySelector('audio, video');
-    if (media && !isNaN(targetSecs)) {
-      const max = isFinite(media.duration) && media.duration > 0 ? media.duration : Infinity;
-      media.currentTime = Math.max(0, Math.min(max, targetSecs));
+    if (media && isFinite(media.duration) && media.duration > 0) {
+      media.currentTime = Math.max(0, Math.min(media.duration, targetSecs));
+      return { seeked: 'media' };
     }
+    const footer = getFooterPlayerElement();
+    const duration = (currentTrackInfo || getTrackInfo()).duration;
+    if (!footer || !(duration > 0)) return { seeked: false };
+    const frac = Math.max(0, Math.min(1, targetSecs / duration));
+
+    // A native range input (set the value the way a user would, so React-style handlers fire)
+    const range = footer.querySelector('input[type="range"]');
+    if (range) {
+      const min = parseFloat(range.min || '0'), max = parseFloat(range.max || '100');
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+      setter.call(range, String(min + frac * (max - min)));
+      range.dispatchEvent(new Event('input', { bubbles: true }));
+      range.dispatchEvent(new Event('change', { bubbles: true }));
+      return { seeked: 'range' };
+    }
+
+    // A custom slider: click it at the right spot
+    const bar = footer.querySelector('[data-test*="progress" i], [role="slider"], [class*="progress" i], [class*="seek" i]');
+    if (bar) {
+      const r = bar.getBoundingClientRect();
+      if (r.width > 0) {
+        const x = r.left + frac * r.width, y = r.top + r.height / 2;
+        const hit = document.elementFromPoint(x, y);
+        const el = hit && bar.contains(hit) ? hit : bar;
+        const init = (down) => ({ bubbles: true, cancelable: true, composed: true, clientX: x, clientY: y, button: 0, buttons: down ? 1 : 0, pointerId: 1, isPrimary: true, pointerType: 'mouse' });
+        el.dispatchEvent(new PointerEvent('pointerdown', init(true)));
+        el.dispatchEvent(new MouseEvent('mousedown', init(true)));
+        el.dispatchEvent(new PointerEvent('pointerup', init(false)));
+        el.dispatchEvent(new MouseEvent('mouseup', init(false)));
+        el.dispatchEvent(new MouseEvent('click', init(false)));
+        return { seeked: 'bar' };
+      }
+    }
+    return { seeked: false };
   }
 
   function setPlaybackSpeed(spd) {
@@ -224,10 +261,11 @@
       case 'TOGGLE_FAVORITE':
         toggleFavorite().then(sendResponse);
         return true;
-      case 'SEEK_AUDIO':
-        seekAudio(message.time);
-        sendResponse({ success: true });
+      case 'SEEK_AUDIO': {
+        const r = seekAudio(message.time);
+        sendResponse({ success: r.seeked !== false, ...r });
         return true;
+      }
       case 'SET_SPEED':
         setPlaybackSpeed(message.speed);
         sendResponse({ success: true });

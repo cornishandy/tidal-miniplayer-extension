@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-01 (round 3: the new main screen)
+# Review Ready: 2026-10-01 (round 4: live display, art, jumps)
 
 ## Identity
 
@@ -14,13 +14,19 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` |
-| Version | **1.3.0** (the live install is 1.1.0) |
+| Version | **1.3.1** (the live install is 1.1.0) |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (unchanged: same folder) |
-| Runtime source commit | `dccf108` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `dfac61d0babdd57c…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `ca30d42` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `eeb25589c3f28315…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.3.1
+
+- The physics strip is **real** now: while the EQ is on it shows the spectrum of the audio, grey = what the tab sends, colour = what you hear. Still and flat when the EQ is off. Dots and the animated wave are gone.
+- Cover art: a centre slice of the cover down the left edge, the full cover at the top right.
+- The −15 s / +30 s jumps drive Tidal's own seek bar when the player element is out of reach, and say so if they can't.
 
 ## What 1.3.0 is
 
@@ -34,17 +40,18 @@ Your rounds 1–3 built: one legible screen (440 px), no header; cover-art strip
 
 ## Tests
 
-- **Executed**: 29 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.0/`.
+- **Executed**: 30 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.1/`.
 - **Not run**: your look at the screen, the mini bar on your desktop, a real toolbar-click capture, Alt+M/Alt+E, the extreme-boost listening check.
 - **Blocked**: anything on real Tidal (heart, jumps, cover art). It needs your signed-in session, and I don't contact Tidal.
 
 ## What I need from you
 
-1. Click **Reload** on the review card; confirm **1.3.0**. Use it on real Tidal: EQ on, band switches, the heart, the jumps, the cover art.
-2. Switch **Stay open** on (the window opens), then click **Mini bar** there and tell me if it floats over other apps.
-3. If the heart stays dimmed on real Tidal: right-click the heart in Tidal's bottom bar → **Inspect** → right-click the highlighted line → **Copy** → **Copy outerHTML** → paste it here.
-4. **Year of original release: pick a source.** (a) Tidal's album edition year via your session (re-adds a Tidal request); (b) MusicBrainz first-release year (sends title + artist to musicbrainz.org); (c) no year.
-5. For the presets: the list from your everyday copy. Everyday profile → right-click the icon → **Inspect popup** → **Console** → paste: `chrome.storage.local.get(['presets','currentPreset'], d => console.log(JSON.stringify(d, null, 1)))` → copy what it prints.
+1. Click **Reload** on the review card; confirm **1.3.1**. On real Tidal: do the jumps work now, and does the time (e.g. 1:23 / 4:56) show next to the artist?
+2. **Stay open**: you said it doesn't work. What happens when you flip it on: (a) the popup closes and a separate window opens, (b) nothing, or (c) the popup closes and no window appears? And with it on, does the toolbar icon open the popup or the window?
+3. Then click **Mini bar** in the Stay-open window and tell me if it floats over other apps.
+4. If the heart stays dimmed on real Tidal: right-click the heart in Tidal's bottom bar → **Inspect** → right-click the highlighted line → **Copy** → **Copy outerHTML** → paste it here.
+5. **Year of original release: pick a source.** (a) Tidal's album edition year via your session (re-adds a Tidal request); (b) MusicBrainz first-release year (sends title + artist to musicbrainz.org); (c) no year.
+6. For the presets: the list from your everyday copy. Everyday profile → right-click the icon → **Inspect popup** → **Console** → paste: `chrome.storage.local.get(['presets','currentPreset'], d => console.log(JSON.stringify(d, null, 1)))` → copy what it prints.
 
 ## Remaining known issues
 

@@ -19,15 +19,15 @@
   </svg>
 
   <div class="popup-container">
-    <!-- Cover art: the square at the top, the same art blurred down the side -->
+    <!-- Cover art: a centre slice of the full cover runs down the left edge -->
     <aside class="art-strip" id="art-strip">
-      <div class="art-bg" id="art-bg"></div>
-      <img class="art-cover" id="art-cover" alt="" hidden>
+      <img class="art-slice" id="art-slice" alt="" hidden>
     </aside>
 
     <div class="popup-main">
-      <!-- Now playing + transport -->
+      <!-- Now playing + transport, with the full cover on the right -->
       <section class="np">
+        <div class="np-main">
         <div class="np-title" id="player-title">Connecting…</div>
         <div class="np-artist"><b id="player-artist">Media tab</b><span id="player-meta"></span></div>
         <div class="transport">
@@ -38,6 +38,8 @@
           <button id="player-btn-fwd30" class="tbtn jump" title="Forward 30 seconds"><svg><use href="#s-fwd"/></svg><span>30</span></button>
           <button id="player-btn-next" class="tbtn small" title="Next track"><svg><use href="#s-next"/></svg></button>
         </div>
+        </div>
+        <img class="np-cover" id="art-cover" alt="" hidden>
         <div class="progress"><div id="player-progress-fill"></div></div>
       </section>
 
@@ -69,10 +71,10 @@
           <select id="preset-select" class="preset-dropdown"></select>
         </div>
 
-        <!-- Physics: animated model of the settings and the combined response. Not a live meter. -->
+        <!-- Physics: the live spectrum of the processed audio (grey = in, colour = out) and the settings' response curve -->
         <div class="physics">
-          <div class="phys-hdr"><span>PHYSICS</span><em id="physics-readout" title="An animated model of your settings, not a live meter"></em></div>
-          <canvas id="pipeline-canvas" class="phys-canvas pipeline"></canvas>
+          <div class="phys-hdr"><span>PHYSICS</span><em id="physics-readout" title="Top: live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear). Bottom: the response your settings make."></em></div>
+          <canvas id="live-canvas" class="phys-canvas live"></canvas>
           <canvas id="bode-canvas" class="phys-canvas bode"></canvas>
         </div>
 

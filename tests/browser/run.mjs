@@ -216,7 +216,7 @@ try {
   await popup.click('#player-btn-next'); await sleep(400);
   await popup.click('#player-btn-prev'); await sleep(400);
   const clicks = await tidal.evaluate(() => window.clicks);
-  const playing = await tidal.evaluate(() => !document.getElementById('a').paused);
+  const playing = await tidal.evaluate(() => !window.audioEl.paused);
   record('W-TRANSPORT-SCOPE', 'Transport commands target footer controls only (decoy untouched)',
     clicks.decoy === 0 && clicks.footerPlay === 1 && clicks.next === 1 && clicks.prev === 1 && clicks.fav === 0 && playing ? 'PASS' : 'FAIL',
     { clicks, playing });
@@ -231,18 +231,20 @@ try {
   record('W-HEART', 'Heart toggles the footer favourite button and shows its state (on, then off)',
     heartClicks === 1 && heartOn && heartClicks2 === 2 && heartOff ? 'PASS' : 'FAIL', { heartClicks, heartOn, heartClicks2, heartOff });
 
-  // ---- W-JUMP: +30 s and −15 s jumps (60 s tone) ----
-  await tidal.evaluate(() => { document.getElementById('a').currentTime = 2; });
-  await sleep(2200); // let the popup's 1 s poll observe the new position
-  const t0 = await tidal.evaluate(() => document.getElementById('a').currentTime);
+  // ---- W-JUMP: +30 s and −15 s jumps through the page's seek bar (the media element is out of reach, as on Tidal) ----
+  await tidal.evaluate(() => { window.audioEl.currentTime = 2; });
+  await sleep(2200); // let the popup's 1 s poll observe the new position (from the footer's time labels)
+  const t0 = await tidal.evaluate(() => window.audioEl.currentTime);
   await popup.click('#player-btn-fwd30'); await sleep(400);
-  const t1 = await tidal.evaluate(() => document.getElementById('a').currentTime);
+  const t1 = await tidal.evaluate(() => window.audioEl.currentTime);
   await sleep(1800);
   await popup.click('#player-btn-back15'); await sleep(400);
-  const t2 = await tidal.evaluate(() => document.getElementById('a').currentTime);
+  const t2 = await tidal.evaluate(() => window.audioEl.currentTime);
+  const seeks = await tidal.evaluate(() => window.clicks.seek);
   const fwd = t1 - t0, back = t2 - t1;
-  record('W-JUMP', 'Forward 30 s moves ~+30 s; back 15 s moves ~−15 s',
-    fwd > 29 && fwd < 32 && back > -17.5 && back < -13.5 ? 'PASS' : 'FAIL', { t0: +t0.toFixed(2), t1: +t1.toFixed(2), t2: +t2.toFixed(2), fwd: +fwd.toFixed(2), back: +back.toFixed(2) });
+  record('W-JUMP', 'Forward 30 s / back 15 s work through the footer seek bar when no media element is reachable',
+    fwd > 28 && fwd < 33 && back > -18.5 && back < -12 && seeks === 2 ? 'PASS' : 'FAIL',
+    { t0: +t0.toFixed(2), t1: +t1.toFixed(2), t2: +t2.toFixed(2), fwd: +fwd.toFixed(2), back: +back.toFixed(2), seekBarEvents: seeks, note: 'time labels have 1 s resolution' });
 
   // ---- W-THEME-DOTS: a theme dot applies the theme and it is remembered ----
   await popup.click('.dot[data-theme="theme-amber"]');
@@ -303,19 +305,19 @@ try {
   await popup.click('.band-tag[data-band="mid"]'); // back on
   await sleep(200);
 
-  // ---- W-PHYSICS-INLINE: both drawings live on the main screen and animate ----
+  // ---- W-PHYSICS-INLINE: both drawings sit on the main screen; with the EQ off the live strip is still (no fake motion) ----
   const phys = await popup.evaluate(async () => {
     const main = document.querySelector('.popup-main').getBoundingClientRect();
-    const pc = document.getElementById('pipeline-canvas').getBoundingClientRect();
+    const lc = document.getElementById('live-canvas').getBoundingClientRect();
     const bc = document.getElementById('bode-canvas').getBoundingClientRect();
     const f0 = physics.frames;
     await new Promise((r) => setTimeout(r, 400));
-    return { pipelineW: pc.width, pipelineH: pc.height, bodeW: bc.width, bodeH: bc.height,
-      insideMain: pc.left >= main.left && pc.right <= main.right && bc.left >= main.left && bc.right <= main.right,
-      framesAdvanced: physics.frames - f0, readout: document.getElementById('physics-readout').textContent };
+    return { liveW: lc.width, liveH: lc.height, bodeW: bc.width, bodeH: bc.height,
+      insideMain: lc.left >= main.left && lc.right <= main.right && bc.left >= main.left && bc.right <= main.right,
+      framesWhileOff: physics.frames - f0, idle: physics.frame === null, readout: document.getElementById('physics-readout').textContent };
   });
-  record('W-PHYSICS-INLINE', 'Signal wave and response curve are on the main screen and animate',
-    phys.insideMain && phys.pipelineW > 300 && phys.bodeW > 300 && phys.pipelineH >= 40 && phys.bodeH >= 56 && phys.framesAdvanced > 5 ? 'PASS' : 'FAIL', phys);
+  record('W-PHYSICS-INLINE', 'Live strip and response curve are on the main screen; nothing animates while the EQ is off',
+    phys.insideMain && phys.liveW > 300 && phys.bodeW > 300 && phys.liveH >= 48 && phys.bodeH >= 44 && phys.framesWhileOff === 0 && phys.idle ? 'PASS' : 'FAIL', phys);
 
   // ---- W-CAPTURE-START: tab capture + DSP graph (synthetic tone, muted output) ----
   const media = await context.newPage();
@@ -358,6 +360,24 @@ try {
       flat && Math.abs(flat.peak - 0.15) < 0.01 ? 'PASS' : 'FAIL', { flat }, 'objective-audio');
     record('W-AUDIO-BASS', 'Bass +10 dB lifts 60 Hz relative to 1 kHz (objective FFT, final output)',
       lift60 !== null && lift60 > 6 && Math.abs(lift1k) < 2 ? 'PASS' : 'FAIL', { flat, boosted, lift60: lift60?.toFixed(1), lift1k: lift1k?.toFixed(1) }, 'objective-audio');
+
+    // ---- W-LIVE-SPECTRUM: the screen's live strip shows the real audio: tone peaks on the input, the bass lift on the output ----
+    await sleep(1800); // the popup notices capture via its 1 s poll, then frames flow at ~15 fps
+    const live = await popup.evaluate(async () => {
+      const f0 = physics.frames;
+      await new Promise((r) => setTimeout(r, 500));
+      const fr = physics.frame;
+      if (!fr) return { hasFrame: false, framesAdvanced: physics.frames - f0 };
+      const idx = (hz) => Math.min(71, Math.floor(Math.log(hz / 20) / Math.log(1000) * 72));
+      const i60 = idx(60), i1k = idx(1000), i8k = idx(8000), iQuiet = idx(300);
+      return { hasFrame: true, framesAdvanced: physics.frames - f0,
+        in60: fr.input[i60], inQuiet: fr.input[iQuiet], in1k: fr.input[i1k], in8k: fr.input[i8k],
+        out60: fr.output[i60], out1k: fr.output[i1k], liftShown60: +(fr.output[i60] - fr.input[i60]).toFixed(1), liftShown1k: +(fr.output[i1k] - fr.input[i1k]).toFixed(1) };
+    });
+    record('W-LIVE-SPECTRUM', 'Live strip is real: input shows the tone peaks (60 Hz, 1 kHz, 8 kHz) and the output shows the +10 dB bass lift at 60 Hz only',
+      live.hasFrame && live.framesAdvanced > 3 && live.in60 - live.inQuiet > 20 && live.in1k - live.inQuiet > 20 && live.in8k - live.inQuiet > 20
+        && live.liftShown60 > 6 && Math.abs(live.liftShown1k) < 2 ? 'PASS' : 'FAIL', live, 'objective-audio');
+    await shot(popup, 'popup-live.png');
 
     // ---- W-AUDIO-BAND-SWITCH: LOW off keeps the slider at +10 but removes the lift ----
     await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: { ...NONE, bass: true } });
@@ -425,18 +445,25 @@ try {
     }
   }
 
-  // ---- W-STAY-OPEN: the switch makes the toolbar icon open the window instead of the popup, and back ----
+  // ---- W-STAY-OPEN: a real click on the switch flips the icon into window mode and opens the window; off restores the popup ----
   const popupBefore = await sw.evaluate(() => chrome.action.getPopup({}));
-  await sendFrom(popup, { type: 'SET_STAY_OPEN', on: true });
-  await sleep(300);
+  const windowsBefore = await sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] })).filter((c) => c.documentUrl.includes('undocked=true')).length);
+  const { page: popup3 } = await openPopup();
+  await popup3.click('label.opt'); // the "Stay open" switch
+  await sleep(1500);
   const popupWhenOn = await sw.evaluate(() => chrome.action.getPopup({}));
-  const stayStored = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('stayOpen', (d) => r(d.stayOpen))));
-  await sendFrom(popup, { type: 'SET_STAY_OPEN', on: false });
-  await sleep(300);
+  const stayStored = await sw.evaluate(async () => (await chrome.storage.local.get('stayOpen')).stayOpen);
+  const windowsAfter = await sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] })).filter((c) => c.documentUrl.includes('undocked=true')).length);
+  const windowPage = context.pages().find((pg) => pg.url().includes('undocked=true'));
+  const switchInWindow = windowPage ? await windowPage.evaluate(() => document.getElementById('toggle-stay-open').checked) : null;
+  if (windowPage) await windowPage.click('label.opt'); // switch it off again from the window
+  await sleep(600);
   const popupWhenOff = await sw.evaluate(() => chrome.action.getPopup({}));
-  record('W-STAY-OPEN', 'Stay open: on = toolbar icon opens the window (no popup); off = popup restored',
-    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && /popup\.html$/.test(popupWhenOff) ? 'PASS' : 'FAIL',
-    { popupBefore, popupWhenOn, stayStored, popupWhenOff });
+  for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
+  if (!popup3.isClosed()) await popup3.close();
+  record('W-STAY-OPEN', 'Stay open (real click): icon switches to window mode and the window opens; switching off in the window restores the popup',
+    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && windowsAfter === windowsBefore + 1 && switchInWindow === true && /popup\.html$/.test(popupWhenOff) ? 'PASS' : 'FAIL',
+    { popupBefore, popupWhenOn, stayStored, windowsBefore, windowsAfter, switchInWindow, popupWhenOff });
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();

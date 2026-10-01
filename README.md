@@ -4,8 +4,8 @@ A Tidal-first tab-audio EQ for Google Chrome on macOS. One screen, no menus.
 
 - **Audio EQ**: captures one tab's audio and runs it through anti-distortion HPF → bass low-shelf (120 Hz) → mid (1 kHz) → high-shelf (5 kHz) → optional Auto-Balancing compressor → master gain (50–250 %) → limiter → −0.3 dBFS output ceiling. Presets (8 factory + your own) and a true-bypass *Flat* preset.
 - **Per-band switches**: the tag at the left of each row (LOW, HPF, MID, HI, AUTO, VOL, SPD) switches that stage off while keeping its value, so you can hear a track with and without one band.
-- **Physics on screen**: an animated signal model and the combined frequency response, redrawn as you move the sliders. An illustration of the settings, not a meter of the live audio.
-- **Player**: cover art, title, artist and time read from Tidal's bottom player bar (or any tab's media element); heart (Tidal's *My Collection*), previous, back 15 s, play/pause, forward 30 s, next.
+- **Physics on screen**: a live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear) and, below it, the combined frequency response of your settings. The spectrum is still and flat when the EQ is off.
+- **Player**: cover art (a centre slice down the left edge and the full cover at the top right), title, artist and time read from Tidal's bottom player bar (or any tab's media element); heart (Tidal's *My Collection*), previous, back 15 s, play/pause, forward 30 s, next. The jumps use the page's media element when it is reachable, otherwise the page's own seek bar.
 - **Stay open**: a switch that makes the toolbar icon open the screen as a window Chrome does not auto-close.
 - **Mini bar**: a small always-on-top bar (Chrome's Document Picture-in-Picture) with art, title, heart, jumps, play/pause and the EQ switch. Chrome only lets it open from a click inside a window that stays alive, so it opens from the Stay-open window and lives as long as that window exists.
 
@@ -45,7 +45,7 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 1. In Chrome, open the profile menu, choose **Add**, then **Continue without an account**, and name it *Extension Review*.
 2. In that profile's window, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose
    `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`.
-3. Check the card shows version **1.3.0** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
+3. Check the card shows version **1.3.1** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
 
 Why a separate profile: an unpacked extension's ID comes from its folder, so the review build is a **different extension** from your live 1.1.0 install. It has its own settings, and your custom presets are *not* copied. In the same profile, both copies would inject into every page, and Chrome lets only one of them capture a given tab. For Tidal features in the review profile, sign in to Tidal there.
 
