@@ -6,8 +6,8 @@ A Tidal-first tab-audio EQ for Google Chrome on macOS. One screen, no menus.
 - **Per-band switches**: the tag at the left of each row (LOW, HPF, MID, HI, AUTO, VOL, SPD) switches that stage off while keeping its value, so you can hear a track with and without one band.
 - **Physics on screen**: a live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear) and, below it, the combined frequency response of your settings. The spectrum is still and flat when the EQ is off.
 - **Player**: cover art (a centre slice down the left edge and the full cover at the top right), title, artist and time read from Tidal's bottom player bar (or any tab's media element); heart (Tidal's *My Collection*), previous, back 15 s, play/pause, forward 30 s, next. The jumps use the page's media element when it is reachable, otherwise the page's own seek bar.
-- **Stay open**: a switch that makes the toolbar icon open the screen as a window Chrome does not auto-close.
-- **Mini bar**: a small always-on-top bar (Chrome's Document Picture-in-Picture) with art, title, heart, jumps, play/pause and the EQ switch. Chrome only lets it open from a click inside a window that stays alive, so it opens from the Stay-open window and lives as long as that window exists.
+- **Stay open**: a switch that docks the screen into Chrome's side panel beside the page, where it stays while you click anything; the toolbar icon then opens the panel. (A separate window is used only where Chrome has no side panel.)
+- **Mini bar**: a small always-on-top bar (Chrome's Document Picture-in-Picture) with art, title, heart, jumps, play/pause and the EQ switch. Chrome only lets it open from a click inside a page that stays alive, so it opens from the side panel (or the fallback window) and lives as long as that stays open.
 
 Removed at the owner's decision (2026-10-01): Playlists and Playlist Lab (last build: tag `v1.1.1-before-ui-removals`), the header icon row with Size/Wide, Micro, On Top, Undock and theme-cycle buttons, the Physics side panel, and the in-page floating button (last build with them: tag `v1.2.1-before-main-screen`).
 
@@ -45,7 +45,7 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 1. In Chrome, open the profile menu, choose **Add**, then **Continue without an account**, and name it *Extension Review*.
 2. In that profile's window, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose
    `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`.
-3. Check the card shows version **1.3.1** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
+3. Check the card shows version **1.3.2** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
 
 Why a separate profile: an unpacked extension's ID comes from its folder, so the review build is a **different extension** from your live 1.1.0 install. It has its own settings, and your custom presets are *not* copied. In the same profile, both copies would inject into every page, and Chrome lets only one of them capture a given tab. For Tidal features in the review profile, sign in to Tidal there.
 
@@ -56,8 +56,8 @@ Why a separate profile: an unpacked extension's ID comes from its folder, so the
 - **Band switches**: click LOW / HPF / MID / HI / AUTO / VOL / SPD to take that stage out while keeping its slider value; click again to bring it back. Switched-off rows are dimmed. The state is saved with presets.
 - **Values**: drag, use − / + (Shift-click for 5× finer steps), or double-click a value to snap it to neutral and double-click again to restore it.
 - **Presets**: *+ Save* saves the current values as a new preset; *Update* saves into the selected custom preset; *↺ Reset* restores the selected preset's saved values (factory values for a default); ✕ deletes a custom preset. Your custom presets are never deleted by Reset.
-- **Stay open**: switch it on and the toolbar icon opens the screen as a window that stays until you close it (the popup itself is closed by Chrome whenever you click elsewhere; nothing can change that). **Alt+M** shows or hides that window. **Alt+E** toggles the EQ. Change shortcuts at `chrome://extensions/shortcuts`.
-- **Mini bar**: in the Stay-open window, click **Mini bar**. It floats above every app. It stays as long as that window exists (minimised is fine); closing the window closes the bar. From the toolbar popup, *Mini bar* first opens the window for you.
+- **Stay open**: switch it on and the screen moves into Chrome's side panel on the right of the window, where it stays while you click anything on the page; from then on the toolbar icon opens that panel (the popup itself is closed by Chrome whenever you click elsewhere; nothing can change that). Drag the panel's edge to resize it. Switch it off in the panel to go back to the popup. **Alt+M** opens the panel. **Alt+E** toggles the EQ. Change shortcuts at `chrome://extensions/shortcuts`.
+- **Mini bar**: in the side panel, click **Mini bar**. It floats above every app and stays as long as the panel is open. From the toolbar popup, *Mini bar* first opens the panel for you.
 - **Heart**: adds the track to, or removes it from, your Tidal collection by clicking Tidal's own heart in the player bar. If Tidal's heart can't be found on the page, the heart is dimmed and says so.
 - **Theme**: the five dots at the bottom.
 
@@ -77,8 +77,9 @@ The browser harness uses Playwright's *Chrome for Testing* with a **fresh tempor
 
 - `tabCapture`, `offscreen`: EQ processing of the tab you choose. Audio stays in Chrome and is never recorded or uploaded.
 - `tabs`, `activeTab`, `scripting`, `<all_urls>`: find the media tab, read the track shown on the page, and re-inject the page script into tabs opened before an update.
+- `sidePanel`: show the screen in Chrome's side panel (Stay open). UI only; grants no access to pages, audio or devices.
 - `storage`: `chrome.storage.local` only (no sync). Keys: `presets`, `currentPreset`, `currentParams`, `visualTheme`, `stayOpen`, `capturedTabId`, `isAudioCapturing`.
-- **Network**: the extension makes no requests of its own and reads no Tidal session or token. The one piece of network activity is the cover image, which the screen loads from Tidal's image server while a track is shown (the same image Tidal's page already loaded). A unit test (`no network code`) and a browser check (W-NO-REMOTE-REQUESTS) guard the rest.
+- **Network**: the extension makes no requests of its own and reads no Tidal session or token. The one piece of network activity is the cover image, which the screen loads from Tidal's image server while a track is shown (the full-size version of the image Tidal's page shows). A unit test (`no network code`) and a browser check (W-NO-REMOTE-REQUESTS) guard the rest.
 
 ## Recovery
 

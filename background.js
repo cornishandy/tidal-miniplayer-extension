@@ -5,12 +5,32 @@ const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
 const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
 let capturedTabId = null;
 
-// "Stay open": when on, the toolbar icon opens the window instead of the auto-closing popup.
+// "Stay open": when on, the toolbar icon opens the screen in Chrome's side panel (docked beside the
+// page, it stays while you click anything) instead of the auto-closing popup. Chrome without a side
+// panel gets the standalone window instead.
 async function applyStayOpen(on) {
   await chrome.action.setPopup({ popup: on ? '' : 'popup.html' });
+  if (chrome.sidePanel) {
+    try { await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: !!on }); } catch (e) {}
+  }
 }
 
-chrome.action.onClicked.addListener(() => { openFallbackWindow().catch(() => {}); });
+chrome.action.onClicked.addListener(() => {
+  // Only fires while no popup is set (Stay open on). With a side panel, Chrome opens it itself.
+  if (!chrome.sidePanel) openFallbackWindow().catch(() => {});
+});
+
+async function openPanelOrWindow() {
+  if (chrome.sidePanel) {
+    try {
+      const win = await chrome.windows.getLastFocused({ windowTypes: ['normal'] });
+      await chrome.sidePanel.open({ windowId: win.id });
+      return 'panel';
+    } catch (e) {}
+  }
+  await openFallbackWindow();
+  return 'window';
+}
 
 async function restoreStayOpen() {
   const { stayOpen } = await chrome.storage.local.get('stayOpen');
@@ -401,13 +421,13 @@ async function openFallbackWindow({ minibar = false } = {}) {
 chrome.commands.onCommand.addListener(async (command) => {
   try {
     if (command === 'toggle-miniplayer') {
-      // "Show/Hide": a second press closes the Stay-open window.
+      // Opens the screen in the side panel; a second press while the window fallback is open closes it.
       const existing = await findFallbackWindow();
       if (existing) {
         await chrome.windows.remove(existing.windowId);
         return;
       }
-      await openFallbackWindow();
+      await openPanelOrWindow();
     } else if (command === 'toggle-eq') {
       const status = await getActualCaptureStatus();
       if (status.isCapturing) {

@@ -67,7 +67,7 @@ const server = createServer((req, res) => {
   const file = url.pathname === '/' ? 'media.html' : url.pathname.startsWith('/playlist') ? 'fake-tidal.html' : url.pathname.slice(1);
   const p = join(here, '../fixtures', file);
   if (!existsSync(p)) { res.writeHead(404); return res.end(); }
-  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.writeHead(200, { 'content-type': file.endsWith('.svg') ? 'image/svg+xml' : 'text/html; charset=utf-8' });
   res.end(readFileSync(p));
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -210,6 +210,17 @@ try {
   const shownArtist = await popup.locator('#player-artist').textContent();
   record('W-TRACK-INFO', 'Popup shows track metadata from the Tidal footer',
     shownTitle === 'Synthetic Tone' && shownArtist === 'Test Generator' ? 'PASS' : 'FAIL', { shownTitle, shownArtist });
+
+  // ---- W-ART-HIRES: the 80 px thumbnail URL is upgraded to 1280; when that size is missing it steps down to 640 ----
+  await sleep(1200);
+  const art = await popup.evaluate(() => ({
+    cover: document.getElementById('art-cover').getAttribute('src'), slice: document.getElementById('art-slice').getAttribute('src'),
+    coverShown: !document.getElementById('art-cover').hidden, naturalW: document.getElementById('art-cover').naturalWidth
+  }));
+  const artRequests = allRequests.filter((u) => /\/img\/cover\//.test(u)).map((u) => u.replace(/^.*\/img\/cover\//, ''));
+  record('W-ART-HIRES', 'Cover art is requested at full size (1280), then falls back to 640 when the big size is missing',
+    art.coverShown && /\/640x640\.svg$/.test(art.cover) && art.slice === art.cover && artRequests.includes('1280x1280.svg') && artRequests.includes('640x640.svg') ? 'PASS' : 'FAIL',
+    { ...art, artRequests: [...new Set(artRequests)] });
 
   // ---- W-TRANSPORT-SCOPE: Play/Prev/Next hit the footer, never the decoy card ----
   await popup.click('#player-btn-play'); await sleep(500);
@@ -445,25 +456,50 @@ try {
     }
   }
 
-  // ---- W-STAY-OPEN: a real click on the switch flips the icon into window mode and opens the window; off restores the popup ----
+  // ---- W-STAY-OPEN: a real click on the switch hands the screen to Chrome's side panel and makes the icon open it; off restores the popup ----
   const popupBefore = await sw.evaluate(() => chrome.action.getPopup({}));
-  const windowsBefore = await sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] })).filter((c) => c.documentUrl.includes('undocked=true')).length);
   const { page: popup3 } = await openPopup();
   await popup3.click('label.opt'); // the "Stay open" switch
   await sleep(1500);
   const popupWhenOn = await sw.evaluate(() => chrome.action.getPopup({}));
   const stayStored = await sw.evaluate(async () => (await chrome.storage.local.get('stayOpen')).stayOpen);
-  const windowsAfter = await sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] })).filter((c) => c.documentUrl.includes('undocked=true')).length);
-  const windowPage = context.pages().find((pg) => pg.url().includes('undocked=true'));
-  const switchInWindow = windowPage ? await windowPage.evaluate(() => document.getElementById('toggle-stay-open').checked) : null;
-  if (windowPage) await windowPage.click('label.opt'); // switch it off again from the window
-  await sleep(600);
+  const behaviourOn = await sw.evaluate(async () => (await chrome.sidePanel.getPanelBehavior()).openPanelOnActionClick);
+  const panelContexts = await sw.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['SIDE_PANEL'] })).length);
+  await sendFrom(popup, { type: 'SET_STAY_OPEN', on: false });
+  await sleep(500);
   const popupWhenOff = await sw.evaluate(() => chrome.action.getPopup({}));
-  for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
+  const behaviourOff = await sw.evaluate(async () => (await chrome.sidePanel.getPanelBehavior()).openPanelOnActionClick);
   if (!popup3.isClosed()) await popup3.close();
-  record('W-STAY-OPEN', 'Stay open (real click): icon switches to window mode and the window opens; switching off in the window restores the popup',
-    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && windowsAfter === windowsBefore + 1 && switchInWindow === true && /popup\.html$/.test(popupWhenOff) ? 'PASS' : 'FAIL',
-    { popupBefore, popupWhenOn, stayStored, windowsBefore, windowsAfter, switchInWindow, popupWhenOff });
+  record('W-STAY-OPEN', 'Stay open (real click): the toolbar icon switches to the side panel (no popup); off restores the popup',
+    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && behaviourOn === true && /popup\.html$/.test(popupWhenOff) && behaviourOff === false ? 'PASS' : 'FAIL',
+    { popupBefore, popupWhenOn, stayStored, behaviourOn, popupWhenOff, behaviourOff });
+  record('W-SIDE-PANEL-OPEN', 'The side panel document opened from the click', panelContexts > 0 ? 'PASS' : 'NOT RUN',
+    { panelContexts, note: panelContexts > 0 ? '' : 'Headless Chrome has no side panel UI; confirm on a real Chrome window.' });
+
+  // ---- W-PANEL-LAYOUT: the panel page fits narrow and wide panels without horizontal overflow ----
+  const panelPage = await context.newPage();
+  const panelErrors = [];
+  panelPage.on('pageerror', (e) => panelErrors.push(String(e)));
+  watchRequests(panelPage);
+  await panelPage.goto(`chrome-extension://${EXT_ID}/popup.html?panel=1`);
+  await sleep(1200);
+  const layoutAt = async (width) => {
+    await panelPage.setViewportSize({ width, height: 900 });
+    await sleep(300);
+    return panelPage.evaluate(() => ({
+      scrollW: document.documentElement.scrollWidth, clientW: document.documentElement.clientWidth,
+      sliderW: Math.round(document.getElementById('slider-bass').getBoundingClientRect().width),
+      bodyH: Math.round(document.body.scrollHeight), panelClass: document.body.classList.contains('panel')
+    }));
+  };
+  const narrow = await layoutAt(360);
+  await panelPage.screenshot({ path: join(outDir, 'panel-360.png') });
+  const wide = await layoutAt(480);
+  await panelPage.screenshot({ path: join(outDir, 'panel-480.png') });
+  await panelPage.close();
+  record('W-PANEL-LAYOUT', 'Side-panel page adapts: no horizontal overflow at 360 or 480 px, sliders stay usable, no errors',
+    narrow.panelClass && narrow.scrollW <= narrow.clientW && wide.scrollW <= wide.clientW && narrow.sliderW >= 150 && wide.sliderW >= 250 && panelErrors.length === 0 ? 'PASS' : 'FAIL',
+    { narrow, wide, panelErrors, screenshots: [`results/${label}/panel-360.png`, `results/${label}/panel-480.png`] });
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();

@@ -10,7 +10,7 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.3.1**, runtime commit `ca30d42`, fingerprint `eeb25589c3f28315…`, 2026-10-01 (1.3.0 was `dccf108`; its results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
+Current review build: **v1.3.2**, runtime commit `18bc5d1`, fingerprint `5f6c2c2e0600961e…`, 2026-10-01 (1.3.1 was `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
 | ID | Workflow / requirement | Level | 1.2.1 | **1.3.0** |
 |---|---|---|---|---|
@@ -19,6 +19,7 @@ Current review build: **v1.3.1**, runtime commit `ca30d42`, fingerprint `eeb2558
 | W-SURFACES-REMOVED | Header icons, tabs, floating button, side panel gone; page script ignores their commands | installed-browser | PASS (tabs) | PASS |
 | W-NO-DEAD-SPACE | Rows pack from the top; 440 px wide; under Chrome's 600 px cap | installed-browser | PASS | PASS (585 px) |
 | W-TRACK-INFO | Title/artist read from Tidal footer only | installed-browser (fake Tidal DOM) | PASS | PASS |
+| W-ART-HIRES | Cover requested at 1280 px; steps down to 640 when missing | installed-browser | — | PASS |
 | W-TRANSPORT-SCOPE | Play/Prev/Next hit footer, never playlist cards | installed-browser (decoy) | PASS | PASS |
 | W-HEART | Heart clicks the footer heart and shows its state | installed-browser | — | PASS |
 | W-JUMP | +30 s / −15 s jumps through the footer seek bar (media element out of reach, as on Tidal) | installed-browser | — (was W-SKIP-25) | PASS (+29.2 / −14.0 while playing) |
@@ -36,14 +37,16 @@ Current review build: **v1.3.1**, runtime commit `ca30d42`, fingerprint `eeb2558
 | W-AUDIO-LIMITER | Worst case never exceeds −0.3 dBFS | objective-audio | PASS (0.965) | PASS (0.965) |
 | W-CAPTURE-STOP / W-CAPTURE-RESTART | Stop releases everything; re-attach works | installed-browser | PASS | PASS |
 | W-TAB-CLOSE-CLEANUP / W-TAB-CLOSE-AFTER-SW-RESTART | Closing the captured tab → OFF, also after a worker restart | installed-browser | PASS | PASS |
-| W-STAY-OPEN | Real click: icon switches to window mode and the window opens; off in the window restores the popup | installed-browser | — | PASS |
+| W-STAY-OPEN | Real click: the screen hands over to Chrome's side panel and the icon opens it; off restores the popup | installed-browser | — | PASS |
+| W-SIDE-PANEL-OPEN | The side-panel document opened from the click | installed-browser | — | PASS |
+| W-PANEL-LAYOUT | Panel page at 360 and 480 px: no overflow, sliders ≥ 150 / 250 px, no errors | installed-browser | — | PASS |
 | W-FALLBACK-WINDOW / W-FALLBACK-SINGLE | Stay-open window works; only one instance | installed-browser | PASS | PASS |
 | W-MINIBAR | Mini bar opens as Document PiP from the Stay-open page by a real click | installed-browser | — | PASS |
 | W-NO-REMOTE-REQUESTS | No requests beyond the local fixture server | installed-browser | PASS | PASS (real Tidal: cover image only) |
 | W-NO-PAGE-ERRORS | No uncaught errors during run | installed-browser | PASS | PASS |
 | ~~W-PHYSICS-SIDE, W-SKIP-25, W-THEME-KEEPS-LAYOUT, W-PLAYLIST-*, W-LAB-*~~ | Removed surfaces | — | — | RETIRED |
 | U-* (8) | Manifest, commands, permissions unchanged, syntax, fallback URL, no network code, retired surfaces and dead files stay out, no emoji | unit | 7/7 | **8/8** |
-| W-STAY-OPEN-MAC | Stay open on your Mac (you reported it not working on 1.3.0) | user | — | **REPORTED FAILING, not reproduced**; awaiting detail |
+| W-STAY-OPEN-MAC | Stay open on your Mac | user | — | 1.3.0/1.3.1 window: **failed for you** (window went behind the page). 1.3.2 side panel: NOT RUN |
 | W-TOOLBAR-INVOKE | EQ via a real toolbar click (activeTab grant) | user | NOT RUN | NOT RUN |
 | W-LOOK-1.3.0 | The new screen, strip, physics and band switches look right in your Chrome | user-visual | — | NOT RUN |
 | W-MINIBAR-DESKTOP | Mini bar floats over other apps on your desktop | user | — | NOT RUN |
@@ -58,7 +61,8 @@ Current review build: **v1.3.1**, runtime commit `ca30d42`, fingerprint `eeb2558
 
 - **2026-09-24 takeover**: identity and preservation verified; assessment; build script with fingerprint; isolated harness; 13 fixes (`9b01e83`); v1.1.1; operating README; review build.
 - **2026-10-01 round 1**: Playlists, Lab and favourite removed; Physics as a side panel; dead space removed; v1.2.0 (`a92a3c0`). Harness 24/24, unit 7/7. Design mockups for the open questions in `docs/mockups/`.
-- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).\n- **2026-10-01 round 4**: 1.3.1 (`ca30d42`): live before/after spectrum ("make it real"), cover-art centre slice + full cover, jumps via the page's seek bar. Harness 30/30, unit 8/8.
+- **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).\n- **2026-10-01 round 5**: 1.3.2 (`18bc5d1`): Stay open = Chrome side panel (sidePanel permission, R-20), full-resolution cover art. Harness 33/33, unit 8/8.
+- **2026-10-01 round 4**: 1.3.1 (`ca30d42`): live before/after spectrum ("make it real"), cover-art centre slice + full cover, jumps via the page's seek bar. Harness 30/30, unit 8/8.
 - **2026-10-01 round 3**: the new main screen, v1.3.0 (`dccf108`): legible size, no header, art strip, jumps, heart, per-band switches, physics on screen, Stay open, mini bar; dead files removed. Harness 29/29, unit 8/8.
 
 ## Changes from inherited decisions or claims

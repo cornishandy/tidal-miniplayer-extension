@@ -28,19 +28,17 @@
     const footer = getFooterPlayerElement() || document;
     const titleEl = footer.querySelector('[data-test="footer-track-title"], [data-test="track-title"], .track-title, a[href^="/album/"][class*="title"]') || document.querySelector('[data-test="footer-track-title"]');
     const artistEl = footer.querySelector('[data-test="track-artist"], .artist-link, a[href^="/artist/"]') || document.querySelector('#footerPlayer .artist-link');
-    const artEl = footer.querySelector('img[data-test="current-media-imagery"], .media-imagery img, figure[data-test="imagery"] img, img');
     const playBtn = getPlayPauseButton();
 
     let title = titleEl ? titleEl.textContent.trim() : 'No Track Playing';
     let artist = artistEl ? artistEl.textContent.trim() : 'Tidal';
-    let artwork = artEl ? (artEl.src || artEl.getAttribute('srcset')?.split(' ')[0] || '') : '';
+    let artwork = bestArtwork(footer);
     let isPlaying = playBtn ? (playBtn.getAttribute('data-test') === 'pause' || (playBtn.getAttribute('aria-label') || '').toLowerCase().includes('pause')) : false;
 
     if (navigator.mediaSession && navigator.mediaSession.metadata) {
       const meta = navigator.mediaSession.metadata;
       if (meta.title && (title === 'No Track Playing' || !title)) title = meta.title;
       if (meta.artist && (artist === 'Tidal' || !artist)) artist = meta.artist;
-      if (!artwork && meta.artwork && meta.artwork.length > 0) artwork = meta.artwork[meta.artwork.length - 1].src;
     }
     if (navigator.mediaSession && navigator.mediaSession.playbackState) {
       if (navigator.mediaSession.playbackState === 'playing') isPlaying = true;
@@ -73,6 +71,38 @@
       isFavorite: isTrackFavorited(favBtn)
     };
     return currentTrackInfo;
+  }
+
+  // The largest cover available: the biggest mediaSession artwork, else the biggest srcset candidate,
+  // else the player bar's image. Tidal's image URLs carry the size, so the thumbnail is upgraded to 1280.
+  function upgradeTidalImage(url) {
+    return url.replace(/\/(\d{2,4})x(\d{2,4})(\.[a-z]+)(\?.*)?$/i, (m, w, h, ext, q) => `/1280x1280${ext}${q || ''}`);
+  }
+
+  function bestArtwork(footer) {
+    const ms = navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.artwork;
+    if (ms && ms.length) {
+      let best = null, bestPx = -1;
+      for (const a of ms) {
+        const m = /(\d+)x(\d+)/.exec(a.sizes || '');
+        const px = m ? parseInt(m[1], 10) : 0;
+        if (a.src && px > bestPx) { best = a; bestPx = px; }
+      }
+      if (best) return upgradeTidalImage(best.src);
+    }
+    const img = footer && footer.querySelector('img[data-test="current-media-imagery"], .media-imagery img, figure[data-test="imagery"] img, img');
+    if (!img) return '';
+    const srcset = img.getAttribute('srcset');
+    if (srcset) {
+      let best = '', bw = -1;
+      for (const cand of srcset.split(',')) {
+        const [u, d] = cand.trim().split(/\s+/);
+        const w = parseFloat(d) || 0;
+        if (u && w > bw) { best = u; bw = w; }
+      }
+      if (best) return upgradeTidalImage(best);
+    }
+    return upgradeTidalImage(img.currentSrc || img.src || '');
   }
 
   function parseTimeToSeconds(tStr) {

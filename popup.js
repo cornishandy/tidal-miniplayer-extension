@@ -10,6 +10,9 @@ let activePresetBaseline = null;
 let stayOpen = false;
 const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
+const isPanel = query.get('panel') === '1';       // Chrome's side panel (Stay open)
+const isLongLived = isUndocked || isPanel;        // documents that survive clicks elsewhere
+if (isPanel) document.body.classList.add('panel');
 
 const BANDS = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'speed'];
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
@@ -85,6 +88,11 @@ function stopFrames() {
   physics.setFrame(null);
 }
 window.addEventListener('unload', stopFrames);
+let resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => { physics.resize(); physics.updateState(); }, 60);
+});
 
 function showHint(text, ms = 4000) {
   if (!hintEl) return;
@@ -159,6 +167,14 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
     btnMinibar.classList.add('pulse');
     showHint('Click "Mini bar" here to float it. Chrome only lets it open from this window, and it stays as long as this window is open.', 8000);
   }
+  if (isPanel) {
+    chrome.storage.local.get('minibarHint', (d) => {
+      if (!d.minibarHint) return;
+      chrome.storage.local.remove('minibarHint');
+      btnMinibar.classList.add('pulse');
+      showHint('Click "Mini bar" here to float it. It stays as long as this panel is open.', 8000);
+    });
+  }
 });
 
 // ---------- Track info polling ----------
@@ -199,10 +215,7 @@ function updatePlayerUI(info) {
 
   if (info.artwork !== lastArtwork) {
     lastArtwork = info.artwork;
-    for (const img of [artCover, artSlice]) {
-      if (info.artwork) { img.src = info.artwork; img.hidden = false; }
-      else { img.hidden = true; img.removeAttribute('src'); }
-    }
+    setArtwork(info.artwork);
   }
 
   playIcon.setAttribute('href', info.isPlaying ? '#s-pause' : '#s-play');
@@ -210,6 +223,20 @@ function updatePlayerUI(info) {
   updateHeartUI(info);
   if (minibar.win) renderMinibar(info);
 }
+
+// Both art images share one URL. Tidal's 1280 px size is missing for some old albums: step down on error.
+function setArtwork(url) {
+  for (const img of [artCover, artSlice]) {
+    if (url) { img.src = url; img.hidden = false; }
+    else { img.hidden = true; img.removeAttribute('src'); }
+  }
+}
+artCover.onerror = () => {
+  const src = artCover.getAttribute('src') || '';
+  const smaller = src.includes('/1280x1280.') ? src.replace('/1280x1280.', '/640x640.')
+    : src.includes('/640x640.') ? src.replace('/640x640.', '/320x320.') : '';
+  if (smaller) setArtwork(smaller); else setArtwork('');
+};
 
 function updateHeartUI(info) {
   const found = !!info.favoriteFound;
@@ -315,23 +342,32 @@ function handleToggleEqPower() {
 toggleEqPower.onchange = () => handleToggleEqPower();
 
 // ---------- Stay open / mini bar ----------
+// Hand the screen over to Chrome's side panel (docked beside the page, survives clicks anywhere).
+// Must run inside the click's activation; falls back to the standalone window where there is no side panel.
+async function handOverToPanel({ minibar = false } = {}) {
+  if (chrome.sidePanel && chrome.sidePanel.open) {
+    try {
+      if (minibar) await chrome.storage.local.set({ minibarHint: true });
+      const win = await chrome.windows.getCurrent();
+      await chrome.sidePanel.open({ windowId: win.id });
+      window.close();
+      return;
+    } catch (e) { /* fall through to the window */ }
+  }
+  chrome.runtime.sendMessage({ type: 'OPEN_WINDOW', minibar }, () => window.close());
+}
+
 toggleStayOpen.onchange = () => {
   stayOpen = toggleStayOpen.checked;
   chrome.runtime.sendMessage({ type: 'SET_STAY_OPEN', on: stayOpen }, () => {
-    if (stayOpen && !isUndocked) {
-      // The toolbar popup itself cannot be kept open; hand over to the window now.
-      chrome.runtime.sendMessage({ type: 'OPEN_WINDOW' }, () => window.close());
-    }
+    // The toolbar popup itself cannot be kept open: move to the side panel now.
+    if (stayOpen && !isLongLived) handOverToPanel();
   });
 };
 
 btnMinibar.onclick = () => {
-  if (isUndocked) {
-    openMinibar();
-  } else {
-    // Chrome will only float a window from a click inside a page that stays alive: the Stay-open window.
-    chrome.runtime.sendMessage({ type: 'OPEN_WINDOW', minibar: true }, () => window.close());
-  }
+  if (isLongLived) openMinibar();
+  else handOverToPanel({ minibar: true }); // Chrome only floats a window from a click inside a page that stays alive
 };
 
 // The mini bar is a Document Picture-in-Picture window owned by this (Stay-open) window.
@@ -687,7 +723,7 @@ document.querySelectorAll('.eq-nudge-btn').forEach(btn => {
 
 // Hint from the background when the window was opened for the mini bar and already existed.
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === 'MINIBAR_HINT' && isUndocked) {
+  if (message?.type === 'MINIBAR_HINT' && isLongLived) {
     btnMinibar.classList.remove('pulse');
     void btnMinibar.offsetWidth;
     btnMinibar.classList.add('pulse');
