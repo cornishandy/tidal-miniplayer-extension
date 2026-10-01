@@ -21,11 +21,8 @@ const RUNTIME = [
   'popup.html',
   'popup.css',
   'popup.js',
-  'router-visualizer.js',
+  'physics-view.js',
   'themes.css',
-  'tidal-bridge.js',
-  'miniplayer.html',
-  'miniplayer.js',
   'icons'
 ];
 

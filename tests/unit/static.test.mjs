@@ -16,7 +16,7 @@ test('every file the manifest references exists', () => {
     manifest.action.default_popup,
     ...Object.values(manifest.icons),
     ...manifest.content_scripts.flatMap((c) => c.js),
-    ...manifest.web_accessible_resources.flatMap((w) => w.resources).filter((r) => !r.includes('*'))
+    ...(manifest.web_accessible_resources || []).flatMap((w) => w.resources).filter((r) => !r.includes('*'))
   ];
   for (const f of files) assert.ok(existsSync(join(root, f)), `missing ${f}`);
 });
@@ -45,15 +45,23 @@ test('fallback window is the working undocked popup, not the broken miniplayer p
 });
 
 test('no network code: the shipped scripts never contact Tidal or any server', () => {
-  for (const f of ['background.js', 'content.js', 'popup.js', 'offscreen.js', 'router-visualizer.js']) {
+  for (const f of ['background.js', 'content.js', 'popup.js', 'offscreen.js', 'physics-view.js']) {
     const src = readFileSync(join(root, f), 'utf8');
     assert.doesNotMatch(src, /\bfetch\s*\(|XMLHttpRequest|tidal\.com\/v1|api\.tidal\.com/, `${f} contains network code`);
   }
 });
 
-test('retired surfaces stay out: no Playlists, Playlist Lab or favorite button (decision 2026-10-01)', () => {
+test('retired surfaces stay out: no Playlists, Lab, header icons, floating button or dead files (decisions 2026-10-01)', () => {
   const popup = readFileSync(join(root, 'popup.html'), 'utf8');
   const content = readFileSync(join(root, 'content.js'), 'utf8');
-  assert.doesNotMatch(popup, /tab-btn-playlists|tab-btn-lab|player-btn-fav|lab-btn-create/);
-  assert.doesNotMatch(content, /FETCH_USER_PLAYLISTS|CREATE_PLAYLIST_WITH_TRACKS|TOGGLE_FAVORITE|getTidalSession/);
+  assert.doesNotMatch(popup, /tab-btn-playlists|tab-btn-lab|lab-btn-create|btn-size-toggle|btn-micro-toggle|btn-always-on-top|btn-undock|toggle-floating-btn|btn-open-router/);
+  assert.doesNotMatch(content, /FETCH_USER_PLAYLISTS|CREATE_PLAYLIST_WITH_TRACKS|getTidalSession|injectFloatingButton|documentPictureInPicture/);
+  for (const f of ['tidal-bridge.js', 'miniplayer.html', 'miniplayer.js', 'router-visualizer.js']) assert.ok(!existsSync(join(root, f)), `${f} should be gone`);
+  assert.deepEqual(manifest.content_scripts.map((c) => c.js).flat(), ['content.js']);
+  assert.equal(manifest.web_accessible_resources, undefined, 'nothing needs to be web-accessible any more');
+});
+
+test('no emoji in the popup markup (icons are drawn)', () => {
+  const popup = readFileSync(join(root, 'popup.html'), 'utf8');
+  assert.doesNotMatch(popup, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2728}\u{2B50}]/u, 'emoji found in popup.html');
 });
