@@ -66,3 +66,31 @@ test('no emoji in the popup markup (icons are drawn)', () => {
   const popup = readFileSync(join(root, 'popup.html'), 'utf8');
   assert.doesNotMatch(popup, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{26FF}\u{2728}\u{2B50}]/u, 'emoji found in popup.html');
 });
+
+test('every file the worker injects with scripting.executeScript exists (a deleted file broke re-injection after a reload)', () => {
+  const lists = [...background.matchAll(/files:\s*(\[[^\]]*\]|[A-Z_]+)/g)].map((m) => m[1]);
+  assert.ok(lists.length > 0, 'no executeScript file list found');
+  for (const l of lists) {
+    const files = l.startsWith('[')
+      ? [...l.matchAll(/'([^']+)'/g)].map((m) => m[1])
+      : [...(background.match(new RegExp(`const ${l} = \\[([^\\]]*)\\]`))?.[1] || '').matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    assert.ok(files.length > 0, `empty file list ${l}`);
+    for (const f of files) assert.ok(existsSync(join(root, f)), `executeScript references a missing file: ${f}`);
+  }
+});
+
+test('keyboard and screen-reader access: sliders and icon-only controls have names, band buttons expose their state', () => {
+  const popup = readFileSync(join(root, 'popup.html'), 'utf8');
+  for (const m of popup.matchAll(/<input[^>]*type="range"[^>]*>/g)) assert.match(m[0], /aria-label="[^"]+"/, `slider without a name: ${m[0]}`);
+  for (const m of popup.matchAll(/<button[^>]*>/g)) assert.match(m[0], /title="[^"]+"|aria-label="[^"]+"/, `button without a name: ${m[0]}`);
+  assert.match(popup, /id="toggle-eq-power" aria-label="Audio EQ"/);
+  assert.equal((popup.match(/class="band-tag" aria-pressed="true"/g) || []).length, 7, 'every band button starts as pressed (on)');
+  assert.match(popup, /id="hint" role="status" aria-live="polite"/);
+});
+
+test('keyboard focus is never hidden: focus-visible rings exist and no control removes its outline without one', () => {
+  const css = readFileSync(join(root, 'popup.css'), 'utf8');
+  assert.ok((css.match(/:focus-visible/g) || []).length >= 4, 'focus-visible rules missing');
+  const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => /outline:\s*none/.test(m[2])).map((m) => m[1].trim());
+  for (const sel of rules) assert.match(sel, /:focus-visible/, `"${sel}" hides the outline without a focus-visible replacement`);
+});

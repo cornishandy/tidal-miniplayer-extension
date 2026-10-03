@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Universal Mini-Player & DJ Bass Booster",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "description": "DJ bass EQ for Tidal and any tab: anti-distortion HPF, bass, mid, high, auto-balancing, master volume and pitch/speed, with a response view, transport controls and an always-on-top mini bar.",
   "permissions": [
     "tabCapture",

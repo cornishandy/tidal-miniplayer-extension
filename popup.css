@@ -420,7 +420,6 @@ input:checked + .slider-round:before {
   border-radius: 6px;
   color: var(--text-main, #fff);
   font-size: 13px;
-  outline: none;
 }
 
 /* Physics, on the main screen */
@@ -574,7 +573,6 @@ input:checked + .slider-round:before {
   height: 6px;
   border-radius: 3px;
   background: #2a2a35;
-  outline: none;
   margin: 0;
   cursor: pointer;
 }
@@ -681,6 +679,30 @@ input:checked + .slider-round:before {
 
 .hint[hidden] {
   display: none;
+}
+
+/* ---------- Keyboard focus: a visible ring on every control. Mouse clicks show none (:focus-visible). ---------- */
+:focus-visible {
+  outline: 2px solid var(--accent, #00e5ff);
+  outline-offset: 2px;
+}
+
+.preset-dropdown:focus-visible {
+  outline-offset: 0;
+}
+
+/* Sliders: ring the thumb, not the whole track */
+.eq-slider:focus-visible {
+  outline: none;
+}
+
+.eq-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--bg-primary, #121216), 0 0 0 5px var(--accent, #00e5ff);
+}
+
+/* Switches: the input is invisible, so the ring goes on the drawn track */
+.switch input:focus-visible + .slider-round {
+  box-shadow: 0 0 0 2px var(--bg-primary, #121216), 0 0 0 4px var(--accent, #00e5ff);
 }
 
 /* Mini bar (Document Picture-in-Picture window) */
