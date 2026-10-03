@@ -4,14 +4,14 @@ The actual surfaces, controls and workflows, with review coverage. Updated as ba
 
 Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and verified · ✖ removed
 
-## Surfaces (as of 1.3.4, `075e241`)
+## Surfaces (as of 1.3.5, `41ab5ca`)
 
 | Surface | How you reach it | Regions (top → bottom) | Status |
 |---|---|---|---|
 | **The screen** (440 × 585) | Click the extension icon (or the Stay-open window) | Art slice (left) · full cover (top right) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · presets · physics (live spectrum + response) · sliders with band switches · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–4; **confirmed by you 2026-10-03** |
 | Band switches | Tag at the left of each row | Popup: LOW · HPF · MID · HI · AUTO · VOL · SPD text tags. Side panel: icon buttons (R-21, option A) | ✔ R-15, R-21 |
 | Physics | On the screen | **Live spectrum** (in vs out, real audio) · response curve (settings) · readout | ✔ R-12 → R-18 ("make it real") |
-| **Side panel** (Stay open) | Footer switch, then the toolbar icon; or Alt+M | Same screen docked beside the page in Chrome's side panel; two-line slider rows; stays while you click anything | ✔ R-20; **confirmed by you 2026-10-03** |
+| **Side panel** (Stay open) | Footer switch, then the toolbar icon; or Alt+M | Same screen docked beside the page; no art slice; under 400 px the player stacks (small cover, two-line title, full-width transport), from 400 px up the normal layout; two-line slider rows; follows the drag live; Chrome's floor is 360 px | ✔ R-20 confirmed by you 2026-10-03; **R-23 stacked layout: your look pending** |
 | Standalone window | Fallback only (Chrome without a side panel) | Same screen in a window | ✔ R-06 (fallback) |
 | Mini bar | *Mini bar* in the side panel (or the window) | Always-on-top bar: art, title, ♥, −15 s, play, +30 s, EQ pill, ✕ | ✔ R-10; **confirmed by you 2026-10-03** |
 | Keyboard shortcuts | Alt+M, Alt+E | Open the panel · toggle EQ (on the playing tab) | ○ static only; **your check asked 2026-10-03** |
@@ -43,4 +43,4 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 
 ## Next review point
 
-Reload to 1.3.4 and check that your open Tidal tab works without a refresh. Then: the year source, the preset list, and the cut-over.
+Reload to 1.3.5: check that your open Tidal tab works without a refresh, then drag the panel narrow and wide and judge the stacked layout. Then: the year source, the preset list, and the cut-over.

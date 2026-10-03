@@ -809,9 +809,26 @@ body.minibar {
 /* ---------- Side panel (Stay open): fills the panel, scrolls, roomier drawings ---------- */
 body.panel {
   width: auto;
-  min-width: 300px;
+  min-width: 260px;
   height: 100vh;
   overflow-y: auto;
+}
+
+/* No art slice in the panel: the width goes to the controls (R-23). The full cover stays. */
+body.panel .art-strip {
+  display: none;
+}
+
+/* The badge yields before anything else when the panel is narrow */
+body.panel .power-badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: none;
+}
+
+body.panel .foot {
+  flex-wrap: wrap;
+  gap: 6px 12px;
 }
 
 body.panel .phys-canvas.live {
@@ -855,15 +872,70 @@ body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="down"] { grid-are
 body.panel .eq-row:not(.toggle-row) .eq-slider { grid-area: slider; }
 body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="up"] { grid-area: up; justify-self: start; }
 
-@media (max-width: 400px) {
-  body.panel .art-strip {
-    width: 44px;
-    flex: 0 0 44px;
+/* ---------- Narrow panel (under 400 px): the player stacks vertically; wider than that it is the normal layout.
+   The rules below respond live as the panel's edge is dragged. ---------- */
+@media (max-width: 399px) {
+  body.panel .np {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-areas:
+      "cover title"
+      "cover artist"
+      "transport transport"
+      "progress progress";
+    column-gap: 10px;
+    row-gap: 0;
+    align-items: center;
+  }
+
+  body.panel .np-main {
+    display: contents; /* title, artist and transport become grid items of .np */
   }
 
   body.panel .np-cover {
-    width: 64px;
-    height: 64px;
+    grid-area: cover;
+    width: 48px;
+    height: 48px;
+    align-self: center;
+  }
+
+  body.panel .np-title {
+    grid-area: title;
+    align-self: end;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    font-size: 15px;
+  }
+
+  body.panel .np-artist {
+    grid-area: artist;
+    align-self: start;
+  }
+
+  body.panel .transport {
+    grid-area: transport;
+    justify-content: space-between;
+    margin-top: 8px;
+  }
+
+  body.panel .progress {
+    grid-area: progress;
+  }
+
+  body.panel .status-bar {
+    gap: 8px;
+  }
+
+  body.panel .eq-pane {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  body.panel .phys-hdr em {
+    display: none; /* the curve shows the settings; the one-line summary does not fit */
   }
 }
 

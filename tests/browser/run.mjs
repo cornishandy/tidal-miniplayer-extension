@@ -542,23 +542,37 @@ try {
   record('W-SIDE-PANEL-OPEN', 'The side panel document opened from the click', panelContexts > 0 ? 'PASS' : 'NOT RUN',
     { panelContexts, note: panelContexts > 0 ? '' : 'Headless Chrome has no side panel UI; confirm on a real Chrome window.' });
 
-  // ---- W-PANEL-LAYOUT: the panel page fits narrow and wide panels without horizontal overflow ----
+  // ---- W-PANEL-LAYOUT: the panel adapts live to its width (R-23): under 400 px the player stacks (no art slice,
+  // small cover, full-width transport); from 400 px up it is the normal layout. Chrome's own floor is 360 px. ----
   const panelPage = await context.newPage();
   const panelErrors = [];
   panelPage.on('pageerror', (e) => panelErrors.push(String(e)));
   watchRequests(panelPage);
   await panelPage.goto(`chrome-extension://${EXT_ID}/popup.html?panel=1`);
-  await sleep(1200);
+  await sleep(1500);
   const layoutAt = async (width) => {
     await panelPage.setViewportSize({ width, height: 900 });
-    await sleep(300);
-    return panelPage.evaluate(() => ({
-      scrollW: document.documentElement.scrollWidth, clientW: document.documentElement.clientWidth,
-      sliderW: Math.round(document.getElementById('slider-bass').getBoundingClientRect().width),
-      bodyH: Math.round(document.body.scrollHeight), panelClass: document.body.classList.contains('panel')
-    }));
+    await sleep(350);
+    const m = await panelPage.evaluate(() => {
+      const np = document.querySelector('.np'), cs = getComputedStyle(np);
+      const npInner = np.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      const cover = document.getElementById('art-cover');
+      return {
+        scrollW: document.documentElement.scrollWidth, clientW: document.documentElement.clientWidth,
+        sliderW: Math.round(document.getElementById('slider-bass').getBoundingClientRect().width),
+        panelClass: document.body.classList.contains('panel'),
+        stripShown: getComputedStyle(document.querySelector('.art-strip')).display !== 'none',
+        coverShown: !cover.hidden, coverW: Math.round(cover.getBoundingClientRect().width),
+        stacked: getComputedStyle(document.querySelector('.np-main')).display === 'contents',
+        transportW: Math.round(document.querySelector('.transport').getBoundingClientRect().width), npInner: Math.round(npInner),
+        titleWraps: getComputedStyle(document.getElementById('player-title')).whiteSpace !== 'nowrap'
+      };
+    });
+    await panelPage.screenshot({ path: join(outDir, `panel-${width}.png`) });
+    return m;
   };
-  const narrow = await layoutAt(360);
+  const w300 = await layoutAt(300);
+  const w360 = await layoutAt(360);
   // Band buttons in the panel are icons (option A): icon visible, text hidden, slash when off.
   const bandBtn = await panelPage.evaluate(() => {
     const b = document.querySelector('.band-tag[data-band="mid"]');
@@ -572,16 +586,19 @@ try {
     const b = document.querySelector('.band-tag[data-band="mid"]');
     return { off: b.classList.contains('off'), slash: getComputedStyle(b, '::after').content !== 'none', rowDim: b.closest('.eq-row').classList.contains('is-off') };
   });
-  await panelPage.screenshot({ path: join(outDir, 'panel-360.png') });
+  await panelPage.screenshot({ path: join(outDir, 'panel-360-band-off.png') });
   await panelPage.click('.band-tag[data-band="mid"]'); // back on
   await sleep(200);
-  const wide = await layoutAt(480);
-  await panelPage.screenshot({ path: join(outDir, 'panel-480.png') });
+  const w400 = await layoutAt(400);
+  const w480 = await layoutAt(480);
   await panelPage.close();
-  record('W-PANEL-LAYOUT', 'Side-panel page adapts: no horizontal overflow at 360 or 480 px, sliders stay usable, band icon buttons toggle, no errors',
-    narrow.panelClass && narrow.scrollW <= narrow.clientW && wide.scrollW <= wide.clientW && narrow.sliderW >= 150 && wide.sliderW >= 250 && panelErrors.length === 0
+  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown;
+  const stackedOk = (m, minSlider) => fits(m) && m.stacked && m.coverW === 48 && m.titleWraps && m.transportW >= m.npInner - 2 && m.sliderW >= minSlider;
+  const normalOk = (m, minSlider) => fits(m) && !m.stacked && m.coverW === 76 && !m.titleWraps && m.sliderW >= minSlider;
+  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 48 px cover, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band icon buttons toggle; no errors',
+    stackedOk(w300, 130) && stackedOk(w360, 150) && normalOk(w400, 150) && normalOk(w480, 250) && panelErrors.length === 0
       && bandBtn.iconW >= 14 && bandBtn.textHidden && bandBtn.size >= 26 && bandOff.off && bandOff.slash && bandOff.rowDim ? 'PASS' : 'FAIL',
-    { narrow, wide, bandBtn, bandOff, panelErrors, screenshots: [`results/${label}/panel-360.png`, `results/${label}/panel-480.png`] });
+    { w300, w360, w400, w480, bandBtn, bandOff, panelErrors, screenshots: [300, 360, 400, 480].map((w) => `results/${label}/panel-${w}.png`) });
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();
