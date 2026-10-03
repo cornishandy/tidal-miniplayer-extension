@@ -543,7 +543,7 @@ try {
     { panelContexts, note: panelContexts > 0 ? '' : 'Headless Chrome has no side panel UI; confirm on a real Chrome window.' });
 
   // ---- W-PANEL-LAYOUT: the panel adapts live to its width (R-23): under 400 px the player stacks (no art slice,
-  // small cover, full-width transport); from 400 px up it is the normal layout. Chrome's own floor is 360 px. ----
+  // small cover top right, full-width transport); from 400 px up it is the normal layout. Chrome's own floor is 360 px. ----
   const panelPage = await context.newPage();
   const panelErrors = [];
   panelPage.on('pageerror', (e) => panelErrors.push(String(e)));
@@ -563,6 +563,9 @@ try {
         panelClass: document.body.classList.contains('panel'),
         stripShown: getComputedStyle(document.querySelector('.art-strip')).display !== 'none',
         coverShown: !cover.hidden, coverW: Math.round(cover.getBoundingClientRect().width),
+        // The cover sits top right in both layouts: right of the title, flush with the player's right content edge.
+        coverRightOfTitle: cover.getBoundingClientRect().left >= document.getElementById('player-title').getBoundingClientRect().right,
+        coverEdgeGap: Math.round(np.getBoundingClientRect().right - parseFloat(cs.paddingRight) - cover.getBoundingClientRect().right),
         stacked: getComputedStyle(document.querySelector('.np-main')).display === 'contents',
         transportW: Math.round(document.querySelector('.transport').getBoundingClientRect().width), npInner: Math.round(npInner),
         titleWraps: getComputedStyle(document.getElementById('player-title')).whiteSpace !== 'nowrap'
@@ -592,10 +595,10 @@ try {
   const w400 = await layoutAt(400);
   const w480 = await layoutAt(480);
   await panelPage.close();
-  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown;
-  const stackedOk = (m, minSlider) => fits(m) && m.stacked && m.coverW === 48 && m.titleWraps && m.transportW >= m.npInner - 2 && m.sliderW >= minSlider;
+  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown && m.coverRightOfTitle && m.coverEdgeGap <= 1;
+  const stackedOk = (m, minSlider) => fits(m) && m.stacked && m.coverW === 56 && m.titleWraps && m.transportW >= m.npInner - 2 && m.sliderW >= minSlider;
   const normalOk = (m, minSlider) => fits(m) && !m.stacked && m.coverW === 76 && !m.titleWraps && m.sliderW >= minSlider;
-  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 48 px cover, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band icon buttons toggle; no errors',
+  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band icon buttons toggle; no errors',
     stackedOk(w300, 130) && stackedOk(w360, 150) && normalOk(w400, 150) && normalOk(w480, 250) && panelErrors.length === 0
       && bandBtn.iconW >= 14 && bandBtn.textHidden && bandBtn.size >= 26 && bandOff.off && bandOff.slash && bandOff.rowDim ? 'PASS' : 'FAIL',
     { w300, w360, w400, w480, bandBtn, bandOff, panelErrors, screenshots: [300, 360, 400, 480].map((w) => `results/${label}/panel-${w}.png`) });
