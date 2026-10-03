@@ -14,7 +14,7 @@ const isPanel = query.get('panel') === '1';       // Chrome's side panel (Stay o
 const isLongLived = isUndocked || isPanel;        // documents that survive clicks elsewhere
 if (isPanel) document.body.classList.add('panel');
 
-const BANDS = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'speed'];
+const BANDS = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'pitch'];
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
 
 // DOM: player
@@ -63,7 +63,7 @@ const valAuto = document.getElementById('val-auto');
 
 // Per-band on/off. Off keeps the slider value but takes that stage out of the chain.
 // `comp` is the Auto-Balancing switch (autoBalance); the others live in stageBypass.
-let bandOff = { hpf: false, bass: false, mid: false, high: false, comp: false, gain: false, speed: false };
+let bandOff = { hpf: false, bass: false, mid: false, high: false, comp: false, gain: false, pitch: false };
 
 const physics = new PhysicsView({
   liveCanvas: document.getElementById('live-canvas'),
@@ -137,11 +137,11 @@ themeDots.querySelectorAll('.dot').forEach((dot) => {
 
 // ---------- Initial state ----------
 function normaliseBypass(p) {
-  // Older saved values used `eq` for the whole 3-band EQ and `comp` beside autoBalance.
+  // Older saved values used `eq` for the whole 3-band EQ, `comp` beside autoBalance, and `speed` for the pitch switch.
   const b = { ...(p.stageBypass || {}) };
   if (b.eq) { b.bass = b.mid = b.high = true; delete b.eq; }
   if (b.comp) { p.autoBalance = false; delete b.comp; }
-  p.stageBypass = { hpf: !!b.hpf, bass: !!b.bass, mid: !!b.mid, high: !!b.high, gain: !!b.gain, speed: !!b.speed };
+  p.stageBypass = { hpf: !!b.hpf, bass: !!b.bass, mid: !!b.mid, high: !!b.high, gain: !!b.gain, pitch: !!(b.pitch || b.speed) };
   return p;
 }
 
@@ -329,7 +329,6 @@ function handleToggleEqPower() {
       if (res?.success) {
         updateEqPowerUI(true, res.tabTitle);
         physics.updateState(currentParams, true);
-        applySpeedToPage();
       } else {
         updateEqPowerUI(false);
         alert(res?.error || 'Could not attach to the audio tab. Make sure Tidal or a music tab is open.');
@@ -496,9 +495,9 @@ function checkPresetModificationState() {
     Math.abs(currentUI.mid - b.mid) > 0.01 ||
     Math.abs(currentUI.high - b.high) > 0.01 ||
     Math.abs(currentUI.gain - b.gain) > 0.01 ||
-    Math.abs(currentUI.pitch - (b.pitch || 1.0)) > 0.01 ||
+    Math.abs((currentUI.semitones || 0) - (b.semitones || 0)) > 0.01 ||
     currentUI.autoBalance !== b.autoBalance ||
-    ['hpf', 'bass', 'mid', 'high', 'gain', 'speed'].some((k) => !!cb[k] !== !!bb[k]);
+    ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch'].some((k) => !!cb[k] !== !!bb[k]);
 
   const isFactory = factoryPresetNames.includes(currentPresetName);
   if (isModified) {
@@ -605,7 +604,7 @@ const fmt = {
   mid: (v) => `${parseFloat(v) >= 0 ? '+' : ''}${parseFloat(v).toFixed(1)} dB`,
   high: (v) => `${parseFloat(v) >= 0 ? '+' : ''}${parseFloat(v).toFixed(1)} dB`,
   gain: (v) => `${Math.round(parseFloat(v) * 100)}%`,
-  pitch: (v) => `${parseFloat(v).toFixed(2)}x`
+  pitch: (v) => { const st = parseFloat(v); return `${st > 0 ? '+' : ''}${st.toFixed(1)} st`; }
 };
 
 function renderBandTags() {
@@ -615,7 +614,7 @@ function renderBandTags() {
     tag.classList.toggle('off', off);
     tag.setAttribute('aria-pressed', String(!off));
     tag.closest('.eq-row')?.classList.toggle('is-off', off);
-    const names = { hpf: 'High-pass filter', bass: 'Bass', mid: 'Mid', high: 'High', comp: 'Auto-Balancing', gain: 'Master volume', speed: 'Pitch / Speed' };
+    const names = { hpf: 'High-pass filter', bass: 'Bass', mid: 'Mid', high: 'High', comp: 'Auto-Balancing', gain: 'Master volume', pitch: 'Pitch' };
     tag.title = off
       ? `${names[band]} is off (the value is kept). Click to switch it back on.`
       : `${names[band]} is on. Click to switch it off without losing the value.`;
@@ -629,10 +628,12 @@ function applyParamsToUI(p) {
   if (typeof p.mid === 'number') { sliderMid.value = p.mid; valMid.textContent = fmt.mid(p.mid); }
   if (typeof p.high === 'number') { sliderHigh.value = p.high; valHigh.textContent = fmt.high(p.high); }
   if (typeof p.gain === 'number') { sliderGain.value = p.gain; valGain.textContent = fmt.gain(p.gain); }
-  if (typeof p.pitch === 'number') { sliderPitch.value = p.pitch; valPitch.textContent = fmt.pitch(p.pitch); }
+  // Semitones (1.4.0). Presets saved before that carry a speed ratio under `pitch`, which is ignored: they load at 0 st.
+  const st = typeof p.semitones === 'number' ? p.semitones : 0;
+  sliderPitch.value = st; valPitch.textContent = fmt.pitch(st);
   const b = p.stageBypass || {};
   bandOff = {
-    hpf: !!b.hpf, bass: !!b.bass, mid: !!b.mid, high: !!b.high, gain: !!b.gain, speed: !!b.speed,
+    hpf: !!b.hpf, bass: !!b.bass, mid: !!b.mid, high: !!b.high, gain: !!b.gain, pitch: !!(b.pitch || b.speed),
     comp: typeof p.autoBalance === 'boolean' ? !p.autoBalance : bandOff.comp
   };
   renderBandTags();
@@ -646,18 +647,11 @@ function getParamsFromUI() {
     mid: parseFloat(sliderMid.value),
     high: parseFloat(sliderHigh.value),
     gain: parseFloat(sliderGain.value),
-    pitch: parseFloat(sliderPitch.value),
+    semitones: parseFloat(sliderPitch.value),
     autoBalance: !bandOff.comp,
     bypass: sel?.bypass === true,
-    stageBypass: { hpf: bandOff.hpf, bass: bandOff.bass, mid: bandOff.mid, high: bandOff.high, gain: bandOff.gain, speed: bandOff.speed }
+    stageBypass: { hpf: bandOff.hpf, bass: bandOff.bass, mid: bandOff.mid, high: bandOff.high, gain: bandOff.gain, pitch: bandOff.pitch }
   };
-}
-
-// Pitch / Speed is applied to the page's media element, so it is sent separately (only while the EQ is on).
-function applySpeedToPage() {
-  if (!isCapturingActive) return;
-  const speed = bandOff.speed ? 1.0 : parseFloat(sliderPitch.value);
-  chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SET_SPEED', speed } });
 }
 
 function sendAudioParamUpdate() {
@@ -673,7 +667,6 @@ document.querySelectorAll('.band-tag').forEach((tag) => {
     bandOff[band] = !bandOff[band];
     renderBandTags();
     sendAudioParamUpdate();
-    if (band === 'speed') applySpeedToPage();
   };
 });
 
@@ -700,14 +693,14 @@ setupValueToggle(valHpf, sliderHpf, 20, fmt.hpf);
 setupValueToggle(valMid, sliderMid, 0, fmt.mid);
 setupValueToggle(valHigh, sliderHigh, 0, fmt.high);
 setupValueToggle(valGain, sliderGain, 1.0, fmt.gain);
-setupValueToggle(valPitch, sliderPitch, 1.0, fmt.pitch, applySpeedToPage);
+setupValueToggle(valPitch, sliderPitch, 0, fmt.pitch);
 
 sliderBass.oninput = (e) => { valBass.textContent = fmt.bass(e.target.value); sendAudioParamUpdate(); };
 sliderHpf.oninput = (e) => { valHpf.textContent = fmt.hpf(e.target.value); sendAudioParamUpdate(); };
 sliderMid.oninput = (e) => { valMid.textContent = fmt.mid(e.target.value); sendAudioParamUpdate(); };
 sliderHigh.oninput = (e) => { valHigh.textContent = fmt.high(e.target.value); sendAudioParamUpdate(); };
 sliderGain.oninput = (e) => { valGain.textContent = fmt.gain(e.target.value); sendAudioParamUpdate(); };
-sliderPitch.oninput = (e) => { valPitch.textContent = fmt.pitch(e.target.value); sendAudioParamUpdate(); applySpeedToPage(); };
+sliderPitch.oninput = (e) => { valPitch.textContent = fmt.pitch(e.target.value); sendAudioParamUpdate(); };
 
 // − / + nudges; Shift-click = 5× finer
 document.querySelectorAll('.eq-nudge-btn').forEach(btn => {

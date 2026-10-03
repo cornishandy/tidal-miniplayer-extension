@@ -49,7 +49,7 @@ const FACTORY_PRESETS = {
     mid: 1.5,
     high: 2.0,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: true
   },
   "Clean DJ (Anti-Distortion)": {
@@ -58,7 +58,7 @@ const FACTORY_PRESETS = {
     mid: 1.0,
     high: 2.5,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: true
   },
   "Deep Sub-Bass (Dub/Trap)": {
@@ -67,7 +67,7 @@ const FACTORY_PRESETS = {
     mid: 0.0,
     high: 1.0,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: true
   },
   "Club / Festival Bangers": {
@@ -76,7 +76,7 @@ const FACTORY_PRESETS = {
     mid: 2.0,
     high: 3.5,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: true
   },
   "Audiophile Clean (Flat Bass)": {
@@ -85,7 +85,7 @@ const FACTORY_PRESETS = {
     mid: 0.5,
     high: 1.5,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: false
   },
   "Late Night Movies & Dialogue": {
@@ -94,7 +94,7 @@ const FACTORY_PRESETS = {
     mid: 3.0,
     high: 1.0,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: true
   },
   "Acoustic & Live": {
@@ -103,7 +103,7 @@ const FACTORY_PRESETS = {
     mid: 2.0,
     high: 3.0,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: false
   },
   "Flat (Bypass)": {
@@ -112,7 +112,7 @@ const FACTORY_PRESETS = {
     mid: 0.0,
     high: 0.0,
     gain: 1.0,
-    pitch: 1.0,
+    semitones: 0,
     autoBalance: false,
     bypass: true
   }

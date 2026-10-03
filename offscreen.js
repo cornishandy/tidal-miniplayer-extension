@@ -19,6 +19,13 @@ let volumeGain = null;
 let masterLimiter = null;
 let outputCeiling = null;
 
+// Pitch (key shift, 1.4.0): a worklet stage at the head of the DSP path, routed around unless a shift is set.
+const PITCH_WORKLET = 'pitch-shifter.worklet.js';
+let pitchNode = null;
+let pitchDryGain = null;
+let pitchWetGain = null;
+let pitchError = null; // set if the worklet could not be loaded; the EQ still runs, pitch has no effect
+
 // Live display taps: what the tab sends (before the chain) and what you hear (after the ceiling).
 let inputAnalyser = null;
 let outputAnalyser = null;
@@ -49,7 +56,7 @@ let currentParams = {
   mid: 1.5,
   high: 2.0,
   gain: 1.0,
-  pitch: 1.0,
+  semitones: 0,
   autoBalance: true,
   bypass: false,
   stageBypass: {
@@ -59,7 +66,7 @@ let currentParams = {
     high: false,
     comp: false,
     gain: false,
-    speed: false
+    pitch: false
   }
 };
 
@@ -72,8 +79,15 @@ function bypassState() {
     mid: !!(b.mid || b.eq),
     high: !!(b.high || b.eq),
     comp: !!b.comp || !currentParams.autoBalance,
-    gain: !!b.gain
+    gain: !!b.gain,
+    pitch: !!(b.pitch || b.speed) // `speed` is the pre-1.4 name of this switch
   };
+}
+
+// The shift the worklet should apply: 0 when the stage is switched off. Legacy `pitch` (a speed ratio) is ignored.
+function pitchSetting() {
+  const st = Number(currentParams.semitones);
+  return bypassState().pitch || !isFinite(st) ? 0 : Math.max(-12, Math.min(12, st));
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -98,7 +112,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'GET_AUDIO_STATUS':
-      sendResponse({ isCapturing, currentParams });
+      sendResponse({ isCapturing, currentParams, pitchAvailable: !!pitchNode, pitchError });
       return true;
 
     case 'GET_AUDIO_FRAME':
@@ -164,6 +178,21 @@ async function startCapture(streamId, initialParams = {}) {
     }
 
     sourceNode = audioCtx.createMediaStreamSource(currentStream);
+
+    // Pitch stage (key shift). The module is loaded per context; if that fails the EQ runs without it.
+    pitchNode = null;
+    pitchError = null;
+    try {
+      await audioCtx.audioWorklet.addModule(chrome.runtime.getURL(PITCH_WORKLET));
+      pitchNode = new AudioWorkletNode(audioCtx, 'pitch-shifter', {
+        numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
+      });
+      pitchNode.parameters.get('semitones').value = pitchSetting();
+    } catch (err) {
+      pitchError = err.message;
+    }
+    pitchDryGain = audioCtx.createGain();
+    pitchWetGain = audioCtx.createGain();
 
     // 1. Dual-Path Gain Nodes (True Bypass vs DSP Chain)
     directPassThroughGain = audioCtx.createGain();
@@ -232,7 +261,7 @@ async function startCapture(streamId, initialParams = {}) {
     // === Signal Routing Architecture ===
     // Source -> Split into:
     //   Path A: Direct Passthrough (for true bypass)
-    //   Path B: DSP Chain -> HPF -> Bass -> Mid -> High -> Split into:
+    //   Path B: DSP Chain -> Pitch (dry, or the shifter when a shift is set) -> HPF -> Bass -> Mid -> High -> Split into:
     //             -> AutoBalance Wet (Comp)
     //             -> AutoBalance Dry (Bypass)
     //          -> Sum -> Master Volume -> Master Limiter -> Output Ceiling -> Destination
@@ -245,7 +274,13 @@ async function startCapture(streamId, initialParams = {}) {
     directPassThroughGain.connect(audioCtx.destination);
 
     sourceNode.connect(dspPathGain);
-    dspPathGain.connect(hpfNode);
+    dspPathGain.connect(pitchDryGain);
+    pitchDryGain.connect(hpfNode);
+    if (pitchNode) {
+      dspPathGain.connect(pitchNode);
+      pitchNode.connect(pitchWetGain);
+      pitchWetGain.connect(hpfNode);
+    }
     hpfNode.connect(bassNode);
     bassNode.connect(midNode);
     midNode.connect(highNode);
@@ -285,6 +320,9 @@ function stopCapture() {
   }
   isCapturing = false;
   sourceNode = null;
+  pitchNode = null;
+  pitchDryGain = null;
+  pitchWetGain = null;
   inputAnalyser = null;
   outputAnalyser = null;
 }
@@ -304,6 +342,7 @@ function updateParams(newParams) {
   if (midNode) midNode.gain.setTargetAtTime(off.mid ? 0 : (currentParams.mid || 0), now, rampTime);
   if (highNode) highNode.gain.setTargetAtTime(off.high ? 0 : (currentParams.high || 0), now, rampTime);
   if (volumeGain) volumeGain.gain.setTargetAtTime(off.gain ? 1.0 : (currentParams.gain || 1.0), now, rampTime);
+  if (pitchNode) pitchNode.parameters.get('semitones').setTargetAtTime(pitchSetting(), now, rampTime);
 
   applyRoutingState();
 }
@@ -325,4 +364,9 @@ function applyRoutingState({ immediate = false } = {}) {
   set(directPassThroughGain, isBypass ? 1.0 : 0.0);
   set(autoBalanceWetGain, isCompBypassed ? 0.0 : 1.0);
   set(autoBalanceBypassGain, isCompBypassed ? 1.0 : 0.0);
+
+  // The shifter is in the path only while a shift is set (it adds about 0.14 s of delay); 0 st is a true bypass.
+  const shifting = !!pitchNode && Math.abs(pitchSetting()) >= 0.05;
+  set(pitchWetGain, shifting ? 1.0 : 0.0);
+  set(pitchDryGain, shifting ? 0.0 : 1.0);
 }
