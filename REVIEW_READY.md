@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-03 (round 7: your all-clear on 1.3.3; 1.3.4 fixes re-injection and adds keyboard access)
+# Review Ready: 2026-10-03 (round 8: the side panel adapts to its width, no art slice there; 1.3.5)
 
 ## Identity
 
@@ -14,10 +14,10 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` |
-| Version | **1.3.4** (the live install is 1.1.0) |
+| Version | **1.3.5** (the live install is 1.1.0) |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (unchanged: same folder) |
-| Runtime source commit | `075e241` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `ff8d9b1d9ea6cc6d…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `41ab5ca` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `fd58d9407bcb3831…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
@@ -25,6 +25,12 @@ Later commits on `main` change docs only. The runtime files at `main`'s tip are 
 ## Your report on 1.3.3 (2026-10-03)
 
 "Everything working perfect now": the side panel holds while you click around Tidal, the cover is sharp, the jumps and the time work on real Tidal, the mini bar floats on your desktop, the heart works. Recorded as verified by you in [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md) and [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md).
+
+## What changed in 1.3.5
+
+- **The side panel adapts to its width** (your round-8 request). Narrower than 400 px the player stacks: a small cover beside the title (which may take two lines), the transport across the full width, the physics summary line hidden. From 400 px up it is the normal layout again. It follows the drag live.
+- **No art slice in the panel** at any width; the full cover stays. The toolbar popup is unchanged (slice and all); say if you want it gone there too.
+- **How thin it can go is Chrome's call**: Chrome's side panel has a built-in minimum of 360 px (its default width doubles as the floor, `SidePanelEntry::kSidePanelDefaultContentWidth`), and no extension can lower it. So 360 is the narrowest you will get, and that is the stacked layout. The page itself now allows 260 px in case a future Chrome permits it.
 
 ## What changed in 1.3.4
 
@@ -43,13 +49,13 @@ One legible 440 px screen, no header; cover-art slice and full cover; title, art
 
 ## Tests
 
-- **Executed**: 35 installed-browser and objective-audio checks, plus 11 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.4/`. The two new checks fail on the 1.3.3 runtime (`tests/results/repro-1.3.3-orphan/`), which is how the defects were confirmed.
+- **Executed**: 35 installed-browser and objective-audio checks, plus 11 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.5/` (panel screenshots at 300, 360, 400 and 480 px). The round-7 checks fail on the 1.3.3 runtime (`tests/results/repro-1.3.3-orphan/`), which is how those defects were confirmed.
 - **Reported working by you** (1.3.3, 2026-10-03): side panel, cover art, jumps, time, mini bar, heart on real Tidal.
 - **Not run**: Alt+M / Alt+E on your Mac; the extreme-boost listening check.
 
 ## What I need from you
 
-1. Click **Reload** on the review card; confirm **1.3.4**. Leave your Tidal tab exactly as it is (no refresh) and open the screen: it should show the track straight away. That is the fix.
+1. Click **Reload** on the review card; confirm **1.3.5**. Leave your Tidal tab as it is (no refresh): the screen should show the track straight away (the 1.3.4 fix). Then flip **Stay open** and drag the panel's edge: at its narrowest (Chrome stops at 360 px) the player is stacked; past about 400 px it returns to the normal layout. Tell me if the stacked form is what you had in mind.
 2. **Year of original release: pick a source** (open since round 1). (a) Tidal's album edition year via your session: re-adds a Tidal request with your token, and shows remaster years, not the original. (b) MusicBrainz first-release year: an opt-in switch; while on, the title and artist of what you play go to musicbrainz.org, and it needs one new host permission. (c) No year. Recommendation: (c) for now; (b) if you want it badly enough to accept the sharing.
 3. **Presets: the list from your everyday copy.** Everyday profile → right-click the icon → **Inspect popup** → **Console** → paste the line below → it lands on your clipboard → paste it here. Those keys hold only preset names and EQ values.
    `chrome.storage.local.get(['presets','currentPreset','currentParams'], d => copy(JSON.stringify(d, null, 1)))`
@@ -68,6 +74,6 @@ Year not shown (no source yet). Heart depends on Tidal's markup. Pitch/Speed app
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.3.4 is harness-verified on the exact review folder (35/35); your Reload is pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.3.5 is harness-verified on the exact review folder (35/35); your Reload and your look at the stacked panel are pending.
 - **LIVE INSTALL**: ORIGINAL UNCHANGED.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.

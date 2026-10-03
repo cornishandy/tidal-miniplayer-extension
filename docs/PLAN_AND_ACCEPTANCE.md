@@ -10,9 +10,9 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.3.4**, runtime commit `075e241`, fingerprint `ff8d9b1d9ea6cc6d…`, 2026-10-03 (1.3.3 was `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
+Current review build: **v1.3.5**, runtime commit `41ab5ca`, fingerprint `fd58d9407bcb3831…`, 2026-10-03 (1.3.4 was `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
-| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x (latest 1.3.4)** |
+| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x (latest 1.3.5)** |
 |---|---|---|---|---|
 | W-LOAD | Unpacked build loads; worker starts | installed-browser | PASS | PASS |
 | W-POPUP-RENDER | Screen renders; 8 factory presets load | installed-browser | PASS | PASS |
@@ -39,7 +39,7 @@ Current review build: **v1.3.4**, runtime commit `075e241`, fingerprint `ff8d9b1
 | W-TAB-CLOSE-CLEANUP / W-TAB-CLOSE-AFTER-SW-RESTART | Closing the captured tab → OFF, also after a worker restart | installed-browser | PASS | PASS |
 | W-STAY-OPEN | Real click: the screen hands over to Chrome's side panel and the icon opens it; off restores the popup | installed-browser | — | PASS |
 | W-SIDE-PANEL-OPEN | The side-panel document opened from the click | installed-browser | — | PASS |
-| W-PANEL-LAYOUT | Panel page at 360 and 480 px: no overflow, sliders ≥ 150 / 250 px, icon band buttons toggle, no errors | installed-browser | — | PASS |
+| W-PANEL-LAYOUT | Panel adapts live: stacked player at 300 and 360 px (no art slice, 48 px cover, full-width transport, wrapping title), normal layout at 400 and 480 px; no overflow; sliders ≥ 130/150/150/250 px; icon band buttons toggle; no errors; screenshots | installed-browser | — | PASS (1.3.5) |
 | W-FALLBACK-WINDOW / W-FALLBACK-SINGLE | Stay-open window works; only one instance | installed-browser | PASS | PASS |
 | W-KEYBOARD | Tab reaches the sliders, buttons and switches with a visible ring (measured in pixels); arrows move a slider and save it; Space/Enter press buttons and band switches; every control has a name | installed-browser | — | **PASS** (1.3.4; FAIL on 1.3.3: no rings, six unnamed sliders) |
 | W-REINJECT-ORPHAN | A tab whose page script is not listening (orphaned by an update or a Reload) gets it re-injected by the worker; the screen shows its track | installed-browser | — | **PASS** (1.3.4; FAIL on 1.3.3: "Connecting…", no re-injection) |
@@ -63,6 +63,7 @@ Current review build: **v1.3.4**, runtime commit `075e241`, fingerprint `ff8d9b1
 
 - **2026-09-24 takeover**: identity and preservation verified; assessment; build script with fingerprint; isolated harness; 13 fixes (`9b01e83`); v1.1.1; operating README; review build.
 - **2026-10-01 round 1**: Playlists, Lab and favourite removed; Physics as a side panel; dead space removed; v1.2.0 (`a92a3c0`). Harness 24/24, unit 7/7. Design mockups for the open questions in `docs/mockups/`.
+- **2026-10-03 round 8**: 1.3.5 (`41ab5ca`): the side panel stacks its player under 400 px and returns to the normal layout above; no art slice in the panel (R-23). Chrome's own floor is 360 px. Harness 35/35, unit 11/11.
 - **2026-10-03 round 7**: your all-clear on 1.3.3. 1.3.4 (`075e241`): page script re-injected after a Reload/update (H-02), keyboard focus rings and accessible names (A-01). Harness 35/35, unit 11/11; both new checks fail on 1.3.3.
 - **2026-10-01 round 6**: 1.3.3 (`f018f0c`): side-panel band buttons are icons (R-21, option A). Harness 33/33, unit 8/8.
 - **2026-10-01 round 2**: layout-shift fix (R-14), v1.2.1 (`44599e5`). Harness 25/25, unit 7/7. Round-2 mockups (`docs/mockups/round2.html`).
