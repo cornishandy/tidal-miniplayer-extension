@@ -118,7 +118,11 @@ function fitUndockedWindow() {
 function applyTheme(theme) {
   document.body.classList.remove(...THEMES);
   if (theme && theme !== 'theme-cyan') document.body.classList.add(theme);
-  themeDots.querySelectorAll('.dot').forEach((d) => d.classList.toggle('sel', d.dataset.theme === (theme || 'theme-cyan')));
+  themeDots.querySelectorAll('.dot').forEach((d) => {
+    const sel = d.dataset.theme === (theme || 'theme-cyan');
+    d.classList.toggle('sel', sel);
+    d.setAttribute('aria-pressed', String(sel));
+  });
   if (minibar.win) syncMinibarTheme();
 }
 
@@ -609,6 +613,7 @@ function renderBandTags() {
     const band = tag.dataset.band;
     const off = !!bandOff[band];
     tag.classList.toggle('off', off);
+    tag.setAttribute('aria-pressed', String(!off));
     tag.closest('.eq-row')?.classList.toggle('is-off', off);
     const names = { hpf: 'High-pass filter', bass: 'Bass', mid: 'Mid', high: 'High', comp: 'Auto-Balancing', gain: 'Master volume', speed: 'Pitch / Speed' };
     tag.title = off

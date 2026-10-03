@@ -50,6 +50,7 @@ function toneWav({ seconds = 60, rate = 48000, freqs = [60, 1000, 8000], amp = 0
 }
 const WAV = toneWav();
 
+const hanging = [];
 const server = createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname === '/tone.wav') {
@@ -68,6 +69,13 @@ const server = createServer((req, res) => {
   const p = join(here, '../fixtures', file);
   if (!existsSync(p)) { res.writeHead(404); return res.end(); }
   res.writeHead(200, { 'content-type': file.endsWith('.svg') ? 'image/svg+xml' : 'text/html; charset=utf-8' });
+  if (url.searchParams.get('hang') === '1') {
+    // Whole page delivered, connection held open: the document never finishes loading, so the manifest's
+    // document_idle page script never runs. That is the state of a tab whose page script was orphaned.
+    res.write(readFileSync(p));
+    hanging.push(res);
+    return;
+  }
   res.end(readFileSync(p));
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
@@ -120,10 +128,11 @@ function record(id, title, status, evidence, level = 'installed-browser') {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Evaluate an expression inside the extension's offscreen document over raw CDP.
-async function evalOffscreen(expression) {
+// Evaluate an expression inside one of the extension's documents (offscreen, side panel) over raw CDP.
+const evalOffscreen = (expression) => evalExtensionDoc('offscreen.html', expression);
+async function evalExtensionDoc(path, expression) {
   const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
-  const t = list.find((x) => x.url === `chrome-extension://${EXT_ID}/offscreen.html`);
+  const t = list.find((x) => x.url === `chrome-extension://${EXT_ID}/${path}`);
   if (!t) return { missing: true };
   const ws = new WebSocket(t.webSocketDebuggerUrl);
   await new Promise((r, j) => { ws.onopen = r; ws.onerror = j; });
@@ -296,6 +305,63 @@ try {
   record('W-NO-LAYOUT-SHIFT', 'Nudging a value (Saved → Modified, Update button appears) does not move the sliders or buttons',
     nudgeBefore.y === nudgeAfter.y && nudgeBefore.x === nudgeAfter.x && sliderBefore.y === sliderAfter.y && /Modified/.test(badgeText) && updateShown ? 'PASS' : 'FAIL',
     { nudgeBefore, nudgeAfter, sliderBefore, sliderAfter, badgeText, updateShown });
+
+  // ---- W-KEYBOARD: Tab reaches every control with a visible focus ring; arrows and Space operate sliders and buttons ----
+  await popup.selectOption('#preset-select', 'Harness Preset');
+  await sleep(250);
+  const activeId = () => popup.evaluate(() => document.activeElement && (document.activeElement.id || document.activeElement.className));
+  const tabUntil = async (pred, max = 80) => {
+    for (let i = 0; i < max; i++) { if (await popup.evaluate(pred)) return i; await popup.keyboard.press('Tab'); await sleep(25); }
+    return -1;
+  };
+  await popup.evaluate(() => document.getElementById('player-btn-fav').focus());
+  // The slider's focus ring is drawn on the thumb (a pseudo-element computed style cannot be read), so compare pixels:
+  // the same clip around the slider before and after keyboard focus reaches it.
+  const sliderBox = await popup.locator('#slider-bass').boundingBox();
+  const clip = { x: sliderBox.x - 8, y: sliderBox.y - 8, width: sliderBox.width + 16, height: sliderBox.height + 16 };
+  const sliderClipBefore = (await popup.screenshot({ clip })).toString('base64');
+  const tabsToSlider = await tabUntil(() => document.activeElement && document.activeElement.id === 'slider-bass');
+  const sliderClipFocused = (await popup.screenshot({ clip, path: join(outDir, 'keyboard-focus-slider.png') })).toString('base64');
+  const ringPixels = await popup.evaluate(async ([a, b]) => {
+    const load = (s) => new Promise((r) => { const i = new Image(); i.onload = () => r(i); i.src = 'data:image/png;base64,' + s; });
+    const [ia, ib] = await Promise.all([load(a), load(b)]);
+    const c = document.createElement('canvas'); c.width = ia.width; c.height = ia.height; const ctx = c.getContext('2d');
+    ctx.drawImage(ia, 0, 0); const da = ctx.getImageData(0, 0, c.width, c.height).data;
+    ctx.clearRect(0, 0, c.width, c.height); ctx.drawImage(ib, 0, 0); const db = ctx.getImageData(0, 0, c.width, c.height).data;
+    let n = 0; for (let i = 0; i < da.length; i += 4) if (Math.abs(da[i] - db[i]) + Math.abs(da[i + 1] - db[i + 1]) + Math.abs(da[i + 2] - db[i + 2]) > 60) n++;
+    return n;
+  }, [sliderClipBefore, sliderClipFocused]);
+  const sliderFocus = await popup.evaluate((n) => {
+    const el = document.getElementById('slider-bass');
+    return { focusVisible: el.matches(':focus-visible'), thumbRing: n > 40, ringPixels: n, value: el.value };
+  }, ringPixels);
+  await popup.keyboard.press('ArrowRight');
+  await sleep(300);
+  const afterArrow = await popup.evaluate(() => document.getElementById('slider-bass').value);
+  const storedAfterArrow = (await storedParams(popup))?.bass;
+  const tabsToPlus = await tabUntil(() => document.activeElement && document.activeElement.matches('.eq-nudge-btn[data-target="slider-bass"][data-action="up"]'));
+  const plusFocus = await popup.evaluate(() => ({ focusVisible: document.activeElement.matches(':focus-visible'), outline: getComputedStyle(document.activeElement).outlineStyle }));
+  await popup.keyboard.press('Space');
+  await sleep(300);
+  const afterSpace = await popup.evaluate(() => document.getElementById('slider-bass').value);
+  const tabsToBand = await tabUntil(() => document.activeElement && document.activeElement.matches('.band-tag[data-band="high"]'));
+  await popup.keyboard.press('Enter');
+  await sleep(300);
+  const bandByKey = await popup.evaluate(() => {
+    const b = document.querySelector('.band-tag[data-band="high"]');
+    return { off: b.classList.contains('off'), pressed: b.getAttribute('aria-pressed') };
+  });
+  await popup.keyboard.press('Enter'); // back on
+  await sleep(200);
+  const tabsToSwitch = await tabUntil(() => document.activeElement && document.activeElement.id === 'toggle-stay-open');
+  const switchRing = await popup.evaluate(() => getComputedStyle(document.getElementById('toggle-stay-open').nextElementSibling).boxShadow !== 'none');
+  const names = await popup.evaluate(() => [...document.querySelectorAll('input[type="range"], button')].filter((el) => !(el.getAttribute('aria-label') || el.getAttribute('title') || el.textContent.trim())).map((el) => el.id || el.className));
+  record('W-KEYBOARD', 'Keyboard: Tab reaches the sliders, buttons and switches with a visible ring; arrows move a slider (saved), Space/Enter press buttons; every control has a name',
+    tabsToSlider >= 0 && sliderFocus.focusVisible && sliderFocus.thumbRing && parseFloat(afterArrow) === parseFloat(sliderFocus.value) + 0.5 && storedAfterArrow === parseFloat(afterArrow)
+      && tabsToPlus >= 0 && plusFocus.focusVisible && plusFocus.outline === 'solid' && parseFloat(afterSpace) === parseFloat(afterArrow) + 0.5
+      && tabsToBand >= 0 && bandByKey.off && bandByKey.pressed === 'false' && tabsToSwitch >= 0 && switchRing && names.length === 0 ? 'PASS' : 'FAIL',
+    { tabsToSlider, sliderFocus, afterArrow, storedAfterArrow, tabsToPlus, plusFocus, afterSpace, tabsToBand, bandByKey, tabsToSwitch, switchRing, unnamed: names });
+  await popup.evaluate(() => document.activeElement && document.activeElement.blur());
 
   // ---- W-BAND-SWITCH-SYNC: a band tag switches that stage off, keeps the value, and persists across reopen ----
   const midBefore = await popup.evaluate(() => document.getElementById('slider-mid').value);
@@ -567,6 +633,32 @@ try {
   await shot(popup, 'popup-final.png');
   record('W-NO-PAGE-ERRORS', 'No uncaught errors in popup / fake Tidal page during run',
     popupErrors.length === 0 && tidalErrors.length === 0 ? 'PASS' : 'FAIL', { popupErrors, tidalErrors });
+
+  // ---- W-REINJECT-ORPHAN: a tab whose page script is not listening (as after an update or a Reload on the card, which
+  // orphans the old copy) still works: the worker re-injects the page script and the screen shows the track ----
+  // (A real chrome.runtime.reload() cannot be used here: in this headless setup the extension does not come back.)
+  await tidal.close();
+  if (!popup.isClosed()) await popup.close(); // nothing may poll the tab before the screen under test opens
+  const panelClosed = await evalExtensionDoc('popup.html?panel=1', 'window.close()'); // the side panel from W-STAY-OPEN polls too
+  await sleep(500);
+  const orphan = await context.newPage();
+  watchRequests(orphan);
+  await orphan.goto(TIDAL_URL + '?hang=1', { waitUntil: 'commit' });
+  await sleep(1500);
+  const orphanTabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '*' }))[0]?.id, TIDAL_URL.split('?')[0]);
+  const probe = (id) => sw.evaluate(async (tabId) => { try { const r = await chrome.tabs.sendMessage(tabId, { type: 'GET_TRACK_INFO' }); return r?.title || 'answered'; } catch (e) { return e.message; } }, id);
+  const before = await probe(orphanTabId);
+  const { page: popupR, errors: popupRErrors } = await openPopup();
+  await sleep(2500);
+  const titleAfter = await popupR.locator('#player-title').textContent().catch(() => null);
+  const after = await probe(orphanTabId);
+  const reinjections = await sw.evaluate((id) => (typeof reinjectedTabs !== 'undefined' ? reinjectedTabs.get(id) : undefined) ?? 0, orphanTabId);
+  await shot(popupR, 'popup-orphan-tab.png');
+  await popupR.close();
+  await orphan.close();
+  record('W-REINJECT-ORPHAN', 'A tab with no listening page script (orphaned by an update/Reload) gets it re-injected by the worker: the screen shows its track',
+    reinjections >= 1 && titleAfter === 'Synthetic Tone' && after === 'Synthetic Tone' && popupRErrors.length === 0 ? 'PASS' : 'FAIL',
+    { pageScriptBefore: before, reinjectionsByWorker: reinjections, titleShown: titleAfter, pageScriptAfter: after, panelClosed, popupRErrors, screenshot: `results/${label}/popup-orphan-tab.png` });
 } catch (e) {
   record('HARNESS', 'Harness exception', 'FAIL', String(e?.stack || e));
 } finally {
@@ -581,6 +673,7 @@ try {
   writeFileSync(join(outDir, 'results.json'), JSON.stringify(summary, null, 2));
   console.log('\n', summary.counts, `-> tests/results/${label}/results.json`);
   await context.close();
+  for (const r of hanging) r.end();
   server.close();
   rmSync(profile, { recursive: true, force: true });
 }

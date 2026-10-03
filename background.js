@@ -3,6 +3,9 @@
 const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
 // The Stay-open window: the popup screen in a window Chrome does not auto-close.
 const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
+// The page script, re-injected into tabs that were open before an update or reload (their copy is orphaned).
+const PAGE_SCRIPT_FILES = ['content.js'];
+const reinjectedTabs = new Map(); // tabId -> how many times the page script was re-injected (diagnostics)
 let capturedTabId = null;
 
 // "Stay open": when on, the toolbar icon opens the screen in Chrome's side panel (docked beside the
@@ -649,8 +652,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 try {
                   await chrome.scripting.executeScript({
                     target: { tabId: targetTab.id },
-                    files: ['router-visualizer.js', 'content.js']
+                    files: PAGE_SCRIPT_FILES,
+                    injectImmediately: true // the screen is asking now; do not wait for the page to go idle
                   });
+                  reinjectedTabs.set(targetTab.id, (reinjectedTabs.get(targetTab.id) || 0) + 1);
                   chrome.tabs.sendMessage(targetTab.id, message.command, (retryRes) => {
                     if (chrome.runtime.lastError) {
                       sendResponse({ success: false, error: chrome.runtime.lastError.message });
