@@ -45,7 +45,7 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 1. In Chrome, open the profile menu, choose **Add**, then **Continue without an account**, and name it *Extension Review*.
 2. In that profile's window, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose
    `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`.
-3. Check the card shows version **1.3.3** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
+3. Check the card shows version **1.3.4** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
 
 Why a separate profile: an unpacked extension's ID comes from its folder, so the review build is a **different extension** from your live 1.1.0 install. It has its own settings, and your custom presets are *not* copied. In the same profile, both copies would inject into every page, and Chrome lets only one of them capture a given tab. For Tidal features in the review profile, sign in to Tidal there.
 
@@ -56,16 +56,18 @@ Why a separate profile: an unpacked extension's ID comes from its folder, so the
 - **Band switches**: click LOW / HPF / MID / HI / AUTO / VOL / SPD (icon buttons in the side panel) to take that stage out while keeping its slider value; click again to bring it back. Switched-off rows are dimmed. The state is saved with presets.
 - **Values**: drag, use − / + (Shift-click for 5× finer steps), or double-click a value to snap it to neutral and double-click again to restore it.
 - **Presets**: *+ Save* saves the current values as a new preset; *Update* saves into the selected custom preset; *↺ Reset* restores the selected preset's saved values (factory values for a default); ✕ deletes a custom preset. Your custom presets are never deleted by Reset.
-- **Stay open**: switch it on and the screen moves into Chrome's side panel on the right of the window, where it stays while you click anything on the page; from then on the toolbar icon opens that panel (the popup itself is closed by Chrome whenever you click elsewhere; nothing can change that). Drag the panel's edge to resize it. Switch it off in the panel to go back to the popup. **Alt+M** opens the panel. **Alt+E** toggles the EQ. Change shortcuts at `chrome://extensions/shortcuts`.
+- **Stay open**: switch it on and the screen moves into Chrome's side panel on the right of the window, where it stays while you click anything on the page; from then on the toolbar icon opens that panel (the popup itself is closed by Chrome whenever you click elsewhere; nothing can change that). Drag the panel's edge to resize it. Switch it off in the panel to go back to the popup. **Alt+M** opens the panel. **Alt+E** toggles the EQ (press it on the playing tab: Chrome only lets the EQ attach to a tab you have opened the extension on). Change shortcuts at `chrome://extensions/shortcuts`.
 - **Mini bar**: in the side panel, click **Mini bar**. It floats above every app and stays as long as the panel is open. From the toolbar popup, *Mini bar* first opens the panel for you.
 - **Heart**: adds the track to, or removes it from, your Tidal collection by clicking Tidal's own heart in the player bar. If Tidal's heart can't be found on the page, the heart is dimmed and says so.
 - **Theme**: the five dots at the bottom.
+- **Keyboard**: Tab moves between the controls (a ring shows where you are), arrows move a slider, Space or Enter presses a button or a band switch.
+- **After a Reload or an update**: Tidal tabs that were already open keep working; the page script is put back automatically, no page refresh needed.
 
 ## Tests (isolated, synthetic, no network)
 
 ```bash
 cd tests && npm install --ignore-scripts   # one-time: playwright-core only (no install scripts)
-npm test                                    # static checks: manifest, commands, permissions, syntax, no network code, retired surfaces, no emoji
+npm test                                    # static checks: manifest, commands, permissions, syntax, no network code, retired surfaces, no emoji, injected files, names, focus rings
 node ../tools/build.mjs /tmp/tme-build && node browser/run.mjs /tmp/tme-build --label local
 ```
 

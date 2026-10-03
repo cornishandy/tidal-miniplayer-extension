@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-01 (round 6: side-panel icon buttons)
+# Review Ready: 2026-10-03 (round 7: your all-clear on 1.3.3; 1.3.4 fixes re-injection and adds keyboard access)
 
 ## Identity
 
@@ -14,57 +14,52 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` |
-| Version | **1.3.3** (the live install is 1.1.0) |
+| Version | **1.3.4** (the live install is 1.1.0) |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (unchanged: same folder) |
-| Runtime source commit | `f018f0c` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `b9c69cef1e2ca349…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `075e241` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `ff8d9b1d9ea6cc6d…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
 
-## What changed in 1.3.3
+## Your report on 1.3.3 (2026-10-03)
 
-- In the side panel, the per-band on/off buttons are icons (your pick A): accent when on, grey with a slash when off. The popup keeps its text tags.
+"Everything working perfect now": the side panel holds while you click around Tidal, the cover is sharp, the jumps and the time work on real Tidal, the mini bar floats on your desktop, the heart works. Recorded as verified by you in [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md) and [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md).
 
-## What changed in 1.3.2
+## What changed in 1.3.4
 
-- **Stay open** now docks the screen into **Chrome's side panel** beside the page. It stays there while you click anything on the site; the toolbar icon opens it while Stay open is on. (The separate window went behind the browser on the first click; it remains only as a fallback.) New permission: `sidePanel` (UI-only).
-- **Cover art** is requested at full size (1280 px) instead of the 80 px thumbnail.
+- **Fix: tabs opened before a Reload or an update stayed on "Connecting…"** (transport dead) until you refreshed the page. The worker was trying to put the page script back by injecting a file that was deleted in 1.3.0, so the attempt failed quietly. Fixed; a new check reproduces it on 1.3.3 and passes on 1.3.4.
+- **Keyboard access.** Tab moves through every control with a visible ring (sliders ring the thumb, switches ring the track); arrows move a slider; Space or Enter presses a button or a band switch. Screen readers get names for the six sliders and the EQ switch, and on/off states for the band buttons and theme dots. Nothing changes for mouse use.
 
-## What changed in 1.3.1
+## Earlier rounds (1.3.0 to 1.3.3)
 
-- The physics strip is **real** now: while the EQ is on it shows the spectrum of the audio, grey = what the tab sends, colour = what you hear. Still and flat when the EQ is off. Dots and the animated wave are gone.
-- Cover art: a centre slice of the cover down the left edge, the full cover at the top right.
-- The −15 s / +30 s jumps drive Tidal's own seek bar when the player element is out of reach, and say so if they can't.
-
-## What 1.3.0 is
-
-Your rounds 1–3 built: one legible screen (440 px), no header; cover-art strip; title, artist, time; ♥ · prev · −15 s · play · +30 s · next; the EQ switch with the tab's name; presets; the physics (wave + response) on the screen; sliders with **band switches** (LOW/HPF/MID/HI/AUTO/VOL/SPD, off keeps the value); footer with **Stay open**, theme dots and **Mini bar** (always on top). Floating button, Micro/Wide, On Top, Undock and the side panel are gone. Dead files removed. Presets and their data untouched (R-07).
+One legible 440 px screen, no header; cover-art slice and full cover; title, artist, time; ♥ · prev · −15 s · play · +30 s · next; EQ switch with the tab's name; presets; the **real** live spectrum and the response curve; sliders with per-band on/off; footer with **Stay open** (Chrome's side panel), theme dots and **Mini bar**. Details and your decisions: [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md). Presets and their data untouched (R-07).
 
 ## Installation and state
 
 - **Live install: ORIGINAL UNCHANGED.** It still loads from the old folder (1.1.0).
-- **Review install: ISOLATED REVIEW COPY.** Same folder and ID; click **Reload** on its card. Stored settings carry over (the floating-button and side-panel settings are cleared; they no longer exist).
+- **Review install: ISOLATED REVIEW COPY.** Same folder and ID; click **Reload** on its card. Stored settings carry over.
 - No key generated, nothing uninstalled, no Web Store action.
 
 ## Tests
 
-- **Executed**: 33 installed-browser and objective-audio checks, plus 8 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.3/`.
-- **Not run**: your look at the screen, the mini bar on your desktop, a real toolbar-click capture, Alt+M/Alt+E, the extreme-boost listening check.
-- **Blocked**: anything on real Tidal (heart, jumps, cover art). It needs your signed-in session, and I don't contact Tidal.
+- **Executed**: 35 installed-browser and objective-audio checks, plus 11 unit checks, all PASS on this exact build. Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md). Results: `tests/results/review-v1.3.4/`. The two new checks fail on the 1.3.3 runtime (`tests/results/repro-1.3.3-orphan/`), which is how the defects were confirmed.
+- **Reported working by you** (1.3.3, 2026-10-03): side panel, cover art, jumps, time, mini bar, heart on real Tidal.
+- **Not run**: Alt+M / Alt+E on your Mac; the extreme-boost listening check.
 
 ## What I need from you
 
-1. Click **Reload** on the review card; confirm **1.3.3**. Flip **Stay open**: the screen should move into a panel on the right of the browser window and stay there while you click around Tidal. Drag the panel's edge to make it wider or narrower. Tell me if it holds.
-2. On real Tidal: is the cover sharp now? Do the jumps work, and does the time (e.g. 1:23 / 4:56) show next to the artist?
-3. Click **Mini bar** in the panel and tell me if it floats over other apps.
-4. If the heart stays dimmed on real Tidal: right-click the heart in Tidal's bottom bar → **Inspect** → right-click the highlighted line → **Copy** → **Copy outerHTML** → paste it here.
-5. **Year of original release: pick a source.** (a) Tidal's album edition year via your session (re-adds a Tidal request); (b) MusicBrainz first-release year (sends title + artist to musicbrainz.org); (c) no year.
-6. For the presets: the list from your everyday copy. Everyday profile → right-click the icon → **Inspect popup** → **Console** → paste: `chrome.storage.local.get(['presets','currentPreset'], d => console.log(JSON.stringify(d, null, 1)))` → copy what it prints.
+1. Click **Reload** on the review card; confirm **1.3.4**. Leave your Tidal tab exactly as it is (no refresh) and open the screen: it should show the track straight away. That is the fix.
+2. **Year of original release: pick a source** (open since round 1). (a) Tidal's album edition year via your session: re-adds a Tidal request with your token, and shows remaster years, not the original. (b) MusicBrainz first-release year: an opt-in switch; while on, the title and artist of what you play go to musicbrainz.org, and it needs one new host permission. (c) No year. Recommendation: (c) for now; (b) if you want it badly enough to accept the sharing.
+3. **Presets: the list from your everyday copy.** Everyday profile → right-click the icon → **Inspect popup** → **Console** → paste the line below → it lands on your clipboard → paste it here. Those keys hold only preset names and EQ values.
+   `chrome.storage.local.get(['presets','currentPreset','currentParams'], d => copy(JSON.stringify(d, null, 1)))`
+   Checked today: the factory presets in your everyday copy (1.1.0) and in 1.3.4 are identical, name for name and value for value, so moving over will not change any default preset. Only the stray old entries need your list.
+4. Optional, while you are there: **Alt+M** (opens the panel) and **Alt+E** on the Tidal tab (toggles the EQ); and a heavy preset at your usual volume: any crackle or pumping?
+5. Next, once 3 is done: the **cut-over** (make 1.3.x your everyday extension and retire the old folder). Your call when.
 
 ## Remaining known issues
 
-Year not shown (no source yet). Heart depends on Tidal's markup. Pitch/Speed only applies while the EQ is on (unchanged behaviour). Old default presets showing under “My Custom Presets” in your everyday copy (R-07; fix needs your list).
+Year not shown (no source yet). Heart depends on Tidal's markup. Pitch/Speed applies only while the EQ is on (unchanged; closed unless you object). Old default presets showing under "My Custom Presets" in your everyday copy (R-07; fix needs your list). Alt+E can only attach to a tab you have opened the extension on (Chrome's rule).
 
 ## Docs
 
@@ -73,6 +68,6 @@ Year not shown (no source yet). Heart depends on Tidal's markup. Pitch/Speed onl
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: PARTLY VERIFIED. Loadable, and browser-verified in an isolated test browser (29/29). Your visual, desktop and real-Tidal checks are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.3.4 is harness-verified on the exact review folder (35/35); your Reload is pending.
 - **LIVE INSTALL**: ORIGINAL UNCHANGED.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.
