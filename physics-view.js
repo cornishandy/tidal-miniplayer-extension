@@ -15,8 +15,8 @@ class PhysicsView {
     this.bodeCtx = bodeCanvas ? bodeCanvas.getContext('2d') : null;
 
     this.params = {
-      bass: 5.0, hpf: 30, mid: 1.5, high: 2.0, gain: 1.0, pitch: 1.0, autoBalance: true,
-      stageBypass: { hpf: false, bass: false, mid: false, high: false, gain: false, speed: false }
+      bass: 5.0, hpf: 30, mid: 1.5, high: 2.0, gain: 1.0, semitones: 0, autoBalance: true,
+      stageBypass: { hpf: false, bass: false, mid: false, high: false, gain: false, pitch: false }
     };
     this.isCapturing = false;
     this.frame = null;      // latest { input: dB[72], output: dB[72] } or null when nothing is processed
@@ -48,7 +48,7 @@ class PhysicsView {
       high: !!(b.high || b.eq),
       comp: !p.autoBalance || !!b.comp,
       gain: !!b.gain,
-      speed: !!b.speed
+      pitch: !!(b.pitch || b.speed)
     };
   }
 

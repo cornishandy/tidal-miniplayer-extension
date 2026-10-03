@@ -8,6 +8,10 @@
   const isTidal = window.location.hostname.includes('tidal.com');
   let currentTrackInfo = null;
 
+  // The speed control went away in 1.4.0 (pitch is shifted in the DSP graph now). A Tidal tab left at
+  // another rate by an older copy of this script goes back to normal speed.
+  if (isTidal) document.querySelectorAll('audio, video').forEach((m) => { if (m.playbackRate !== 1) m.playbackRate = 1; });
+
   // 1. Track info
   function getTrackInfo() {
     if (!isTidal) {
@@ -261,10 +265,6 @@
     return { seeked: false };
   }
 
-  function setPlaybackSpeed(spd) {
-    document.querySelectorAll('audio, video').forEach(m => { m.playbackRate = spd; });
-  }
-
   function setMediaVolume(vol) {
     const clamped = Math.max(0, Math.min(1, vol));
     document.querySelectorAll('audio, video').forEach(m => { m.volume = clamped; });
@@ -296,14 +296,6 @@
         sendResponse({ success: r.seeked !== false, ...r });
         return true;
       }
-      case 'SET_SPEED':
-        setPlaybackSpeed(message.speed);
-        sendResponse({ success: true });
-        return true;
-      case 'RESET_SPEED':
-        setPlaybackSpeed(1.0);
-        sendResponse({ success: true });
-        return true;
       case 'SET_VOLUME':
         setMediaVolume(message.volume);
         sendResponse({ success: true, volume: message.volume });

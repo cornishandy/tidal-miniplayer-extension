@@ -411,7 +411,7 @@ try {
     captureOk ? 'PASS' : (String(startRes?.error || '').includes('invoked') ? 'BLOCKED' : 'FAIL'),
     { startRes, graph, note: 'Uses --allowlisted-extension-id to stand in for the toolbar click, which automation cannot perform.' });
 
-  const NONE = { hpf: false, bass: false, mid: false, high: false, gain: false, speed: false };
+  const NONE = { hpf: false, bass: false, mid: false, high: false, gain: false, pitch: false };
   if (captureOk) {
     const measure = `(async () => {
       const an = audioCtx.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0;
@@ -421,14 +421,14 @@ try {
       const d = new Float32Array(an.frequencyBinCount); an.getFloatFrequencyData(d); const hz = audioCtx.sampleRate / an.fftSize;
       const at = (f) => Math.max(...[-2,-1,0,1,2].map(k => d[Math.round(f / hz) + k]));
       const t = new Float32Array(an.fftSize); an.getFloatTimeDomainData(t); let peak = 0; for (const v of t) peak = Math.max(peak, Math.abs(v));
-      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), peak: +peak.toFixed(3), tap: tap === masterLimiter ? 'limiter' : 'ceiling' };
+      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), hz500: +at(500).toFixed(1), hz2k: +at(2000).toFixed(1), peak: +peak.toFixed(3), tap: tap === masterLimiter ? 'limiter' : 'ceiling' };
       tap.disconnect(an); return r; })()`;
     const setParams = (params) => sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params });
 
-    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
     const flat = (await evalOffscreen(measure)).value;
-    await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
+    await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
     const boosted = (await evalOffscreen(measure)).value;
     const lift60 = boosted && flat ? boosted.hz60 - flat.hz60 : null;
@@ -457,21 +457,48 @@ try {
     await shot(popup, 'popup-live.png');
 
     // ---- W-AUDIO-BAND-SWITCH: LOW off keeps the slider at +10 but removes the lift ----
-    await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: { ...NONE, bass: true } });
+    await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: { ...NONE, bass: true } });
     await sleep(400);
     const bassOff = (await evalOffscreen(measure)).value;
     const liftOff = bassOff && flat ? bassOff.hz60 - flat.hz60 : null;
     record('W-AUDIO-BAND-SWITCH', 'With the LOW band switched off, bass +10 dB has no effect (60 Hz back to flat)',
       liftOff !== null && Math.abs(liftOff) < 1 && lift60 > 6 ? 'PASS' : 'FAIL', { flat, bassOff, liftWithBandOff: liftOff?.toFixed(1), liftWithBandOn: lift60?.toFixed(1) }, 'objective-audio');
 
-    await setParams({ bass: 0, hpf: 200, mid: 0, high: 0, gain: 1, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
+    await setParams({ bass: 0, hpf: 200, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(500);
     const hpf = (await evalOffscreen(measure)).value;
     const cut60 = hpf && flat ? flat.hz60 - hpf.hz60 : null;
     record('W-AUDIO-HPF', 'HPF at 200 Hz attenuates 60 Hz by >15 dB (objective FFT)',
       cut60 !== null && cut60 > 15 ? 'PASS' : 'FAIL', { flat, hpf200: hpf, cut60: cut60?.toFixed(1) }, 'objective-audio');
 
-    await setParams({ bass: 14, hpf: 20, mid: 6, high: 6, gain: 2.5, pitch: 1, autoBalance: false, bypass: false, stageBypass: NONE });
+    // ---- W-PITCH: Pitch shifts the key, not the speed (P-01, 1.4.0): +12 st moves the 1 kHz tone to 2 kHz and −12 st to
+    // 500 Hz at the final output, the page keeps playing at normal speed, and 0 st or the band switch routes around the shifter ----
+    const pitchRouting = async () => (await evalOffscreen(`({ available: !!pitchNode, error: pitchError, wet: pitchWetGain && +pitchWetGain.gain.value.toFixed(2), dry: pitchDryGain && +pitchDryGain.gain.value.toFixed(2) })`)).value;
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 12, autoBalance: false, bypass: false, stageBypass: NONE });
+    await sleep(800);
+    const up = (await evalOffscreen(measure)).value;
+    const upRouting = await pitchRouting();
+    const pageRate = await media.evaluate(() => document.getElementById('a').playbackRate);
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: -12, autoBalance: false, bypass: false, stageBypass: NONE });
+    await sleep(800);
+    const down = (await evalOffscreen(measure)).value;
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 12, autoBalance: false, bypass: false, stageBypass: { ...NONE, pitch: true } });
+    await sleep(500);
+    const pitchOff = (await evalOffscreen(measure)).value;
+    const offRouting = await pitchRouting();
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
+    await sleep(500);
+    const zero = (await evalOffscreen(measure)).value;
+    const zeroRouting = await pitchRouting();
+    const tagFits = await popup.evaluate(() => { const t = document.querySelector('.band-tag[data-band="pitch"]'); return t.scrollWidth <= t.clientWidth + 1; });
+    const moved = !!(up && down && flat) && up.hz2k > flat.hz1k - 4 && up.hz1k < flat.hz1k - 15 && down.hz500 > flat.hz1k - 4 && down.hz1k < flat.hz1k - 15;
+    const level = !!(up && down) && up.peak > 0.05 && up.peak < 0.35 && down.peak > 0.05 && down.peak < 0.35;
+    record('W-PITCH', 'Pitch +12 st moves the 1 kHz tone to 2 kHz and −12 st to 500 Hz (objective FFT, final output) while the page plays at normal speed; the band switch and 0 st route around the shifter; PITCH tag fits',
+      moved && level && upRouting?.available === true && upRouting.wet === 1 && upRouting.dry === 0 && pageRate === 1
+        && offRouting?.dry === 1 && Math.abs(pitchOff.hz1k - flat.hz1k) < 1 && zeroRouting?.dry === 1 && Math.abs(zero.hz1k - flat.hz1k) < 1 && tagFits ? 'PASS' : 'FAIL',
+      { flat, up, down, pitchOff, zero, upRouting, offRouting, zeroRouting, pageRate, tagFits }, 'objective-audio');
+
+    await setParams({ bass: 14, hpf: 20, mid: 6, high: 6, gain: 2.5, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(500);
     const hot = (await evalOffscreen(measure)).value;
     record('W-AUDIO-LIMITER', 'Worst-case settings (bass +14, mid/high +6, 250%) never exceed -0.3 dBFS at the output',
@@ -517,7 +544,7 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-AUDIO-LIMITER', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-AUDIO-LIMITER', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }

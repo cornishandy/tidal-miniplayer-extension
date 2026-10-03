@@ -46,7 +46,7 @@ test('fallback window is the working undocked popup, not the broken miniplayer p
 });
 
 test('no network code: the shipped scripts never contact Tidal or any server', () => {
-  for (const f of ['background.js', 'content.js', 'popup.js', 'offscreen.js', 'physics-view.js']) {
+  for (const f of ['background.js', 'content.js', 'popup.js', 'offscreen.js', 'physics-view.js', 'pitch-shifter.worklet.js']) {
     const src = readFileSync(join(root, f), 'utf8');
     assert.doesNotMatch(src, /\bfetch\s*\(|XMLHttpRequest|tidal\.com\/v1|api\.tidal\.com/, `${f} contains network code`);
   }
@@ -93,4 +93,18 @@ test('keyboard focus is never hidden: focus-visible rings exist and no control r
   assert.ok((css.match(/:focus-visible/g) || []).length >= 4, 'focus-visible rules missing');
   const rules = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)].filter((m) => /outline:\s*none/.test(m[2])).map((m) => m[1].trim());
   for (const sel of rules) assert.match(sel, /:focus-visible/, `"${sel}" hides the outline without a focus-visible replacement`);
+});
+
+test('pitch (1.4.0, P-01): the worklet the DSP graph loads exists and ships; nothing changes the page\'s playback speed any more', () => {
+  const offscreen = readFileSync(join(root, 'offscreen.js'), 'utf8');
+  const m = offscreen.match(/PITCH_WORKLET = '([^']+)'/);
+  assert.ok(m, 'offscreen.js names its worklet module');
+  assert.ok(existsSync(join(root, m[1])), `missing ${m[1]}`);
+  assert.match(readFileSync(join(root, m[1]), 'utf8'), /registerProcessor\('pitch-shifter'/);
+  assert.match(readFileSync(join(root, 'tools/build.mjs'), 'utf8'), new RegExp(`'${m[1].replace(/\./g, '\\.')}'`), 'the worklet is not in the build list');
+  const content = readFileSync(join(root, 'content.js'), 'utf8');
+  assert.doesNotMatch(content, /SET_SPEED|setPlaybackSpeed/, 'the speed control was removed');
+  const popup = readFileSync(join(root, 'popup.html'), 'utf8');
+  assert.match(popup, /id="slider-pitch"[^>]*aria-label="Pitch, semitones"[^>]*min="-12" max="12"/);
+  assert.doesNotMatch(popup, /Pitch \/ Speed|data-band="speed"/);
 });

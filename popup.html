@@ -23,7 +23,7 @@
     <symbol id="i-high" viewBox="0 0 16 16"><path d="M8 1.5 9.6 6.4 14.5 8 9.6 9.6 8 14.5 6.4 9.6 1.5 8l4.9-1.6z"/></symbol>
     <symbol id="i-comp" viewBox="0 0 16 16"><path d="M8 2v12M3 5.5h10"/><path d="M3 5.5 1.5 10h3zM13 5.5l-1.5 4.5h3z"/></symbol>
     <symbol id="i-gain" viewBox="0 0 16 16"><path d="M2 6h3l4-3v10l-4-3H2z"/><path d="M11.5 6a3 3 0 0 1 0 4"/></symbol>
-    <symbol id="i-speed" viewBox="0 0 16 16"><path d="M2.5 12.5a6 6 0 1 1 11 0"/><path d="M8 12.5l3-4.5"/></symbol>
+    <symbol id="i-pitch" viewBox="0 0 16 16"><path d="M6 12.5V3.5l7-2V11"/><circle cx="4" cy="12.5" r="2"/><circle cx="11" cy="11" r="2"/></symbol>
   </svg>
 
   <div class="popup-container">
@@ -139,13 +139,13 @@
             <span class="eq-val" id="val-gain" title="Double-click: neutral / restore">100%</span>
           </div>
 
-          <div class="eq-row" data-band="speed">
-            <button class="band-tag" aria-pressed="true" data-band="speed" title="Pitch / Speed on. Click to switch it off (1.00x) without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-speed"/></svg><span class="band-text">SPD</span></button>
-            <div class="eq-label" title="Playback speed and pitch, 0.75x to 1.30x. Applies while the EQ is on.">Pitch / Speed</div>
-            <button class="eq-nudge-btn" data-action="down" data-target="slider-pitch" data-step="0.05" title="−0.05x (Shift: −0.01x)">−</button>
-            <input type="range" id="slider-pitch" class="eq-slider" aria-label="Pitch / Speed, times" min="0.75" max="1.3" step="0.05" value="1.0">
-            <button class="eq-nudge-btn" data-action="up" data-target="slider-pitch" data-step="0.05" title="+0.05x (Shift: +0.01x)">+</button>
-            <span class="eq-val" id="val-pitch" title="Double-click: neutral / restore">1.00x</span>
+          <div class="eq-row" data-band="pitch">
+            <button class="band-tag" aria-pressed="true" data-band="pitch" title="Pitch on. Click to switch it off (0 st) without losing the value."><svg class="band-icon" aria-hidden="true"><use href="#i-pitch"/></svg><span class="band-text">PITCH</span></button>
+            <div class="eq-label" title="Key shift, −12 to +12 semitones: the pitch moves, the speed stays the same. Clean within a few semitones; further out, long notes warble a little. Applies while the EQ is on.">Pitch <small>key, same speed</small></div>
+            <button class="eq-nudge-btn" data-action="down" data-target="slider-pitch" data-step="0.5" title="−0.5 semitone (Shift: −0.1)">−</button>
+            <input type="range" id="slider-pitch" class="eq-slider" aria-label="Pitch, semitones" min="-12" max="12" step="0.1" value="0">
+            <button class="eq-nudge-btn" data-action="up" data-target="slider-pitch" data-step="0.5" title="+0.5 semitone (Shift: +0.1)">+</button>
+            <span class="eq-val" id="val-pitch" title="Double-click: neutral / restore">0.0 st</span>
           </div>
         </main>
       </section>
