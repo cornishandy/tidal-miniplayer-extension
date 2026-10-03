@@ -10,9 +10,9 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.3.6**, runtime commit `ea7832f`, fingerprint `8f66bcfa918726a9…`, 2026-10-03 (1.3.5 was `41ab5ca`, 1.3.4 `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
+Current review build: **v1.4.0**, runtime commit `4b4975a`, fingerprint `efa8fe4eed23ff39…`, 2026-10-03 (1.3.6 was `ea7832f`, 1.3.5 `41ab5ca`, 1.3.4 `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
-| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x (latest 1.3.6)** |
+| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x / 1.4.0 (latest 1.4.0)** |
 |---|---|---|---|---|
 | W-LOAD | Unpacked build loads; worker starts | installed-browser | PASS | PASS |
 | W-POPUP-RENDER | Screen renders; 8 factory presets load | installed-browser | PASS | PASS |
@@ -35,6 +35,8 @@ Current review build: **v1.3.6**, runtime commit `ea7832f`, fingerprint `8f66bcf
 | W-AUDIO-BAND-SWITCH | LOW off: bass +10 dB has no effect (60 Hz back to flat) | objective-audio | — | PASS |
 | W-AUDIO-HPF | HPF 200 Hz → −21 dB at 60 Hz | objective-audio | PASS | PASS |
 | W-AUDIO-LIMITER | Worst case never exceeds −0.3 dBFS | objective-audio | PASS (0.965) | PASS (0.965) |
+| W-PITCH | Pitch is a key shift (P-01): +12 st moves the 1 kHz tone to 2 kHz and −12 st to 500 Hz at the final output at the same level; the page's playback rate stays 1; 0 st and the PITCH tag route around the shifter; the tag text fits | objective-audio | — | PASS (1.4.0: 2 kHz −39.9 dB vs 1 kHz −39.9 flat; 1 kHz −131.7 when shifted) |
+| S-PITCH-LISTEN | Pitch on real music: key moves, speed does not; warble and doubling acceptable within the range you use | user-listening | — | NOT RUN (your ears) |
 | W-CAPTURE-STOP / W-CAPTURE-RESTART | Stop releases everything; re-attach works | installed-browser | PASS | PASS |
 | W-TAB-CLOSE-CLEANUP / W-TAB-CLOSE-AFTER-SW-RESTART | Closing the captured tab → OFF, also after a worker restart | installed-browser | PASS | PASS |
 | W-STAY-OPEN | Real click: the screen hands over to Chrome's side panel and the icon opens it; off restores the popup | installed-browser | — | PASS |
@@ -47,7 +49,7 @@ Current review build: **v1.3.6**, runtime commit `ea7832f`, fingerprint `8f66bcf
 | W-NO-REMOTE-REQUESTS | No requests beyond the local fixture server | installed-browser | PASS | PASS (real Tidal: cover image only) |
 | W-NO-PAGE-ERRORS | No uncaught errors during run | installed-browser | PASS | PASS |
 | ~~W-PHYSICS-SIDE, W-SKIP-25, W-THEME-KEEPS-LAYOUT, W-PLAYLIST-*, W-LAB-*~~ | Removed surfaces | — | — | RETIRED |
-| U-* (11) | Manifest, commands, permissions unchanged, syntax, fallback URL, no network code, retired surfaces and dead files stay out, no emoji, injected files exist, names and states present, focus never hidden | unit | 7/7 | **11/11** |
+| U-* (12) | Manifest, commands, permissions unchanged, syntax, fallback URL, no network code, retired surfaces and dead files stay out, no emoji, injected files exist, names and states present, focus never hidden, pitch worklet ships and no speed path remains | unit | 7/7 | **12/12** |
 | W-STAY-OPEN-MAC | Stay open on your Mac | user | — | 1.3.0/1.3.1 window: failed for you (window went behind the page). 1.3.3 side panel: **PASS (your report, 2026-10-03)** |
 | W-TOOLBAR-INVOKE | EQ via a real toolbar click (activeTab grant) | user | NOT RUN | covered by your report of 2026-10-03 ("everything working"), not itemised |
 | W-LOOK-1.3.0 | The new screen, strip, physics and band switches look right in your Chrome | user-visual | — | **PASS (your report, 2026-10-03)** |
@@ -61,6 +63,7 @@ Current review build: **v1.3.6**, runtime commit `ea7832f`, fingerprint `8f66bcf
 
 ## Done
 
+- **2026-10-03 round 10**: 1.4.0 (`4b4975a`): Pitch is a key shift in semitones (P-01), the speed control is gone; the 1.1.0 folder archived and removed (R-24 done); transport row kept (C-01); the EQ's target tab clarified; the listening check explained (LISTENING_CHECK.md). Harness 36/36 on the exact review folder, unit 12/12.
 - **2026-10-03 round 9**: 1.3.6 (`ea7832f`): the stacked panel keeps the cover top right at 56 px (R-23 revised on your look). Your batch of answers: no year (R-08 closed), cut-over decided (R-24: `build/review-unpacked` becomes the everyday extension, steps on your side), MIT licence, repository description, account name out of the current docs (R-25). Harness 35/35 on the exact review folder, unit 11/11.
 - **2026-09-24 takeover**: identity and preservation verified; assessment; build script with fingerprint; isolated harness; 13 fixes (`9b01e83`); v1.1.1; operating README; review build.
 - **2026-10-01 round 1**: Playlists, Lab and favourite removed; Physics as a side panel; dead space removed; v1.2.0 (`a92a3c0`). Harness 24/24, unit 7/7. Design mockups for the open questions in `docs/mockups/`.
@@ -82,15 +85,16 @@ Current review build: **v1.3.6**, runtime commit `ea7832f`, fingerprint `8f66bcf
 
 ## Open (design review; see [DESIGN_REVIEW_MAP.md](DESIGN_REVIEW_MAP.md))
 
-The three items re-asked at your request (C-01: transport row C1 vs C2, the EQ's target tab, the name "Pitch / Speed") · your cut-over steps (R-24) · Alt+M / Alt+E on your Mac · extreme-boost listening (S-04, spelled out) · your look at the 56 px cover (R-23). Closed: R-08 (no year, your pick 2026-10-03), R-07 list (the stray entries do not survive the cut-over; your own presets re-saved by you), R-06, PiP (mini bar kept), dead files (gone).
+The EQ's target tab (C-01, clarified: keep or change) · your listening to the pitch shift (P-01) · Alt+M / Alt+E on your Mac · heavy-preset listening (S-04, explained) · your look at the 56 px cover (R-23). Closed: transport row (C2 kept, 2026-10-03), R-08 (no year), R-07 list (gone with the cut-over), R-24 (cut-over done, old folder archived), R-06, PiP (mini bar kept), dead files (gone).
 
 ## Known risks
 
 - Tidal DOM changes can break metadata and transport. Real-Tidal checks are blocked.
-- The ceiling softly bends samples above −0.63 dBFS. That only happens with heavy settings. It still needs a listening check at extreme boosts.
+- The ceiling softly bends samples above −0.63 dBFS. That only happens with heavy settings. It still needs a listening check at extreme boosts (what to listen for: [LISTENING_CHECK.md](LISTENING_CHECK.md)).
+- The pitch shifter (WSOLA) is objectively right on tones; on music it will warble slightly on long notes and can double drum hits at large shifts, and it adds about 0.14 s of delay while a shift is set. Needs your listening (S-PITCH-LISTEN).
 - The popup polls the media tab every second while open. That's cheap, but continuous.
 - Content scripts run on every http(s) page (existing behaviour; permission scope unchanged).
 
 ## Next bounded milestone
 
-Your cut-over (remove 1.1.0, load `build/review-unpacked`, pin, shortcuts); then archive the old folder on your word, and answer the three re-asked items.
+Your listening: the pitch shift on real music and the heavy-preset check; then whatever those two turn up (a bass-only leveler is the likely next design item if pumping is what you hear).
