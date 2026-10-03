@@ -3,6 +3,7 @@
 Chrome MV3 extension; plain JS, no build step for the source. Read README.md first; status lives in REVIEW_READY.md and docs/.
 
 - Load path for review is `build/review-unpacked` (made by `node tools/build.mjs build/review-unpacked`). Only rebuild it when promoting a verified build; tell the user to click Reload.
+- Since the cut-over (R-24, 2026-10-03) `build/review-unpacked` is also the user's everyday extension. Its path is permanent: the extension's ID, and with it the user's saved presets and settings, derive from the folder path. Never move, rename or delete it; promote only verified builds into it. The old copy under `…/T3 Code/t3-nightly-toy/` is archived only after the user confirms the 1.1.0 card is removed from Chrome, and only on their word.
 - Verify with `cd tests && npm test` and `node browser/run.mjs <builtDir> --label <name>`. The harness must stay isolated: temp profile, all non-local hosts blocked, `--mute-audio`, synthetic fixtures only.
 - Chrome caps a toolbar popup at 600 px tall and 800 px wide; the screen is 440 px wide and must stay under 600 px (W-NO-DEAD-SPACE enforces it). No emoji in the UI (unit test); icons are inline SVG symbols in popup.html.
 - Shell hygiene: never put backticks in a double-quoted `git commit -m`; write messages to a file and use `-F`.

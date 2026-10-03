@@ -877,10 +877,10 @@ body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="up"] { grid-area:
 @media (max-width: 399px) {
   body.panel .np {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto;
     grid-template-areas:
-      "cover title"
-      "cover artist"
+      "title cover"
+      "artist cover"
       "transport transport"
       "progress progress";
     column-gap: 10px;
@@ -893,10 +893,11 @@ body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="up"] { grid-area:
   }
 
   body.panel .np-cover {
-    grid-area: cover;
-    width: 48px;
-    height: 48px;
+    grid-area: cover; /* top right, as in the normal layout; sized to the two text lines beside it */
+    width: 56px;
+    height: 56px;
     align-self: center;
+    justify-self: end;
   }
 
   body.panel .np-title {
