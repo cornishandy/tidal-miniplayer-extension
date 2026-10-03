@@ -27,7 +27,7 @@ Current status, evidence and known gaps: [REVIEW_READY.md](REVIEW_READY.md) and 
 
 Runtime files: `manifest.json`, `background.js` (service worker: capture, presets, Stay-open window), `content.js` (reads Tidal's player bar, runs transport commands), `offscreen.html/.js` (Web Audio DSP), `popup.html/.css/.js` (the screen, the window and the mini bar), `physics-view.js` (drawings), `themes.css`, `icons/`.
 
-Old location (reference only, never edited): `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension`. Your everyday Chrome install still points there.
+Old location (reference only, never edited): `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension`. Until the cut-over below is done, your everyday Chrome install (1.1.0) still points there; afterwards the folder is archived, on your word.
 
 ## Build
 
@@ -40,14 +40,20 @@ node tools/build.mjs build/review-unpacked     # refresh the review build from t
 
 Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome is using. After rebuilding, click **Reload** on the extension's card in `chrome://extensions`. A source change never reloads Chrome by itself.
 
-## Load for review (recommended: a separate Chrome profile)
+## Load it
 
-1. In Chrome, open the profile menu, choose **Add**, then **Continue without an account**, and name it *Extension Review*.
-2. In that profile's window, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose
-   `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`.
-3. Check the card shows version **1.3.4** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. Pin the icon.
+`build/review-unpacked` is the review build and, since the cut-over (decision R-24, 2026-10-03), the everyday extension too. Its path is permanent: an unpacked extension's ID, and with it its saved presets and settings, come from the folder path. Never move or rename it. Every promotion lands there; you click **Reload**.
 
-Why a separate profile: an unpacked extension's ID comes from its folder, so the review build is a **different extension** from your live 1.1.0 install. It has its own settings, and your custom presets are *not* copied. In the same profile, both copies would inject into every page, and Chrome lets only one of them capture a given tab. For Tidal features in the review profile, sign in to Tidal there.
+**Cut-over, once, in your everyday profile** (replaces the 1.1.0 install from the old folder):
+
+1. If you ever saved a preset of your own with *+ Save* in the old copy, note its six values first (or export the list: see REVIEW_READY). The factory presets are identical in both copies and need nothing; the stray old entries under "My Custom Presets" do not come along.
+2. `chrome://extensions`: on the card *Universal Mini-Player & DJ Bass Booster* that shows version **1.1.0**, click **Remove**. Chrome deletes that copy's settings with it; the folder on disk stays until you say so.
+3. Same page: **Developer mode** on (top right), **Load unpacked**, choose `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`. The new card shows version **1.3.6** and ID **`gponppchadgoilnlbogcdldbmpdoaeno`**. If this profile already has the review card, click **Reload** on it instead.
+4. Pin the icon: the puzzle piece in the toolbar, then the pin next to the name.
+5. `chrome://extensions/shortcuts`: check **Alt+M** and **Alt+E** are filled in next to it; if a box is blank, click the pencil and press the keys.
+6. Refresh your Tidal tab once (the old copy's page script went with it). From then on, Reloads need no refresh.
+
+**Review in a separate profile** (optional, as before): profile menu, **Add**, **Continue without an account**, name it *Extension Review*, and load the same folder there. Same ID, separate settings; sign in to Tidal there for Tidal features.
 
 ## Everyday use
 
@@ -56,7 +62,7 @@ Why a separate profile: an unpacked extension's ID comes from its folder, so the
 - **Band switches**: click LOW / HPF / MID / HI / AUTO / VOL / SPD (icon buttons in the side panel) to take that stage out while keeping its slider value; click again to bring it back. Switched-off rows are dimmed. The state is saved with presets.
 - **Values**: drag, use − / + (Shift-click for 5× finer steps), or double-click a value to snap it to neutral and double-click again to restore it.
 - **Presets**: *+ Save* saves the current values as a new preset; *Update* saves into the selected custom preset; *↺ Reset* restores the selected preset's saved values (factory values for a default); ✕ deletes a custom preset. Your custom presets are never deleted by Reset.
-- **Stay open**: switch it on and the screen moves into Chrome's side panel on the right of the window, where it stays while you click anything on the page; from then on the toolbar icon opens that panel (the popup itself is closed by Chrome whenever you click elsewhere; nothing can change that). Drag the panel's edge to resize it: narrower than 400 px the player stacks (small cover, full-width transport); wider, it is the normal layout. Chrome itself stops the panel at 360 px. The panel shows no art slice. Switch it off in the panel to go back to the popup. **Alt+M** opens the panel. **Alt+E** toggles the EQ (press it on the playing tab: Chrome only lets the EQ attach to a tab you have opened the extension on). Change shortcuts at `chrome://extensions/shortcuts`.
+- **Stay open**: switch it on and the screen moves into Chrome's side panel on the right of the window, where it stays while you click anything on the page; from then on the toolbar icon opens that panel (the popup itself is closed by Chrome whenever you click elsewhere; nothing can change that). Drag the panel's edge to resize it: narrower than 400 px the player stacks (cover top right at 56 px, title up to two lines, full-width transport); wider, it is the normal layout. Chrome itself stops the panel at 360 px. The panel shows no art slice. Switch it off in the panel to go back to the popup. **Alt+M** opens the panel. **Alt+E** toggles the EQ (press it on the playing tab: Chrome only lets the EQ attach to a tab you have opened the extension on). Change shortcuts at `chrome://extensions/shortcuts`.
 - **Mini bar**: in the side panel, click **Mini bar**. It floats above every app and stays as long as the panel is open. From the toolbar popup, *Mini bar* first opens the panel for you.
 - **Heart**: adds the track to, or removes it from, your Tidal collection by clicking Tidal's own heart in the player bar. If Tidal's heart can't be found on the page, the heart is dimmed and says so.
 - **Theme**: the five dots at the bottom.
