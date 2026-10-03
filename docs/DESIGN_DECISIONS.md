@@ -113,3 +113,9 @@ Still open after round 3: C1 vs C2 (C2 built), the year's data source (R-08), th
 **Contrast, measured (WCAG ratio against the theme background; 4.5:1 is the small-text target, 3:1 for UI parts).** Main text 16.9–19.1 in every theme. Muted labels: Cyan 6.7 · Amber 6.6 · Synthwave 7.9 · Matrix 5.3 · OLED 4.5 (on the surface colour 4.1, the one borderline case). Accent on background: Cyan 12.1 · Amber 8.8 · Synthwave 5.0 · Matrix 14.7 · OLED 7.9. A switched-off band tag's text 3.7–4.2 (a deliberately dimmed state; it is a UI part, and the value next to it stays readable). No change made; the OLED muted colour can be lifted on request.
 
 Still open after round 7: the year's data source (R-08), the preset list from your everyday copy (R-07), Alt+M / Alt+E on your Mac, the extreme-boost listening check (S-04), and the cut-over (review batch 6).
+
+### Repository (2026-10-03)
+
+| # | Surface | Your words | Outcome | Verified |
+|---|---|---|---|---|
+| R-22 (decided) | GitHub repository | "make the github public also" | Visibility switched from private to **public** with `gh repo edit --visibility public`. Pre-flight scan of the full history first: no tokens, keys, credentials or Tidal session data anywhere; tests use synthetic fixtures only; the review build and test results are not in the repo. What a visitor can see: the source and docs, the commit author identity on your commits (name and e-mail, as on any public repository), and the local folder paths with your account name in five documents (README, REVIEW_READY and the historical hand-offs). No LICENSE file yet, so the default "all rights reserved" applies. CLAUDE.md updated: the visibility is not to be changed again without your OK. | `gh repo view`: visibility PUBLIC |
