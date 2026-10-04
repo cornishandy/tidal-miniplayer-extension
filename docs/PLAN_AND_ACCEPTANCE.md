@@ -10,9 +10,9 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.5.0**, runtime commit `553e23b`, fingerprint `8a8b8962edc509b0…`, 2026-10-04 (1.4.0 was `4b4975a`, 1.3.6 `ea7832f`, 1.3.5 `41ab5ca`, 1.3.4 `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
+Current review build: **v1.5.1**, runtime commit `f0a5adc`, fingerprint `c6004b1723af49e5…`, 2026-10-04 (1.5.0 was `553e23b`, 1.4.0 `4b4975a`, 1.3.6 `ea7832f`, 1.3.5 `41ab5ca`, 1.3.4 `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
-| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x / 1.4.0 / 1.5.0 (latest 1.5.0)** |
+| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x / 1.4.0 / 1.5.x (latest 1.5.1)** |
 |---|---|---|---|---|
 | W-LOAD | Unpacked build loads; worker starts | installed-browser | PASS | PASS |
 | W-POPUP-RENDER | Screen renders; 8 factory presets load | installed-browser | PASS | PASS |
@@ -30,13 +30,13 @@ Current review build: **v1.5.0**, runtime commit `553e23b`, fingerprint `8a8b896
 | W-PHYSICS-INLINE | Live strip and curve on the main screen; still while the EQ is off | installed-browser | — (was W-PHYSICS-SIDE) | PASS |
 | W-LIVE-SPECTRUM | The live strip is real: input shows the tone peaks; output shows the +10 dB bass lift at 60 Hz only | objective-audio | — | PASS (+10.0 dB at 60 Hz, +0.2 at 1 kHz) |
 | W-CAPTURE-START | EQ attaches; offscreen graph runs | installed-browser* | PASS | PASS |
-| W-AUDIO-TRANSPARENT | Flat settings keep input level (peak 0.15) | objective-audio | PASS | PASS |
+| W-AUDIO-TRANSPARENT | Flat settings keep the input level: peak 0.15; 1 kHz and 8 kHz within 0.3 dB of the untouched source; 60 Hz within +1.0 / −0.3 dB (the 20 Hz high-pass sits +0.5 dB there, Web Audio reads a high-pass Q in dB, and the limiter adds +0.17 dB of static makeup; both part of the sound since 1.0, frozen with it) | objective-audio | PASS | PASS (1.5.1: +0.7 dB at 60 Hz, +0.2 at 1 kHz and 8 kHz) |
 | W-AUDIO-BASS | Bass +10 dB → +9.3 dB at 60 Hz, 1 kHz unchanged | objective-audio | PASS | PASS |
 | W-AUDIO-BAND-SWITCH | LOW off: bass +10 dB has no effect (60 Hz back to flat) | objective-audio | — | PASS |
 | W-AUDIO-HPF | HPF 200 Hz → −21 dB at 60 Hz | objective-audio | PASS | PASS |
 | W-AUDIO-LIMITER | Worst case never exceeds −0.3 dBFS | objective-audio | PASS (0.965) | PASS (0.965) |
 | W-PITCH | Pitch is a key shift (P-01): +12 st moves the 1 kHz tone to 2 kHz and −12 st to 500 Hz at the final output at the same level; the page's playback rate stays 1; 0 st and the PITCH tag route around the shifter; the tag text fits | objective-audio | — | PASS (1.4.0: 2 kHz −39.9 dB vs 1 kHz −39.9 flat; 1 kHz −131.7 when shifted) |
-| W-DYN-BASELINE | The default modes reproduce the sound of 1.4.0: six settings (flat, bass +10, worst case, AUTO on flat, AUTO on bass +14 at 150 %, AUTO on bass +8 / HPF 25 / high +1) within 0.3 dB at 60 Hz, 1 kHz and 8 kHz and 0.004 in peak; the constants were measured on 1.4.0 with this harness (A-03) | objective-audio | — | **PASS (1.5.0: no difference)** |
+| W-DYN-BASELINE | The default modes reproduce the sound of 1.4.0: six settings (flat, bass +10, worst case, AUTO on flat, AUTO on bass +14 at 150 %, AUTO on bass +8 / HPF 25 / high +1) within 0.3 dB at 60 Hz, 1 kHz and 8 kHz and 0.004 in peak. Provenance: FFT-bin constants measured on 1.4.0 at 48 kHz, reproduced by 1.5.0 with no difference; then re-derived at 48 kHz with the exact-frequency reading, which does not depend on the output device's rate (A-03, H-03) | objective-audio | — | **PASS (1.5.0 and 1.5.1: no difference)** |
 | W-DYN-LEVELER-BASS | Leveler → Bass only: with bass +14 dB, 60 Hz down 2 dB or more while 1 kHz and 8 kHz stay within 0.5 dB of AUTO off; Full band moves 1 kHz too; routing and meter agree | objective-audio | — | PASS (60 Hz −3.5 dB, 1 kHz and 8 kHz 0.0 dB; Full band +2.2 dB at 1 kHz; meter 3.6 dB) |
 | W-DYN-LEVELER-SLOW | Leveler → Slow release: release 0.6 s, same steady level as Full band within 0.3 dB, the output held lower for longer after the boosts are removed; Full band restores 0.2 s | objective-audio | — | PASS (deficit 0.144 vs 0.001; minimum 3.4 % below the settled level) |
 | W-DYN-MATCH | MATCH on: with bass +14 dB the K-weighted level (ITU-R BS.1770) is within 1 dB of the untouched tab where it was 3 dB or more louder without it; the trim is reported; off restores the level | objective-audio | — | PASS (untouched −33.75, without MATCH −28.59, with MATCH −34.09 dB; trim −5.5 dB) |
@@ -49,7 +49,7 @@ Current review build: **v1.5.0**, runtime commit `553e23b`, fingerprint `8a8b896
 | W-TAB-CLOSE-CLEANUP / W-TAB-CLOSE-AFTER-SW-RESTART | Closing the captured tab → OFF, also after a worker restart | installed-browser | PASS | PASS |
 | W-STAY-OPEN | Real click: the screen hands over to Chrome's side panel and the icon opens it; off restores the popup | installed-browser | — | PASS |
 | W-SIDE-PANEL-OPEN | The side-panel document opened from the click | installed-browser | — | PASS |
-| W-PANEL-LAYOUT | Panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, wrapping title), normal layout at 400 and 480 px with the 76 px cover top right; cover right of the title and flush with the player's edge in both; no overflow; sliders ≥ 130/150/150/250 px; icon band buttons toggle; no errors; screenshots | installed-browser | — | PASS (1.3.6) |
+| W-PANEL-LAYOUT | Panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, wrapping title), normal layout at 400 and 480 px with the 76 px cover top right; cover right of the title and flush with the player's edge in both; no overflow; sliders ≥ 130/150/150/250 px; the dynamics rows' menus and bars fit; the band tags are the popup's words, all ten fit and toggle with a strike-through (R-21 revised); no errors; screenshots | installed-browser | — | PASS (1.5.1) |
 | W-FALLBACK-WINDOW / W-FALLBACK-SINGLE | Stay-open window works; only one instance | installed-browser | PASS | PASS |
 | W-KEYBOARD | Tab reaches the sliders, buttons and switches with a visible ring (measured in pixels); arrows move a slider and save it; Space/Enter press buttons and band switches; every control has a name | installed-browser | — | **PASS** (1.3.4; FAIL on 1.3.3: no rings, six unnamed sliders) |
 | W-REINJECT-ORPHAN | A tab whose page script is not listening (orphaned by an update or a Reload) gets it re-injected by the worker; the screen shows its track | installed-browser | — | **PASS** (1.3.4; FAIL on 1.3.3: "Connecting…", no re-injection) |
@@ -71,6 +71,7 @@ Current review build: **v1.5.0**, runtime commit `553e23b`, fingerprint `8a8b896
 
 ## Done
 
+- **2026-10-04 round 12**: 1.5.1 (`f0a5adc`): the side panel's band tags are the popup's words again (R-21 revised, your request); the harness reads levels at exact frequencies so the Mac's output device rate no longer matters (H-03). Harness 43/43 on the exact review folder, unit 13/13.
 - **2026-10-04 round 11**: 1.5.0 (`553e23b`): the alternatives as switches (Leveler Full band / Slow release / Bass only, MATCH, Limiter Fast / Look-ahead, Ceiling Clean / Warm; D-01), live bars on the four dynamics rows (D-02), rows in signal order with LIM and CEIL added (D-03), the leveler diagram (D-04), the audio-processing freeze rule (A-03) with its baseline check; the EQ's target tab kept (C-01). Harness 43/43 on the exact review folder, unit 13/13.
 - **2026-10-03 round 10**: 1.4.0 (`4b4975a`): Pitch is a key shift in semitones (P-01), the speed control is gone; the 1.1.0 folder archived and removed (R-24 done); transport row kept (C-01); the EQ's target tab clarified; the listening check explained (LISTENING_CHECK.md). Harness 36/36 on the exact review folder, unit 12/12.
 - **2026-10-03 round 9**: 1.3.6 (`ea7832f`): the stacked panel keeps the cover top right at 56 px (R-23 revised on your look). Your batch of answers: no year (R-08 closed), cut-over decided (R-24: `build/review-unpacked` becomes the everyday extension, steps on your side), MIT licence, repository description, account name out of the current docs (R-25). Harness 35/35 on the exact review folder, unit 11/11.

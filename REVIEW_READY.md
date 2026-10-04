@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-04 (round 11: the alternatives as switches, live meters, rows in chain order; 1.5.0)
+# Review Ready: 2026-10-04 (rounds 11 and 12: the alternatives as switches, live meters, rows in chain order; side-panel tags back to words; 1.5.1)
 
 ## Identity
 
@@ -14,13 +14,18 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
-| Version | **1.5.0** |
+| Version | **1.5.1** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` |
-| Runtime source commit | `553e23b` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `8a8b8962edc509b0…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `f0a5adc` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `c6004b1723af49e5…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.5.1
+
+- **Side panel tags are words again** (your request: "change the slider labels (now images) in the side panel back to match the extension (words)"). The panel shows the same PITCH, HPF, LOW, MID, HI, AUTO, MATCH, VOL, LIM, CEIL tags as the popup, struck through when off. The icon buttons are gone (R-21 revised).
+- Harness only, nothing in the extension: the level readings are now taken at exact frequencies, so they no longer depend on which output device your Mac has selected (the iFi DAC at 96 kHz had shifted the 60 Hz reading by 0.8 dB). The rate is recorded with each run.
 
 ## What changed in 1.5.0
 
@@ -52,18 +57,18 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Installation and state
 
-- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.0. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
+- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.1. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
 - No key generated, no Web Store action.
 
 ## Tests
 
-- **Executed**: 43 installed-browser and objective-audio checks, plus 13 unit checks, all PASS on this exact build (`tests/results/review-v1.5.0/`). New: W-DYN-BASELINE (the 1.4.0 sound reproduced), W-DYN-LEVELER-BASS (60 Hz down 3.5 dB, 1 kHz and 8 kHz unchanged), W-DYN-LEVELER-SLOW, W-DYN-MATCH (within 0.3 dB of the untouched loudness where it was 5.2 dB louder), W-DYN-LIMITER-LOOKAHEAD (peak 0.930, ceiling idle, distortion products 25 to 40 dB lower than Fast), W-DYN-CEILING-WARM (never above −0.3 dB, transparent at a quiet level, +13 dB of colour at the worst case), W-DYN-METERS-UI (the bars follow the engine; the menus and the MATCH tag persist). Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md).
+- **Executed**: 43 installed-browser and objective-audio checks, plus 13 unit checks, all PASS on this exact build (`tests/results/review-v1.5.1/`). New: W-DYN-BASELINE (the 1.4.0 sound reproduced), W-DYN-LEVELER-BASS (60 Hz down 3.5 dB, 1 kHz and 8 kHz unchanged), W-DYN-LEVELER-SLOW, W-DYN-MATCH (within 0.3 dB of the untouched loudness where it was 5.2 dB louder), W-DYN-LIMITER-LOOKAHEAD (peak 0.930, ceiling idle, distortion products 25 to 40 dB lower than Fast), W-DYN-CEILING-WARM (never above −0.3 dB, transparent at a quiet level, +13 dB of colour at the worst case), W-DYN-METERS-UI (the bars follow the engine; the menus and the MATCH tag persist). Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md).
 - **Reported working by you** (1.3.3, 2026-10-03): side panel, cover art, jumps, time, mini bar, heart on real Tidal.
 - **Not run (your ears and eyes)**: the switches on real music; the pitch shift on real music; the new rows and the diagram; Alt+M / Alt+E on your Mac.
 
 ## What I need from you
 
-1. **Reload**, confirm **1.5.0**, EQ on, and look at the four bars while a loud track plays. The AUTO bar sitting amber or red during the loud parts is the leveler working hard; that is the "squashed" case made visible.
+1. **Reload**, confirm **1.5.1**, EQ on, and look at the four bars while a loud track plays. The AUTO bar sitting amber or red during the loud parts is the leveler working hard; that is the "squashed" case made visible.
 2. **Try the switches, one at a time** (how to compare, in full: [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md)). Leveler → Bass only: the voice and hi-hats should stop dipping with the kick. Leveler → Slow release: less breathing between kicks. MATCH on: leave it on while comparing anything else, so loudness stops fooling you. At a high Master setting: Limiter → Look-ahead, then Ceiling → Warm. Report which switch, which preset, which track, roughly when, and what it sounded like.
 3. **The layout**: Pitch moved to the top (chain order) and the Auto-Balancing row now reads "Leveler". Say if you want Pitch back at the bottom or the old label back.
 4. **The diagram**: does it make the full-band / bass-only / loudness point clear?
@@ -82,6 +87,6 @@ No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch appl
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.0 is harness-verified on the exact review folder (43/43); your Reload and your listening to the switches are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.1 is harness-verified on the exact review folder (43/43); your Reload and your listening to the switches are pending.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.

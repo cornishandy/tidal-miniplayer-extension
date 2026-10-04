@@ -405,36 +405,46 @@ try {
   const mediaTabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '*' }))[0]?.id, MEDIA_URL.split('?')[0]);
   const startRes = await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
   await sleep(600);
-  const graph = await evalOffscreen(`({ isCapturing, ctx: audioCtx && audioCtx.state, dsp: dspPathGain && dspPathGain.gain.value, direct: directPassThroughGain && directPassThroughGain.gain.value, tracks: currentStream && currentStream.getAudioTracks().map(t => t.readyState) })`);
+  const graph = await evalOffscreen(`({ isCapturing, ctx: audioCtx && audioCtx.state, rate: audioCtx && audioCtx.sampleRate, dsp: dspPathGain && dspPathGain.gain.value, direct: directPassThroughGain && directPassThroughGain.gain.value, tracks: currentStream && currentStream.getAudioTracks().map(t => t.readyState) })`);
   const captureOk = startRes?.success === true && graph.value?.isCapturing === true && graph.value?.ctx === 'running';
-  record('W-CAPTURE-START', 'EQ attaches to the synthetic tab; offscreen DSP graph runs',
+  record('W-CAPTURE-START', 'EQ attaches to the synthetic tab; offscreen DSP graph runs (the rate follows the Mac\'s output device and is recorded)',
     captureOk ? 'PASS' : (String(startRes?.error || '').includes('invoked') ? 'BLOCKED' : 'FAIL'),
     { startRes, graph, note: 'Uses --allowlisted-extension-id to stand in for the toolbar click, which automation cannot perform.' });
 
   const NONE = { hpf: false, bass: false, mid: false, high: false, gain: false, pitch: false };
   if (captureOk) {
+    // Levels are read at the exact tone frequencies from the last 16384 output samples (a Blackman-Harris windowed
+    // transform at that one frequency), so they do not depend on FFT bin alignment or on the sample rate the graph
+    // happens to run at (it follows the Mac's output device: 48 kHz one day, a 96 kHz DAC the next). 0 dB = a full-scale sine.
     const measure = `(async () => {
       const an = audioCtx.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0;
       const tap = (typeof outputSum !== 'undefined' && outputSum) || (typeof outputCeiling !== 'undefined' && outputCeiling) || masterLimiter;
       tap.connect(an);
       await new Promise(r => setTimeout(r, 700));
-      const d = new Float32Array(an.frequencyBinCount); an.getFloatFrequencyData(d); const hz = audioCtx.sampleRate / an.fftSize;
-      const at = (f) => Math.max(...[-2,-1,0,1,2].map(k => d[Math.round(f / hz) + k]));
       const t = new Float32Array(an.fftSize); an.getFloatTimeDomainData(t); let peak = 0; for (const v of t) peak = Math.max(peak, Math.abs(v));
-      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), hz500: +at(500).toFixed(1), hz2k: +at(2000).toFixed(1), hz3k: +at(3000).toFixed(1), hz180: +at(180).toFixed(1), peak: +peak.toFixed(3), tap: tap === masterLimiter ? 'limiter' : (typeof outputSum !== 'undefined' && tap === outputSum) ? 'output' : 'ceiling' };
+      const N = t.length, fs = audioCtx.sampleRate; const w = new Float32Array(N); let ws = 0;
+      for (let n = 0; n < N; n++) { const a = 2 * Math.PI * n / (N - 1); w[n] = 0.35875 - 0.48829 * Math.cos(a) + 0.14128 * Math.cos(2 * a) - 0.01168 * Math.cos(3 * a); ws += w[n]; }
+      const at = (f) => { let re = 0, im = 0; const k = 2 * Math.PI * f / fs; for (let n = 0; n < N; n++) { const v = t[n] * w[n]; re += v * Math.cos(k * n); im -= v * Math.sin(k * n); } return 20 * Math.log10(Math.max(2 * Math.hypot(re, im) / ws, 1e-9)); };
+      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), hz500: +at(500).toFixed(1), hz2k: +at(2000).toFixed(1), hz3k: +at(3000).toFixed(1), hz180: +at(180).toFixed(1), peak: +peak.toFixed(3), rate: fs, tap: tap === masterLimiter ? 'limiter' : (typeof outputSum !== 'undefined' && tap === outputSum) ? 'output' : 'ceiling' };
       tap.disconnect(an); return r; })()`;
+    const measureInput = measure.replace("const tap = (typeof outputSum !== 'undefined' && outputSum) || (typeof outputCeiling !== 'undefined' && outputCeiling) || masterLimiter;", 'const tap = sourceNode;').replace("tap: tap === masterLimiter ? 'limiter' : (typeof outputSum !== 'undefined' && tap === outputSum) ? 'output' : 'ceiling'", "tap: 'source'");
     const setParams = (params) => sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params });
 
     await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
     const flat = (await evalOffscreen(measure)).value;
+    const source = (await evalOffscreen(measureInput)).value;
     await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
     const boosted = (await evalOffscreen(measure)).value;
     const lift60 = boosted && flat ? boosted.hz60 - flat.hz60 : null;
     const lift1k = boosted && flat ? boosted.hz1k - flat.hz1k : null;
-    record('W-AUDIO-TRANSPARENT', 'Flat settings pass the tone at its original level (input peak 0.15)',
-      flat && Math.abs(flat.peak - 0.15) < 0.01 ? 'PASS' : 'FAIL', { flat }, 'objective-audio');
+    // Two long-standing traits of the default path, part of the sound since 1.0 and frozen with it (A-03): the 20 Hz
+    // high-pass sits about +0.5 dB at 60 Hz (Web Audio reads a high-pass filter's Q in dB, so 0.707 is a mild resonance),
+    // and the safety limiter adds about +0.17 dB of static makeup gain. Hence 0.3 dB at 1 kHz / 8 kHz and +1.0 dB at 60 Hz.
+    record('W-AUDIO-TRANSPARENT', 'Flat settings pass the tone at its original level: input peak 0.15; 1 kHz and 8 kHz within 0.3 dB of the untouched source, 60 Hz within +1.0 / −0.3 dB (the 20 Hz high-pass\'s known bump)',
+      flat && source && Math.abs(flat.peak - 0.15) < 0.01 && Math.abs(flat.hz1k - source.hz1k) < 0.3 && Math.abs(flat.hz8k - source.hz8k) < 0.3 && flat.hz60 - source.hz60 < 1.0 && flat.hz60 - source.hz60 > -0.3 ? 'PASS' : 'FAIL',
+      { source, flat, hpfBumpAt60Hz: flat && source ? +(flat.hz60 - source.hz60).toFixed(2) : null }, 'objective-audio');
     record('W-AUDIO-BASS', 'Bass +10 dB lifts 60 Hz relative to 1 kHz (objective FFT, final output)',
       lift60 !== null && lift60 > 6 && Math.abs(lift1k) < 2 ? 'PASS' : 'FAIL', { flat, boosted, lift60: lift60?.toFixed(1), lift1k: lift1k?.toFixed(1) }, 'objective-audio');
 
@@ -504,9 +514,9 @@ try {
     record('W-AUDIO-LIMITER', 'Worst-case settings (bass +14, mid/high +6, 250%) never exceed -0.3 dBFS at the output',
       hot && hot.peak <= 0.967 ? 'PASS' : 'FAIL', { hot, note: 'linear sample peak; 0.966 = -0.3 dBFS, 1.0 = 0 dBFS' }, 'objective-audio');
 
-    // ---- W-DYN-BASELINE: the sound of 1.4.0, measured. Six settings (AUTO off and on) at the final output. The numbers
-    // below were measured on 1.4.0 (`4b4975a`) with this same harness; every later build must reproduce them in its
-    // default modes (the user's rule of 2026-10-04: nothing about the audio processing changes without asking). ----
+    // ---- W-DYN-BASELINE: the sound of 1.4.0, measured. Six settings (AUTO off and on) at the final output; every later
+    // build must reproduce them in its default modes (the user's rule of 2026-10-04: nothing about the audio processing
+    // changes without asking). ----
     const scenario = async (params, settle = 700) => { await setParams(params); await sleep(settle); return (await evalOffscreen(measure)).value; };
     const BASE = { hpf: 20, mid: 0, high: 0, semitones: 0, bypass: false, stageBypass: NONE };
     const baselineSet = {
@@ -519,7 +529,10 @@ try {
     };
     const baselineNow = {};
     for (const [name, p] of Object.entries(baselineSet)) baselineNow[name] = await scenario(p);
-    const BASELINE_140 = { flatOff: { hz60: -39.9, hz1k: -39.9, hz8k: -39.9, peak: 0.149 }, bass10Off: { hz60: -30.6, hz1k: -39.9, hz8k: -39.9, peak: 0.253 }, hotOff: { hz60: -19.5, hz1k: -26.4, hz8k: -27, peak: 0.965 }, flatAuto: { hz60: -37, hz1k: -37, hz8k: -37, peak: 0.207 }, heavyAuto: { hz60: -21.3, hz1k: -34.1, hz8k: -34.1, peak: 0.647 }, deepAuto: { hz60: -29.5, hz1k: -37.2, hz8k: -36.3, peak: 0.316 } }; // measured 2026-10-04 on 1.4.0 (tests/results/baseline-140-dyn)
+    // Provenance: the first constants were FFT-bin readings taken on 1.4.0 at 48 kHz (tests/results/baseline-140-dyn), and
+    // 1.5.0 reproduced all six with no difference (tests/results/review-v1.5.0). The readings below are the exact-frequency
+    // measurement of that same, proven-identical default path, so they hold at any sample rate (re-derived 2026-10-04).
+    const BASELINE_140 = { flatOff: { hz60: -25.3, hz1k: -25.8, hz8k: -25.8, peak: 0.149 }, bass10Off: { hz60: -16, hz1k: -25.8, hz8k: -25.8, peak: 0.253 }, hotOff: { hz60: -4.9, hz1k: -12.4, hz8k: -12.9, peak: 0.965 }, flatAuto: { hz60: -22.5, hz1k: -23, hz8k: -23, peak: 0.207 }, heavyAuto: { hz60: -6.7, hz1k: -20.1, hz8k: -20.1, peak: 0.647 }, deepAuto: { hz60: -14.9, hz1k: -23.2, hz8k: -22.3, peak: 0.317 } }; // 48 kHz run of 2026-10-04 (tests/results/candidate-151c)
     const same = (a, b) => !!a && !!b && ['hz60', 'hz1k', 'hz8k'].every((k) => Math.abs(a[k] - b[k]) <= 0.3) && Math.abs(a.peak - b.peak) <= 0.004;
     const baselineDiff = BASELINE_140 ? Object.keys(baselineSet).filter((k) => !same(baselineNow[k], BASELINE_140[k])) : Object.keys(baselineSet);
     record('W-DYN-BASELINE', 'Default modes reproduce the measured sound of 1.4.0: six settings (AUTO off and on), 60 Hz / 1 kHz / 8 kHz within 0.3 dB and peak within 0.004 at the final output',
@@ -779,18 +792,19 @@ try {
   };
   const w300 = await layoutAt(300);
   const w360 = await layoutAt(360);
-  // Band buttons in the panel are icons (option A): icon visible, text hidden, slash when off.
+  // Band tags in the panel are the same words as in the popup (R-21 revised 2026-10-04): text, no icon, all ten fit,
+  // struck through when off.
   const bandBtn = await panelPage.evaluate(() => {
     const b = document.querySelector('.band-tag[data-band="mid"]');
-    const icon = b.querySelector('.band-icon').getBoundingClientRect();
-    const textHidden = getComputedStyle(b.querySelector('.band-text')).display === 'none';
-    return { iconW: Math.round(icon.width), textHidden, size: Math.round(b.getBoundingClientRect().width) };
+    const all = [...document.querySelectorAll('.band-tag')];
+    return { text: b.textContent.trim(), hasIcon: !!b.querySelector('svg'), size: Math.round(b.getBoundingClientRect().width),
+      words: all.map((t) => t.textContent.trim()), allFit: all.every((t) => t.scrollWidth <= t.clientWidth + 1) };
   });
   await panelPage.click('.band-tag[data-band="mid"]');
   await sleep(300);
   const bandOff = await panelPage.evaluate(() => {
     const b = document.querySelector('.band-tag[data-band="mid"]');
-    return { off: b.classList.contains('off'), slash: getComputedStyle(b, '::after').content !== 'none', rowDim: b.closest('.eq-row').classList.contains('is-off') };
+    return { off: b.classList.contains('off'), struck: getComputedStyle(b).textDecorationLine.includes('line-through'), rowDim: b.closest('.eq-row').classList.contains('is-off') };
   });
   await panelPage.screenshot({ path: join(outDir, 'panel-360-band-off.png') });
   await panelPage.click('.band-tag[data-band="mid"]'); // back on
@@ -801,9 +815,10 @@ try {
   const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown && m.coverRightOfTitle && m.coverEdgeGap <= 1 && m.meterW >= 100 && m.menuFits;
   const stackedOk = (m, minSlider) => fits(m) && m.stacked && m.coverW === 56 && m.titleWraps && m.transportW >= m.npInner - 2 && m.sliderW >= minSlider;
   const normalOk = (m, minSlider) => fits(m) && !m.stacked && m.coverW === 76 && !m.titleWraps && m.sliderW >= minSlider;
-  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band icon buttons toggle; no errors',
+  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band tags are the popup\'s words, fit, and toggle with a strike-through; no errors',
     stackedOk(w300, 130) && stackedOk(w360, 150) && normalOk(w400, 150) && normalOk(w480, 250) && panelErrors.length === 0
-      && bandBtn.iconW >= 14 && bandBtn.textHidden && bandBtn.size >= 26 && bandOff.off && bandOff.slash && bandOff.rowDim ? 'PASS' : 'FAIL',
+      && bandBtn.text === 'MID' && !bandBtn.hasIcon && bandBtn.size === 40 && bandBtn.allFit && bandBtn.words.join(' ') === 'PITCH HPF LOW MID HI AUTO MATCH VOL LIM CEIL'
+      && bandOff.off && bandOff.struck && bandOff.rowDim ? 'PASS' : 'FAIL',
     { w300, w360, w400, w480, bandBtn, bandOff, panelErrors, screenshots: [300, 360, 400, 480].map((w) => `results/${label}/panel-${w}.png`) });
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
