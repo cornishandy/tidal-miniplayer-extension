@@ -165,3 +165,12 @@ Still open after round 10: keep or change for the EQ's target tab (C-01); your l
 | N-01 (note) | Things to try without code | "that's helpful to think about, let's remember that note" | Kept in LISTENING_CHECK.md ("Things to try now"): AUTO off with Master at or under 100 % for punch; HPF from 30 to 40 Hz on heavy presets; Master down as Bass goes up (about 70 % per +6 dB). With MATCH on, the third happens by itself. | — |
 
 Still open after round 11: your listening to the switches (D-01) and to the pitch shift (P-01); your look at the diagram (D-04), the new rows (D-03) and the 56 px cover (R-23); Alt+M / Alt+E.
+
+### Review round 12 (2026-10-04): side-panel tags back to words (1.5.1)
+
+| # | Surface | Your words | Outcome | Verified |
+|---|---|---|---|---|
+| R-21 (revised) | Band tags in the side panel | "change the slider labels (now images) in the side panel back to match the extension (words)" | The side panel shows the same text tags as the popup (PITCH, HPF, LOW, MID, HI, AUTO, MATCH, VOL, LIM, CEIL), struck through when off. The icon buttons of round 6 (option A) and their symbols are gone. | W-PANEL-LAYOUT: all ten words shown and fitting at 300 to 480 px, strike-through when off |
+| H-03 (harness) | Test harness | — | The objective checks now read each tone's level at its exact frequency from the output samples instead of from FFT bins. Reason: the test Chrome's audio graph runs at whatever rate your Mac's default output device has; it had become the iFi DAC at 96 kHz, which moved the 60 Hz tone against the FFT bins and shifted every reading by 0.8 dB (two false failures on a CSS-only change). The new readings do not depend on the rate; the baseline constants were re-derived with them from the default path already proven identical to 1.4.0. The rate is recorded with every run. Nothing in the extension changed for this. | W-DYN-BASELINE at 96 kHz |
+
+Still open after round 12: as after round 11.
