@@ -81,7 +81,7 @@ button {
   flex-wrap: wrap;
   align-items: center;
   gap: 0 10px;
-  padding: 8px 12px 6px;
+  padding: 7px 12px 5px;
   background: linear-gradient(180deg, var(--bg-surface, #1e1e26) 0%, var(--bg-secondary, #18181f) 100%);
   border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
 }
@@ -227,7 +227,7 @@ button {
   flex: 0 0 100%;
   height: 2px;
   background: #2a2a35;
-  margin: 6px -12px -6px;
+  margin: 5px -12px -5px;
 }
 
 .progress > div {
@@ -242,7 +242,7 @@ button {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
+  padding: 4px 12px;
   background: var(--bg-surface, #1e1e26);
   border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
 }
@@ -327,15 +327,15 @@ input:checked + .slider-round:before {
 .eq-pane {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 8px 12px 6px;
+  gap: 5px;
+  padding: 6px 12px 4px;
 }
 
 .preset-section {
   background: var(--bg-card, rgba(255, 255, 255, 0.03));
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
-  padding: 6px 10px;
+  padding: 5px 10px;
 }
 
 /* Fixed height and no wrapping: the Saved/Modified badge and the Update/Delete buttons come and go
@@ -345,9 +345,9 @@ input:checked + .slider-round:before {
   justify-content: space-between;
   align-items: center;
   flex-wrap: nowrap;
-  height: 22px;
+  height: 20px;
   overflow: hidden;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .section-title-group {
@@ -414,7 +414,7 @@ input:checked + .slider-round:before {
 
 .preset-dropdown {
   width: 100%;
-  padding: 6px 9px;
+  padding: 5px 9px;
   background: var(--bg-surface, #1e1e26);
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 6px;
@@ -436,7 +436,7 @@ input:checked + .slider-round:before {
   align-items: center;
   padding: 3px 9px 0;
   gap: 8px;
-  height: 16px;
+  height: 15px;
 }
 
 .phys-hdr span {
@@ -462,18 +462,18 @@ input:checked + .slider-round:before {
 }
 
 .phys-canvas.live {
-  height: 56px;
+  height: 50px;
 }
 
 .phys-canvas.bode {
-  height: 52px;
+  height: 46px;
 }
 
 /* Sliders */
 .controls-area {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .eq-row {
@@ -481,7 +481,7 @@ input:checked + .slider-round:before {
   align-items: center;
   gap: 8px;
   width: 100%;
-  min-height: 22px;
+  min-height: 20px;
 }
 
 /* Band tag: the on/off switch for that stage. Off keeps the value but takes the stage out of the chain.
@@ -515,6 +515,84 @@ input:checked + .slider-round:before {
 
 .band-tag:hover {
   filter: brightness(1.2);
+}
+
+/* LIM and CEIL are always on: the tag is a label, not a switch */
+.band-tag.static {
+  cursor: default;
+}
+
+.band-tag.static:hover {
+  filter: none;
+}
+
+/* Dynamics rows (AUTO, MATCH, LIM, CEIL): the stage's name and its mode menu in the label cell, a live bar where the
+   slider would be, and the figure at the right. The bar is how much the stage is turning the music down (0 to 12 dB). */
+.dyn-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: visible;
+}
+
+.dyn-label > span {
+  white-space: nowrap;
+}
+
+.mode-select {
+  font-size: 10.5px;
+  font-weight: 500;
+  height: 18px;
+  padding: 0 2px;
+  max-width: 80px;
+  background: var(--bg-surface, #1e1e26);
+  color: var(--text-main, #fff);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.mode-select:hover {
+  border-color: var(--accent, #00e5ff);
+}
+
+.gr-meter {
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+  background:
+    repeating-linear-gradient(to right, transparent 0, transparent calc(25% - 1px), rgba(255, 255, 255, 0.22) calc(25% - 1px), rgba(255, 255, 255, 0.22) 25%),
+    color-mix(in srgb, var(--accent, #00e5ff) 14%, #2a2a35);
+}
+
+.gr-meter > i {
+  display: block;
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent, #00e5ff);
+  transition: width 0.08s linear;
+}
+
+/* 3 dB and more: noticeable; 8 dB and more: heavy (the figure beside the bar says the same) */
+.gr-meter.warn > i {
+  background: #ffb300;
+}
+
+.gr-meter.heavy > i {
+  background: #ff5252;
+}
+
+.dyn-val {
+  font-variant-numeric: tabular-nums;
+}
+
+.dyn-val.idle {
+  color: var(--text-muted, #9a9aa5);
+  font-weight: 500;
 }
 
 .eq-label {
@@ -608,7 +686,7 @@ input:checked + .slider-round:before {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
+  padding: 4px 12px;
   border-top: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
   background: var(--bg-secondary, #18181f);
 }
@@ -855,7 +933,7 @@ body.panel .preset-actions {
 }
 
 /* The panel is tall and may be narrow: each slider row becomes two lines, with a full-width slider. */
-body.panel .eq-row:not(.toggle-row) {
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) {
   display: grid;
   grid-template-columns: 40px 1fr 1fr 62px;
   grid-template-areas:
@@ -865,12 +943,28 @@ body.panel .eq-row:not(.toggle-row) {
   align-items: center;
 }
 
-body.panel .eq-row:not(.toggle-row) .band-tag { grid-area: tag; }
-body.panel .eq-row:not(.toggle-row) .eq-label { grid-area: label; width: auto; }
-body.panel .eq-row:not(.toggle-row) .eq-val { grid-area: val; width: auto; min-width: 0; }
-body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="down"] { grid-area: down; justify-self: end; }
-body.panel .eq-row:not(.toggle-row) .eq-slider { grid-area: slider; }
-body.panel .eq-row:not(.toggle-row) .eq-nudge-btn[data-action="up"] { grid-area: up; justify-self: start; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .band-tag { grid-area: tag; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-label { grid-area: label; width: auto; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-val { grid-area: val; width: auto; min-width: 0; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-nudge-btn[data-action="down"] { grid-area: down; justify-self: end; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-slider { grid-area: slider; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-nudge-btn[data-action="up"] { grid-area: up; justify-self: start; }
+
+/* Dynamics rows in the panel: name + menu on the first line, the bar under them. */
+body.panel .eq-row.dyn-row {
+  display: grid;
+  grid-template-columns: 40px 1fr 1fr 62px;
+  grid-template-areas:
+    "tag label label val"
+    ". meter meter meter";
+  gap: 4px 8px;
+  align-items: center;
+}
+
+body.panel .eq-row.dyn-row .band-tag { grid-area: tag; }
+body.panel .eq-row.dyn-row .dyn-label { grid-area: label; width: auto; }
+body.panel .eq-row.dyn-row .eq-val { grid-area: val; width: auto; min-width: 0; }
+body.panel .eq-row.dyn-row .gr-meter { grid-area: meter; }
 
 /* ---------- Narrow panel (under 400 px): the player stacks vertically; wider than that it is the normal layout.
    The rules below respond live as the panel's edge is dragged. ---------- */

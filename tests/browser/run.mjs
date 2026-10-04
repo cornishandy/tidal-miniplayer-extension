@@ -415,13 +415,13 @@ try {
   if (captureOk) {
     const measure = `(async () => {
       const an = audioCtx.createAnalyser(); an.fftSize = 16384; an.smoothingTimeConstant = 0;
-      const tap = (typeof outputCeiling !== 'undefined' && outputCeiling) || masterLimiter;
+      const tap = (typeof outputSum !== 'undefined' && outputSum) || (typeof outputCeiling !== 'undefined' && outputCeiling) || masterLimiter;
       tap.connect(an);
       await new Promise(r => setTimeout(r, 700));
       const d = new Float32Array(an.frequencyBinCount); an.getFloatFrequencyData(d); const hz = audioCtx.sampleRate / an.fftSize;
       const at = (f) => Math.max(...[-2,-1,0,1,2].map(k => d[Math.round(f / hz) + k]));
       const t = new Float32Array(an.fftSize); an.getFloatTimeDomainData(t); let peak = 0; for (const v of t) peak = Math.max(peak, Math.abs(v));
-      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), hz500: +at(500).toFixed(1), hz2k: +at(2000).toFixed(1), peak: +peak.toFixed(3), tap: tap === masterLimiter ? 'limiter' : 'ceiling' };
+      const r = { hz60: +at(60).toFixed(1), hz1k: +at(1000).toFixed(1), hz8k: +at(8000).toFixed(1), hz500: +at(500).toFixed(1), hz2k: +at(2000).toFixed(1), hz3k: +at(3000).toFixed(1), hz180: +at(180).toFixed(1), peak: +peak.toFixed(3), tap: tap === masterLimiter ? 'limiter' : (typeof outputSum !== 'undefined' && tap === outputSum) ? 'output' : 'ceiling' };
       tap.disconnect(an); return r; })()`;
     const setParams = (params) => sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params });
 
@@ -504,14 +504,187 @@ try {
     record('W-AUDIO-LIMITER', 'Worst-case settings (bass +14, mid/high +6, 250%) never exceed -0.3 dBFS at the output',
       hot && hot.peak <= 0.967 ? 'PASS' : 'FAIL', { hot, note: 'linear sample peak; 0.966 = -0.3 dBFS, 1.0 = 0 dBFS' }, 'objective-audio');
 
+    // ---- W-DYN-BASELINE: the sound of 1.4.0, measured. Six settings (AUTO off and on) at the final output. The numbers
+    // below were measured on 1.4.0 (`4b4975a`) with this same harness; every later build must reproduce them in its
+    // default modes (the user's rule of 2026-10-04: nothing about the audio processing changes without asking). ----
+    const scenario = async (params, settle = 700) => { await setParams(params); await sleep(settle); return (await evalOffscreen(measure)).value; };
+    const BASE = { hpf: 20, mid: 0, high: 0, semitones: 0, bypass: false, stageBypass: NONE };
+    const baselineSet = {
+      flatOff: { ...BASE, bass: 0, gain: 1, autoBalance: false },
+      bass10Off: { ...BASE, bass: 10, gain: 1, autoBalance: false },
+      hotOff: { ...BASE, bass: 14, mid: 6, high: 6, gain: 2.5, autoBalance: false },
+      flatAuto: { ...BASE, bass: 0, gain: 1, autoBalance: true },
+      heavyAuto: { ...BASE, bass: 14, gain: 1.5, autoBalance: true },
+      deepAuto: { ...BASE, bass: 8, hpf: 25, high: 1, gain: 1, autoBalance: true }
+    };
+    const baselineNow = {};
+    for (const [name, p] of Object.entries(baselineSet)) baselineNow[name] = await scenario(p);
+    const BASELINE_140 = { flatOff: { hz60: -39.9, hz1k: -39.9, hz8k: -39.9, peak: 0.149 }, bass10Off: { hz60: -30.6, hz1k: -39.9, hz8k: -39.9, peak: 0.253 }, hotOff: { hz60: -19.5, hz1k: -26.4, hz8k: -27, peak: 0.965 }, flatAuto: { hz60: -37, hz1k: -37, hz8k: -37, peak: 0.207 }, heavyAuto: { hz60: -21.3, hz1k: -34.1, hz8k: -34.1, peak: 0.647 }, deepAuto: { hz60: -29.5, hz1k: -37.2, hz8k: -36.3, peak: 0.316 } }; // measured 2026-10-04 on 1.4.0 (tests/results/baseline-140-dyn)
+    const same = (a, b) => !!a && !!b && ['hz60', 'hz1k', 'hz8k'].every((k) => Math.abs(a[k] - b[k]) <= 0.3) && Math.abs(a.peak - b.peak) <= 0.004;
+    const baselineDiff = BASELINE_140 ? Object.keys(baselineSet).filter((k) => !same(baselineNow[k], BASELINE_140[k])) : Object.keys(baselineSet);
+    record('W-DYN-BASELINE', 'Default modes reproduce the measured sound of 1.4.0: six settings (AUTO off and on), 60 Hz / 1 kHz / 8 kHz within 0.3 dB and peak within 0.004 at the final output',
+      BASELINE_140 && baselineDiff.length === 0 ? 'PASS' : 'FAIL', { baselineNow, baseline140: BASELINE_140, differs: baselineDiff }, 'objective-audio');
+
+    // ---- W-DYN-*: the switchable alternatives (1.5.0, D-01), each measured at the final output ----
+    const setDyn = (d) => sendFrom(popup, { type: 'SET_DYNAMICS', dynamics: d });
+    const dynState = async () => (await evalOffscreen(`({ eff: effectiveDynamics(), err: dynError,
+      band: bandLevelerGain && +bandLevelerGain.gain.value.toFixed(2), wet: autoBalanceWetGain && +autoBalanceWetGain.gain.value.toFixed(2), dry: autoBalanceBypassGain && +autoBalanceBypassGain.gain.value.toFixed(2),
+      release: autoBalanceComp && +autoBalanceComp.release.value.toFixed(2), matchWet: matchWetGain && +matchWetGain.gain.value.toFixed(2), matchDry: matchDryGain && +matchDryGain.gain.value.toFixed(2),
+      la: lookaheadGain && +lookaheadGain.gain.value.toFixed(2), fast: limiterFastGain && +limiterFastGain.gain.value.toFixed(2), warm: ceilingWarmGain && +ceilingWarmGain.gain.value.toFixed(2), clean: ceilingCleanGain && +ceilingCleanGain.gain.value.toFixed(2),
+      meters: dynamicsFrame(), rate: audioCtx.sampleRate })`)).value;
+    const DEFAULT_DYN = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+
+    // W-DYN-LEVELER-BASS: "Bass only" turns the boosted 60 Hz down and leaves 1 kHz and 8 kHz exactly as with AUTO off;
+    // "Full band" (the original) moves everything.
+    const heavy1 = { ...BASE, bass: 14, gain: 1 };
+    const autoOff = await scenario({ ...heavy1, autoBalance: false });
+    await setDyn({ ...DEFAULT_DYN, leveler: 'bass' });
+    const bassMode = await scenario({ ...heavy1, autoBalance: true }, 1000);
+    const bassState = await dynState();
+    await setDyn({ ...DEFAULT_DYN, leveler: 'full' });
+    const fullMode = await scenario({ ...heavy1, autoBalance: true }, 1000);
+    const fullState = await dynState();
+    record('W-DYN-LEVELER-BASS', 'AUTO "Bass only": with bass +14 dB it turns 60 Hz down by 2 dB or more while 1 kHz and 8 kHz stay within 0.5 dB of AUTO off; "Full band" moves 1 kHz as well (objective FFT); routing and meter agree',
+      !!(autoOff && bassMode && fullMode) && bassMode.hz60 <= autoOff.hz60 - 2 && Math.abs(bassMode.hz1k - autoOff.hz1k) <= 0.5 && Math.abs(bassMode.hz8k - autoOff.hz8k) <= 0.5
+        && Math.abs(fullMode.hz1k - autoOff.hz1k) > 1 && bassState?.eff?.leveler === 'bass' && bassState.band === 1 && bassState.wet === 0 && bassState.meters?.leveler >= 1
+        && fullState?.band === 0 && fullState.wet === 1 ? 'PASS' : 'FAIL',
+      { autoOff, bassMode, fullMode, bassState, fullState, cut60: +(autoOff.hz60 - bassMode.hz60).toFixed(1) }, 'objective-audio');
+
+    // W-DYN-LEVELER-SLOW: "Slow release" is the same compressor with a 0.6 s release: the same steady level, a slower
+    // recovery. The recovery is read from the output envelope (RMS every 25 ms after all three boosts are removed, inside
+    // the engine so both timings are comparable); the node's own `reduction` readout cannot be used, Chrome smooths it
+    // with a 0.33 s metering constant of its own.
+    const heavy3 = { ...BASE, bass: 14, mid: 6, high: 6, gain: 1, autoBalance: true };
+    const recoverySnippet = `(async () => {
+      const an = audioCtx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0; outputSum.connect(an);
+      const buf = new Float32Array(2048);
+      const rms = () => { an.getFloatTimeDomainData(buf); let s = 0; for (const v of buf) s += v * v; return Math.sqrt(s / buf.length); };
+      updateParams({ bass: 0, mid: 0, high: 0 });
+      const out = []; for (let i = 0; i < 56; i++) { await new Promise(r => setTimeout(r, 25)); out.push(+rms().toFixed(4)); }
+      outputSum.disconnect(an); return out; })()`;
+    // After the boosts go (a 30 ms ramp) the level settles; while the gain is still recovering the output sits below its
+    // final value. The deficit summed over 100 to 350 ms after the step is the measure: near zero when the gain has already
+    // recovered during the ramp (0.2 s release), clearly positive when it has not (0.6 s release).
+    const deficit = (arr) => {
+      if (!arr || arr.length < 24) return { deficit: -1, minAfter100ms: 0, end: 0 };
+      const vEnd = arr.slice(-8).reduce((a, b) => a + b, 0) / 8;
+      let d = 0, mn = Infinity;
+      for (let k = 4; k <= 14; k++) { d += Math.max(0, vEnd - arr[k]) / vEnd; if (arr[k] < mn) mn = arr[k]; }
+      return { deficit: +d.toFixed(3), minAfter100ms: mn, end: +vEnd.toFixed(4), minBelowEndPct: +((1 - mn / vEnd) * 100).toFixed(1) };
+    };
+    await setDyn({ ...DEFAULT_DYN, leveler: 'full' });
+    await scenario(heavy3, 1200);
+    const fastRecovery = (await evalOffscreen(recoverySnippet)).value;
+    await setDyn({ ...DEFAULT_DYN, leveler: 'slow' });
+    const slowMode = await scenario({ ...heavy1, autoBalance: true }, 1000);
+    const slowState = await dynState();
+    await scenario(heavy3, 1200);
+    const slowRecovery = (await evalOffscreen(recoverySnippet)).value;
+    await setDyn(DEFAULT_DYN);
+    await sleep(300);
+    const afterSlow = await dynState();
+    const dFast = deficit(fastRecovery), dSlow = deficit(slowRecovery);
+    record('W-DYN-LEVELER-SLOW', 'AUTO "Slow release": release 0.6 s instead of 0.2 s; the steady level is the same as "Full band" within 0.3 dB; after the boosts are removed the output stays measurably lower for longer (deficit over 100 to 350 ms at least 0.05 above "Full band"); back to "Full band" restores 0.2 s',
+      !!(slowMode && fullMode) && Math.abs(slowMode.hz60 - fullMode.hz60) <= 0.3 && Math.abs(slowMode.hz1k - fullMode.hz1k) <= 0.3 && slowState?.release === 0.6 && afterSlow?.release === 0.2
+        && dFast.deficit >= 0 && dSlow.deficit >= dFast.deficit + 0.05 ? 'PASS' : 'FAIL',
+      { fullMode, slowMode, releaseSlow: slowState?.release, releaseAfter: afterSlow?.release, recovery: { full: dFast, slow: dSlow }, envelopeFull: fastRecovery, envelopeSlow: slowRecovery, note: 'RMS every 25 ms after bass/mid/high go from +14/+6/+6 to 0 with AUTO on' }, 'objective-audio');
+
+    // W-DYN-MATCH: the loudness match brings the K-weighted level of bass +14 dB back to the untouched level (within 1 dB).
+    // K-weighting (ITU-R BS.1770) evaluated at the three tones with the same filter design the worklet uses.
+    const rate = fullState?.rate || 48000;
+    const rbj = (type, f0, Q, fs, gainDb = 0) => {
+      const w0 = 2 * Math.PI * f0 / fs, cosw = Math.cos(w0), sinw = Math.sin(w0), alpha = sinw / (2 * Q);
+      let b0, b1, b2, a0, a1, a2;
+      if (type === 'highpass') { b0 = (1 + cosw) / 2; b1 = -(1 + cosw); b2 = (1 + cosw) / 2; a0 = 1 + alpha; a1 = -2 * cosw; a2 = 1 - alpha; }
+      else { const A = Math.pow(10, gainDb / 40), sA = 2 * Math.sqrt(A) * alpha; b0 = A * ((A + 1) + (A - 1) * cosw + sA); b1 = -2 * A * ((A - 1) + (A + 1) * cosw); b2 = A * ((A + 1) + (A - 1) * cosw - sA); a0 = (A + 1) - (A - 1) * cosw + sA; a1 = 2 * ((A - 1) - (A + 1) * cosw); a2 = (A + 1) - (A - 1) * cosw - sA; }
+      return { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 };
+    };
+    const magDb = (c, f, fs) => { const w = 2 * Math.PI * f / fs; const nr = c.b0 + c.b1 * Math.cos(w) + c.b2 * Math.cos(2 * w), ni = -(c.b1 * Math.sin(w) + c.b2 * Math.sin(2 * w)); const dr = 1 + c.a1 * Math.cos(w) + c.a2 * Math.cos(2 * w), di = -(c.a1 * Math.sin(w) + c.a2 * Math.sin(2 * w)); return 10 * Math.log10((nr * nr + ni * ni) / (dr * dr + di * di)); };
+    const kShelf = rbj('highshelf', 1681.974450955533, 0.7071752369554196, rate, 3.999843853973347), kHpf = rbj('highpass', 38.13547087602444, 0.5003270373238773, rate);
+    const kW = (f) => magDb(kShelf, f, rate) + magDb(kHpf, f, rate);
+    const loud = (m) => 10 * Math.log10([[60, m.hz60], [1000, m.hz1k], [8000, m.hz8k]].reduce((acc, [f, lvl]) => acc + Math.pow(10, (lvl + kW(f)) / 10), 0));
+    await setDyn({ ...DEFAULT_DYN, match: true });
+    const matched = await scenario({ ...heavy1, autoBalance: false }, 4000);
+    const matchState = await dynState();
+    await setDyn(DEFAULT_DYN);
+    const unmatched = await scenario({ ...heavy1, autoBalance: false }, 600);
+    const unmatchedState = await dynState();
+    const loudIn = loud(flat), loudOff = loud(autoOff), loudOn = loud(matched);
+    record('W-DYN-MATCH', 'MATCH: with bass +14 dB the output is as loud as the untouched tab within 1 dB (K-weighted, ITU-R BS.1770) where it was 3 dB or more louder without it; the trim is reported; off restores the level',
+      !!(matched && unmatched) && Math.abs(loudOn - loudIn) <= 1 && loudOff - loudIn >= 3 && matchState?.eff?.match === true && matchState.matchWet === 1 && matchState.meters?.match <= -3
+        && unmatchedState?.matchDry === 1 && Math.abs(unmatched.hz60 - autoOff.hz60) <= 0.3 ? 'PASS' : 'FAIL',
+      { kWeightsDb: { hz60: +kW(60).toFixed(2), hz1k: +kW(1000).toFixed(2), hz8k: +kW(8000).toFixed(2) }, loudness: { untouched: +loudIn.toFixed(2), bass14NoMatch: +loudOff.toFixed(2), bass14Match: +loudOn.toFixed(2) },
+        trimReported: matchState?.meters?.match, matched, unmatched, autoOff }, 'objective-audio');
+
+    // W-DYN-LIMITER-LOOKAHEAD: at the worst-case settings the look-ahead limiter holds the output at or under 0.93 (its
+    // ceiling) so the output ceiling has nothing to bend; the fast limiter (original) reproduces the 1.4.0 peak afterwards.
+    const hotP = { ...BASE, bass: 14, mid: 6, high: 6, gain: 2.5, autoBalance: false };
+    await setDyn({ ...DEFAULT_DYN, limiter: 'lookahead' });
+    const la = await scenario(hotP, 1000);
+    const laState = await dynState();
+    await setDyn(DEFAULT_DYN);
+    const fastAgain = await scenario(hotP, 800);
+    const fastState = await dynState();
+    record('W-DYN-LIMITER-LOOKAHEAD', 'LIM "Look-ahead": worst-case settings never exceed 0.93 (−0.63 dBFS) at the output, the ceiling bends nothing (meter 0) while the limiter meter shows work; "Fast" restores the 1.4.0 peak',
+      !!(la && fastAgain) && la.peak <= 0.931 && la.peak >= 0.85 && laState?.eff?.limiter === 'lookahead' && laState.la === 1 && laState.fast === 0 && laState.meters?.ceiling === 0 && laState.meters?.limiter >= 0.5
+        && Math.abs(fastAgain.peak - hot.peak) <= 0.004 && fastState?.fast === 1 && fastState.meters?.limiter >= 0.5 ? 'PASS' : 'FAIL',
+      { lookahead: la, fastAgain, hot140: hot, laState, fastState, distortion: { lookahead: { hz180: la?.hz180, hz2k: la?.hz2k, hz3k: la?.hz3k }, fast: { hz180: hot.hz180, hz2k: hot.hz2k, hz3k: hot.hz3k } } }, 'objective-audio');
+
+    // W-DYN-CEILING-WARM: the warm ceiling is still a hard guarantee (never above 0.966), is transparent at a quiet level,
+    // and adds harmonic colour at the worst-case level (a distortion product rises by 6 dB or more); clean restores 1.4.0.
+    await setDyn({ ...DEFAULT_DYN, ceiling: 'warm' });
+    const warmFlat = await scenario({ ...BASE, bass: 0, gain: 1, autoBalance: false }, 600);
+    const warm = await scenario(hotP, 900);
+    const warmState = await dynState();
+    await setDyn(DEFAULT_DYN);
+    const cleanAgain = await scenario(hotP, 800);
+    const cleanState = await dynState();
+    const colour = Math.max(warm.hz180 - hot.hz180, warm.hz2k - hot.hz2k, warm.hz3k - hot.hz3k);
+    record('W-DYN-CEILING-WARM', 'CEIL "Warm": never above 0.966 at the worst case, within 0.15 dB of clean at the quiet level, adds 6 dB or more of harmonic colour at the worst case; the ceiling meter reports the bend; "Clean" restores the 1.4.0 output',
+      !!(warm && warmFlat && cleanAgain) && warm.peak <= 0.966 && Math.abs(warmFlat.hz1k - flat.hz1k) <= 0.15 && Math.abs(warmFlat.peak - flat.peak) <= 0.003 && colour >= 6
+        && warmState?.eff?.ceiling === 'warm' && warmState.warm === 1 && warmState.clean === 0 && warmState.meters?.ceiling >= 1
+        && Math.abs(cleanAgain.peak - hot.peak) <= 0.004 && Math.abs(cleanAgain.hz1k - hot.hz1k) <= 0.3 && cleanState?.clean === 1 ? 'PASS' : 'FAIL',
+      { warmFlat, flat, warm, hot140: hot, cleanAgain, colourDb: +colour.toFixed(1), warmState, cleanState }, 'objective-audio');
+
+    // W-DYN-METERS-UI: the screen's bars and figures follow the engine while the EQ works (AUTO on, worst case: the leveler,
+    // the limiter and the ceiling all show work), the match reads 0.0 dB while off, and a menu change and the MATCH tag persist.
+    await setParams({ ...hotP, autoBalance: true });
+    await sleep(1200);
+    const metersUi = await popup.evaluate(() => {
+      const read = (k) => { const bar = document.getElementById(`meter-${k}`), val = document.getElementById(`val-${k}`); return { text: val.textContent, idle: val.classList.contains('idle'), now: +bar.getAttribute('aria-valuenow'), width: bar.firstElementChild.getBoundingClientRect().width, cls: bar.className }; };
+      return { comp: read('comp'), match: read('match'), limiter: read('limiter'), ceiling: read('ceiling') };
+    });
+    await popup.selectOption('#mode-leveler', 'bass');
+    await popup.click('.band-tag[data-band="match"]');
+    await sleep(500);
+    const storedDyn = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics || null))));
+    const engineDyn = await dynState();
+    const { page: popupD } = await openPopup();
+    const reopenedDyn = await popupD.evaluate(() => ({ leveler: document.getElementById('mode-leveler').value, matchPressed: document.querySelector('.band-tag[data-band="match"]').getAttribute('aria-pressed'), rowOff: document.querySelector('.eq-row[data-band="match"]').classList.contains('is-off') }));
+    await popupD.close();
+    await popup.selectOption('#mode-leveler', 'full');
+    await popup.click('.band-tag[data-band="match"]');
+    await sleep(400);
+    const restoredDyn = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics || null))));
+    const dbOf = (t) => parseFloat(String(t).replace('−', '-'));
+    record('W-DYN-METERS-UI', 'Meters on the screen: with AUTO on at the worst case the leveler, limiter and ceiling bars and figures show work and the match reads 0.0 dB while off; the Leveler menu and the MATCH tag persist to storage, reach the engine and show again on reopening; defaults restored',
+      metersUi.comp.now >= 0.5 && dbOf(metersUi.comp.text) <= -0.5 && metersUi.comp.width > 0 && metersUi.limiter.now >= 0.5 && metersUi.ceiling.now >= 0.1 && !metersUi.comp.idle
+        && metersUi.match.text === '0.0 dB' && storedDyn?.leveler === 'bass' && storedDyn.match === true && engineDyn?.eff?.leveler === 'bass' && engineDyn.eff.match === true
+        && reopenedDyn.leveler === 'bass' && reopenedDyn.matchPressed === 'true' && !reopenedDyn.rowOff && restoredDyn?.leveler === 'full' && restoredDyn.match === false ? 'PASS' : 'FAIL',
+      { metersUi, storedDyn, engineEff: engineDyn?.eff, reopenedDyn, restoredDyn }, 'installed-browser');
+    await shot(popup, 'popup-meters.png');
+    await setDyn(DEFAULT_DYN);
+
     // ---- W-CAPTURE-STOP ----
     const stopRes = await sendFrom(popup, { type: 'STOP_CAPTURE' });
     await sleep(500);
     const afterStop = await evalOffscreen(`({ isCapturing, ctx: audioCtx ? audioCtx.state : null, stream: !!currentStream })`);
     const state = await sendFrom(popup, { type: 'GET_STATE' });
-    record('W-CAPTURE-STOP', 'Stop releases stream + AudioContext; state reports OFF',
-      stopRes?.success && afterStop.value?.isCapturing === false && !afterStop.value?.stream && state.isCapturing === false ? 'PASS' : 'FAIL',
-      { stopRes, afterStop, stateIsCapturing: state.isCapturing });
+    await sleep(1300); // the screen's 1 s poll notices the stop and idles its meters
+    const idleMeters = await popup.evaluate(() => ['comp', 'match', 'limiter', 'ceiling'].map((k) => document.getElementById(`val-${k}`).textContent));
+    record('W-CAPTURE-STOP', 'Stop releases stream + AudioContext; state reports OFF; the meters read idle',
+      stopRes?.success && afterStop.value?.isCapturing === false && !afterStop.value?.stream && state.isCapturing === false && idleMeters.every((t) => t === 'idle') ? 'PASS' : 'FAIL',
+      { stopRes, afterStop, stateIsCapturing: state.isCapturing, idleMeters });
 
     // ---- W-CAPTURE-RESTART ----
     const re = await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
@@ -544,7 +717,7 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-AUDIO-LIMITER', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }
@@ -595,7 +768,10 @@ try {
         coverEdgeGap: Math.round(np.getBoundingClientRect().right - parseFloat(cs.paddingRight) - cover.getBoundingClientRect().right),
         stacked: getComputedStyle(document.querySelector('.np-main')).display === 'contents',
         transportW: Math.round(document.querySelector('.transport').getBoundingClientRect().width), npInner: Math.round(npInner),
-        titleWraps: getComputedStyle(document.getElementById('player-title')).whiteSpace !== 'nowrap'
+        titleWraps: getComputedStyle(document.getElementById('player-title')).whiteSpace !== 'nowrap',
+        // 1.5.0 dynamics rows: the name + mode menu stay inside the label cell and the bar keeps a usable width
+        meterW: Math.round(document.getElementById('meter-comp').getBoundingClientRect().width),
+        menuFits: document.getElementById('mode-leveler').getBoundingClientRect().right <= document.querySelector('.eq-row[data-band="comp"] .dyn-label').getBoundingClientRect().right + 1
       };
     });
     await panelPage.screenshot({ path: join(outDir, `panel-${width}.png`) });
@@ -622,7 +798,7 @@ try {
   const w400 = await layoutAt(400);
   const w480 = await layoutAt(480);
   await panelPage.close();
-  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown && m.coverRightOfTitle && m.coverEdgeGap <= 1;
+  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown && m.coverRightOfTitle && m.coverEdgeGap <= 1 && m.meterW >= 100 && m.menuFits;
   const stackedOk = (m, minSlider) => fits(m) && m.stacked && m.coverW === 56 && m.titleWraps && m.transportW >= m.npInner - 2 && m.sliderW >= minSlider;
   const normalOk = (m, minSlider) => fits(m) && !m.stacked && m.coverW === 76 && !m.titleWraps && m.sliderW >= minSlider;
   record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band icon buttons toggle; no errors',
