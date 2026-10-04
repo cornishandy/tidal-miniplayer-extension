@@ -19,6 +19,7 @@ const RUNTIME = [
   'offscreen.html',
   'offscreen.js',
   'pitch-shifter.worklet.js',
+  'dynamics.worklet.js',
   'popup.html',
   'popup.css',
   'popup.js',

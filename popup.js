@@ -8,6 +8,10 @@ let isCapturingActive = false;
 let currentTrackInfo = null;
 let activePresetBaseline = null;
 let stayOpen = false;
+// Dynamics modes (1.5.0, D-01): engine settings, not preset fields. The defaults are the 1.4.0 chain.
+const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+let dynamics = { ...DYN_DEFAULT };
+let dynUnavailableTold = false;
 const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
 const isPanel = query.get('panel') === '1';       // Chrome's side panel (Stay open)
@@ -59,7 +63,17 @@ const valMid = document.getElementById('val-mid');
 const valHigh = document.getElementById('val-high');
 const valGain = document.getElementById('val-gain');
 const valPitch = document.getElementById('val-pitch');
-const valAuto = document.getElementById('val-auto');
+
+// DOM: dynamics modes and meters (AUTO, MATCH, LIM, CEIL)
+const modeLeveler = document.getElementById('mode-leveler');
+const modeLimiter = document.getElementById('mode-limiter');
+const modeCeiling = document.getElementById('mode-ceiling');
+const meters = {
+  comp: { bar: document.getElementById('meter-comp'), val: document.getElementById('val-comp'), shown: 0 },
+  match: { bar: document.getElementById('meter-match'), val: document.getElementById('val-match'), shown: 0 },
+  limiter: { bar: document.getElementById('meter-limiter'), val: document.getElementById('val-limiter'), shown: 0 },
+  ceiling: { bar: document.getElementById('meter-ceiling'), val: document.getElementById('val-ceiling'), shown: 0 }
+};
 
 // Per-band on/off. Off keeps the slider value but takes that stage out of the chain.
 // `comp` is the Auto-Balancing switch (autoBalance); the others live in stageBypass.
@@ -77,8 +91,9 @@ function startFrames() {
   if (frameTimer) return;
   frameTimer = setInterval(() => {
     chrome.runtime.sendMessage({ target: 'offscreen', type: 'GET_AUDIO_FRAME' }, (res) => {
-      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); return; }
+      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); updateMeters(null); return; }
       physics.setFrame(res);
+      updateMeters(res.dyn || null);
     });
   }, 66);
 }
@@ -86,7 +101,70 @@ function stopFrames() {
   if (frameTimer) clearInterval(frameTimer);
   frameTimer = null;
   physics.setFrame(null);
+  updateMeters(null);
 }
+
+// ---------- Dynamics meters ----------
+// Each bar is how much that stage is turning the music down right now, 0 to 12 dB (the match bar: the size of its
+// trim, signed in the figure). Values fall at about 20 dB/s on screen so short limiter hits stay visible.
+const METER_MAX_DB = 12;
+const METER_FALL_PER_FRAME = 1.4;
+function updateMeters(dyn) {
+  for (const [key, m] of Object.entries(meters)) {
+    if (!m.bar || !m.val) continue;
+    if (!dyn) {
+      m.shown = 0;
+      m.bar.firstElementChild.style.width = '0%';
+      m.bar.classList.remove('warn', 'heavy');
+      m.bar.setAttribute('aria-valuenow', '0');
+      m.val.textContent = 'idle';
+      m.val.classList.add('idle');
+      continue;
+    }
+    const raw = Number(dyn[key === 'comp' ? 'leveler' : key]) || 0;
+    const size = Math.abs(raw);
+    m.shown = Math.max(size, m.shown - METER_FALL_PER_FRAME);
+    const pct = Math.max(0, Math.min(100, (m.shown / METER_MAX_DB) * 100));
+    m.bar.firstElementChild.style.width = `${pct.toFixed(1)}%`;
+    m.bar.classList.toggle('warn', m.shown >= 3 && m.shown < 8);
+    m.bar.classList.toggle('heavy', m.shown >= 8);
+    m.bar.setAttribute('aria-valuenow', m.shown.toFixed(1));
+    const signed = key === 'match' ? raw : -size;
+    m.val.textContent = `${signed > 0.05 ? '+' : signed < -0.05 ? '−' : ''}${Math.abs(signed).toFixed(1)} dB`;
+    m.val.classList.remove('idle');
+  }
+  if (dyn && dyn.available === false && !dynUnavailableTold) {
+    dynUnavailableTold = true;
+    showHint('The alternative stages (Bass only, Loudness match, Look-ahead) could not be loaded in this Chrome; the original stages are in use.', 8000);
+  }
+}
+
+function normaliseDyn(d) {
+  const x = d || {};
+  return {
+    leveler: ['full', 'slow', 'bass'].includes(x.leveler) ? x.leveler : 'full',
+    match: x.match === true,
+    limiter: ['fast', 'lookahead'].includes(x.limiter) ? x.limiter : 'fast',
+    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean'
+  };
+}
+
+function applyDynamicsToUI() {
+  if (modeLeveler) modeLeveler.value = dynamics.leveler;
+  if (modeLimiter) modeLimiter.value = dynamics.limiter;
+  if (modeCeiling) modeCeiling.value = dynamics.ceiling;
+  renderBandTags();
+}
+
+function sendDynamicsUpdate() {
+  dynamics = normaliseDyn(dynamics);
+  chrome.runtime.sendMessage({ type: 'SET_DYNAMICS', dynamics });
+  applyDynamicsToUI();
+}
+
+if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate(); };
+if (modeLimiter) modeLimiter.onchange = () => { dynamics.limiter = modeLimiter.value; sendDynamicsUpdate(); };
+if (modeCeiling) modeCeiling.onchange = () => { dynamics.ceiling = modeCeiling.value; sendDynamicsUpdate(); };
 window.addEventListener('unload', stopFrames);
 let resizeTimer = null;
 window.addEventListener('resize', () => {
@@ -155,10 +233,12 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   currentParams = normaliseBypass({ ...(response.currentParams || presets[currentPresetName] || {}) });
   stayOpen = !!response.stayOpen;
   toggleStayOpen.checked = stayOpen;
+  dynamics = normaliseDyn(response.dynamics);
 
   updateEqPowerUI(isCapturingActive, response.capturedTabTitle);
   populatePresets(currentPresetName);
   applyParamsToUI(currentParams);
+  applyDynamicsToUI();
 
   activePresetBaseline = presets[currentPresetName] ? normaliseBypass({ ...presets[currentPresetName] }) : null;
   checkPresetModificationState();
@@ -610,16 +690,22 @@ const fmt = {
 function renderBandTags() {
   document.querySelectorAll('.band-tag').forEach((tag) => {
     const band = tag.dataset.band;
-    const off = !!bandOff[band];
+    if (!band) return; // LIM and CEIL: always on, labels only
+    const off = band === 'match' ? !dynamics.match : !!bandOff[band];
     tag.classList.toggle('off', off);
     tag.setAttribute('aria-pressed', String(!off));
     tag.closest('.eq-row')?.classList.toggle('is-off', off);
     const names = { hpf: 'High-pass filter', bass: 'Bass', mid: 'Mid', high: 'High', comp: 'Auto-Balancing', gain: 'Master volume', pitch: 'Pitch' };
+    if (band === 'match') {
+      tag.title = off
+        ? 'Loudness match is off (more bass means more loudness). Click to switch it on.'
+        : 'Loudness match is on: the music is kept as loud as the untouched tab. Click to switch it off.';
+      return;
+    }
     tag.title = off
       ? `${names[band]} is off (the value is kept). Click to switch it back on.`
       : `${names[band]} is on. Click to switch it off without losing the value.`;
   });
-  if (valAuto) valAuto.textContent = bandOff.comp ? 'off' : 'on';
 }
 
 function applyParamsToUI(p) {
@@ -661,9 +747,14 @@ function sendAudioParamUpdate() {
   physics.updateState(currentParams, isCapturingActive);
 }
 
-document.querySelectorAll('.band-tag').forEach((tag) => {
+document.querySelectorAll('button.band-tag').forEach((tag) => {
   tag.onclick = () => {
     const band = tag.dataset.band;
+    if (band === 'match') { // an engine setting, not a preset value
+      dynamics.match = !dynamics.match;
+      sendDynamicsUpdate();
+      return;
+    }
     bandOff[band] = !bandOff[band];
     renderBandTags();
     sendAudioParamUpdate();

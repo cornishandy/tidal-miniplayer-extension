@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Why the leveler can sound squashed, and what the switches do</title>
+<style>
+  body { margin: 0; background: #121216; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .sheet { width: 1180px; padding: 26px 30px 24px; box-sizing: border-box; }
+  h1 { font-size: 22px; font-weight: 700; margin: 0 0 4px; }
+  .sub { font-size: 13px; color: #9a9aa5; margin: 0 0 18px; }
+  .chain { display: flex; align-items: flex-start; gap: 6px; margin-bottom: 8px; }
+  .stage { flex: 1; background: #1e1e26; border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 8px 7px; min-height: 70px; box-sizing: border-box; }
+  .stage .tag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .5px; color: #00e5ff; border: 1px solid rgba(0,229,255,.45); background: rgba(0,229,255,.08); border-radius: 4px; padding: 2px 6px; margin-bottom: 5px; }
+  .stage .tag.static { color: #9a9aa5; border-color: rgba(255,255,255,.18); background: rgba(255,255,255,.04); }
+  .stage .name { font-size: 11.5px; line-height: 1.25; }
+  .stage .name small { display: block; color: #9a9aa5; font-size: 10.5px; }
+  .stage .meter { height: 6px; border-radius: 3px; background: color-mix(in srgb, #00e5ff 14%, #2a2a35); margin-top: 7px; overflow: hidden; }
+  .stage .meter i { display: block; height: 100%; width: 0; background: #00e5ff; border-radius: 3px; }
+  .stage .meter.warn i { background: #ffb300; }
+  .arrow { align-self: center; color: #6f6f7a; font-size: 14px; margin: 0 -3px; }
+  .cap { font-size: 12px; color: #9a9aa5; margin: 0 0 20px; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 18px; }
+  .panel { background: #0c0c10; border: 1px solid rgba(255,255,255,0.08); border-radius: 10px; padding: 12px 14px 10px; }
+  .panel h2 { font-size: 14px; font-weight: 700; margin: 0 0 2px; }
+  .panel .lead { font-size: 12px; color: #9a9aa5; margin: 0 0 8px; min-height: 32px; }
+  svg { display: block; }
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 11.5px; color: #c8c8d0; margin-top: 8px; }
+  .legend i { display: inline-block; width: 14px; height: 3px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+  .legend i.dash { height: 0; border-top: 2px dashed #9a9aa5; }
+  .note { font-size: 12px; color: #c8c8d0; margin-top: 8px; line-height: 1.4; }
+  .foot { font-size: 11px; color: #6f6f7a; margin-top: 16px; }
+</style></head>
+<body><div class="sheet">
+  <h1>Why the leveler can sound "squashed", and what the new switches do</h1>
+  <p class="sub">An illustration of the shape of each effect, not a measurement. The screen's rows now run in this order, top to bottom. 2026-10-04.</p>
+
+  <div class="chain">
+    <div class="stage"><span class="tag">PITCH</span><div class="name">Pitch<small>key shift</small></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">HPF</span><div class="name">High-pass<small>rumble out</small></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">LOW</span><div class="name">Bass<small>120 Hz shelf</small></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">MID</span><div class="name">Mid<small>1 kHz</small></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">HI</span><div class="name">High<small>5 kHz shelf</small></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">AUTO</span><div class="name">Leveler<small>Full band · Slow release · Bass only</small></div><div class="meter warn"><i style="width:38%"></i></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">MATCH</span><div class="name">Loudness match<small>off · on</small></div><div class="meter"><i style="width:22%"></i></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag">VOL</span><div class="name">Master Volume<small>50 to 250 %</small></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag static">LIM</span><div class="name">Limiter<small>Fast · Look-ahead</small></div><div class="meter"><i style="width:9%"></i></div></div><span class="arrow">›</span>
+    <div class="stage"><span class="tag static">CEIL</span><div class="name">Ceiling<small>Clean · Warm</small></div><div class="meter"><i style="width:3%"></i></div></div>
+  </div>
+  <p class="cap">The four bars are live on the screen: how much that stage is turning the music down at this moment, 0 to 12 dB (cyan under 3 dB, amber from 3 dB, red from 8 dB). The sound with every menu at its first entry and MATCH off is exactly the sound you had before.</p>
+
+  <div class="panels">
+    <div class="panel">
+      <h2>AUTO "Full band" (the original)</h2>
+      <p class="lead">One gain for the whole mix. Each kick pushes the level up, the leveler turns the <em>whole</em> mix down for a moment, and lets go over 0.2 s.</p>
+      <svg id="p1" width="330" height="300"></svg>
+      <div class="legend"><span><i style="background:#3987e5"></i>Bass (kick)</span><span><i style="background:#d95926"></i>Voice</span><span><i style="background:#199e70"></i>Hi-hats</span><span><i class="dash"></i>Leveler gain</span></div>
+      <p class="note"><b>What you hear:</b> the voice and the hi-hats dip with every kick and swell back. Fast and light it reads as "glue"; deep and slow it reads as pumping or "squashed".</p>
+    </div>
+    <div class="panel">
+      <h2>AUTO "Bass only" (new)</h2>
+      <p class="lead">The mix is split at 150 Hz. Only what is below is levelled; the voice and the hi-hats never pass through the leveler at all.</p>
+      <svg id="p2" width="330" height="300"></svg>
+      <div class="legend"><span><i style="background:#3987e5"></i>Bass (kick)</span><span><i style="background:#d95926"></i>Voice</span><span><i style="background:#199e70"></i>Hi-hats</span><span><i class="dash"></i>Leveler gain (bass band)</span></div>
+      <p class="note"><b>What you hear:</b> the kick is held in check, the voice and the hats stay exactly steady. The cost: the kick can sound a little less tied to the rest. "Slow release" keeps "Full band" but lets go over 0.6 s, so it breathes less.</p>
+    </div>
+    <div class="panel">
+      <h2>Loudness and the Bass slider; MATCH</h2>
+      <p class="lead">Adding bass adds loudness. Without MATCH the only cure is Master Volume by hand; with MATCH on, the trim follows the music over a few seconds.</p>
+      <svg id="p3" width="330" height="300"></svg>
+      <div class="legend"><span><i style="background:#3987e5"></i>MATCH off (as today)</span><span><i style="background:#d95926"></i>MATCH on</span></div>
+      <p class="note"><b>What you hear:</b> with MATCH on, more Bass sounds like a change of tone, not a jump in volume, and the limiter has less to catch. The shape is the point; the dB figures depend on the track.</p>
+    </div>
+  </div>
+  <p class="foot">Lines are drawn thin on purpose; the dashed gain line is the leveler's own control signal. Colours: blue, orange and aqua steps from a colour-blind-checked set; the bars on the screen use the theme colour, amber and red with the figure beside them, never colour alone.</p>
+</div>
+<script>
+(function () {
+  const NS = 'http://www.w3.org/2000/svg';
+  const el = (svg, name, attrs, text) => { const n = document.createElementNS(NS, name); for (const k in attrs) n.setAttribute(k, attrs[k]); if (text != null) n.textContent = text; svg.appendChild(n); return n; };
+  const W = 330, H = 300, left = 44, right = 10, top = 14;
+  const kicks = [0.25, 0.75, 1.25, 1.75];
+  const env = (t, tau) => kicks.reduce((a, k) => t >= k ? a + Math.exp(-(t - k) / tau) : a, 0);
+  const bass = (t) => Math.min(1, 0.32 + 0.9 * env(t, 0.09));
+  const voice = (t) => 0.58 + 0.04 * Math.sin(t * 2 * Math.PI * 1.3);
+  const hats = (t) => 0.4 + (Math.abs(((t * 8) % 1)) < 0.18 ? 0.22 : 0);
+  // the leveler's gain: a fast dip at each kick, release tau (0.2 s for the original)
+  const gain = (t, tau) => 1 - 0.42 * Math.min(1, env(t, tau));
+
+  function lanes(svg, mode) {
+    const laneH = 54, gap = 14, laneTop = top + 30;
+    const x = (t) => left + (t / 2) * (W - left - right);
+    // gain lane
+    el(svg, 'text', { x: left - 6, y: top + 14, 'text-anchor': 'end', fill: '#9a9aa5', 'font-size': 10 }, 'gain');
+    const gTop = top + 2, gH = 22;
+    el(svg, 'line', { x1: left, x2: W - right, y1: gTop, y2: gTop, stroke: 'rgba(255,255,255,0.08)' });
+    let d = '';
+    for (let t = 0; t <= 2.0001; t += 0.005) { const g = gain(t, 0.2); const y = gTop + (1 - g) * gH * 2.2; d += (d ? 'L' : 'M') + x(t).toFixed(1) + ',' + y.toFixed(1); }
+    el(svg, 'path', { d, fill: 'none', stroke: '#9a9aa5', 'stroke-width': 2, 'stroke-dasharray': '4 3' });
+    const series = [['Bass', '#3987e5', bass, true], ['Voice', '#d95926', voice, mode === 'full'], ['Hi-hats', '#199e70', hats, mode === 'full']];
+    series.forEach(([name, color, fn, levelled], i) => {
+      const y0 = laneTop + i * (laneH + gap) + laneH; // baseline
+      el(svg, 'line', { x1: left, x2: W - right, y1: y0 + 0.5, y2: y0 + 0.5, stroke: 'rgba(255,255,255,0.12)' });
+      el(svg, 'text', { x: left - 6, y: y0 - laneH / 2 + 4, 'text-anchor': 'end', fill: '#c8c8d0', 'font-size': 10.5 }, name);
+      let line = '', area = 'M' + x(0) + ',' + y0;
+      for (let t = 0; t <= 2.0001; t += 0.005) {
+        const v = fn(t) * (levelled ? gain(t, 0.2) : 1);
+        const y = y0 - v * (laneH - 4);
+        line += (line ? 'L' : 'M') + x(t).toFixed(1) + ',' + y.toFixed(1);
+        area += 'L' + x(t).toFixed(1) + ',' + y.toFixed(1);
+      }
+      area += 'L' + x(2) + ',' + y0 + 'Z';
+      el(svg, 'path', { d: area, fill: color, 'fill-opacity': 0.18 });
+      el(svg, 'path', { d: line, fill: 'none', stroke: color, 'stroke-width': 2, 'stroke-linejoin': 'round' });
+      if (i > 0 && mode === 'full') kicks.forEach((k) => el(svg, 'text', { x: x(k + 0.02), y: y0 - laneH + 2, fill: '#c8c8d0', 'font-size': 9 }, '▾ dips'));
+      if (i > 0 && mode === 'bass') el(svg, 'text', { x: x(1.0), y: y0 - laneH + 2, fill: '#c8c8d0', 'font-size': 9, 'text-anchor': 'middle' }, 'steady');
+    });
+    // time axis
+    const yAx = H - 10;
+    [0, 0.5, 1, 1.5, 2].forEach((t) => el(svg, 'text', { x: x(t), y: yAx, 'text-anchor': 'middle', fill: '#6f6f7a', 'font-size': 9 }, t + ' s'));
+    kicks.forEach((k) => el(svg, 'line', { x1: x(k), x2: x(k), y1: laneTop, y2: H - 20, stroke: 'rgba(255,255,255,0.07)' }));
+  }
+  lanes(document.getElementById('p1'), 'full');
+  lanes(document.getElementById('p2'), 'bass');
+
+  // panel 3: grouped bars, loudness change vs Bass setting
+  (function () {
+    const svg = document.getElementById('p3');
+    const plotL = 46, plotR = W - 10, plotT = 24, plotB = H - 34;
+    const yOf = (db) => plotB - (db / 8) * (plotB - plotT);
+    [0, 2, 4, 6, 8].forEach((db) => {
+      el(svg, 'line', { x1: plotL, x2: plotR, y1: yOf(db), y2: yOf(db), stroke: db === 0 ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.07)' });
+      el(svg, 'text', { x: plotL - 6, y: yOf(db) + 3, 'text-anchor': 'end', fill: '#6f6f7a', 'font-size': 9 }, (db > 0 ? '+' : '') + db + ' dB');
+    });
+    el(svg, 'text', { x: plotL - 6, y: plotT - 10, 'text-anchor': 'end', fill: '#9a9aa5', 'font-size': 9.5 }, 'louder');
+    const groups = [['Bass +0', 0, 0], ['Bass +6', 3.2, 0.2], ['Bass +12', 6.4, 0.3]];
+    const gw = (plotR - plotL) / groups.length, bw = 34;
+    groups.forEach(([label, off, on], i) => {
+      const cx = plotL + gw * (i + 0.5);
+      const bar = (x, db, color) => {
+        const h = Math.max(2, yOf(0) - yOf(db));
+        el(svg, 'rect', { x, y: yOf(db), width: bw, height: h, rx: 4, fill: color });
+        el(svg, 'text', { x: x + bw / 2, y: yOf(db) - 5, 'text-anchor': 'middle', fill: '#c8c8d0', 'font-size': 9.5 }, (db > 0 ? '+' : '') + db.toFixed(1));
+      };
+      bar(cx - bw - 1, off, '#3987e5');
+      bar(cx + 1, on, '#d95926');
+      el(svg, 'text', { x: cx, y: plotB + 16, 'text-anchor': 'middle', fill: '#c8c8d0', 'font-size': 10.5 }, label);
+    });
+    el(svg, 'text', { x: (plotL + plotR) / 2, y: H - 4, 'text-anchor': 'middle', fill: '#6f6f7a', 'font-size': 9 }, 'change against the untouched tab, Master at 100 % (illustrative)');
+  })();
+})();
+</script>
+</body></html>

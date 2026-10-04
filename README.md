@@ -2,8 +2,9 @@
 
 A Tidal-first tab-audio EQ for Google Chrome on macOS. One screen, no menus.
 
-- **Audio EQ**: captures one tab's audio and runs it through anti-distortion HPF → bass low-shelf (120 Hz) → mid (1 kHz) → high-shelf (5 kHz) → optional Auto-Balancing compressor → master gain (50–250 %) → limiter → −0.3 dBFS output ceiling. Presets (8 factory + your own) and a true-bypass *Flat* preset.
-- **Per-band switches**: the tag at the left of each row (LOW, HPF, MID, HI, AUTO, VOL, PITCH) switches that stage off while keeping its value, so you can hear a track with and without one band.
+- **Audio EQ**: captures one tab's audio and runs it through pitch (key shift) → anti-distortion HPF → bass low-shelf (120 Hz) → mid (1 kHz) → high-shelf (5 kHz) → optional Auto-Balancing leveler → optional loudness match → master gain (50–250 %) → limiter → −0.3 dBFS output ceiling. Presets (8 factory + your own) and a true-bypass *Flat* preset.
+- **Switchable stages with live bars** (1.5.0): the Leveler row offers *Full band* (the original), *Slow release* and *Bass only*; the MATCH tag keeps the music as loud as the untouched tab; the Limiter row offers *Fast* (the original) and *Look-ahead*; the Ceiling row offers *Clean* (the original) and *Warm*. Each of those four rows shows how much it is turning the music down right now (0 to 12 dB). The defaults are the sound of 1.4.0, and a harness check (W-DYN-BASELINE) proves it. The modes are engine settings, kept apart from presets.
+- **Per-band switches**: the tag at the left of each row (PITCH, HPF, LOW, MID, HI, AUTO, MATCH, VOL) switches that stage off while keeping its value, so you can hear a track with and without one band. The rows run top to bottom in the order the audio passes through them; LIM and CEIL are always on.
 - **Physics on screen**: a live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear) and, below it, the combined frequency response of your settings. The spectrum is still and flat when the EQ is off.
 - **Player**: cover art (a centre slice down the left edge and the full cover at the top right), title, artist and time read from Tidal's bottom player bar (or any tab's media element); heart (Tidal's *My Collection*), previous, back 15 s, play/pause, forward 30 s, next. The jumps use the page's media element when it is reachable, otherwise the page's own seek bar.
 - **Stay open**: a switch that docks the screen into Chrome's side panel beside the page, where it stays while you click anything; the toolbar icon then opens the panel. (A separate window is used only where Chrome has no side panel.)
@@ -21,11 +22,12 @@ Current status, evidence and known gaps: [REVIEW_READY.md](REVIEW_READY.md) and 
 | `build/review-unpacked/` | **The build to load in Chrome for review** (gitignored). Contains `BUILD_INFO.json` with source commit and fingerprint. |
 | `tools/build.mjs` | Copies only runtime files into a build folder and writes `BUILD_INFO.json`. |
 | `tools/mockshot.mjs` | Renders the design mockups in `docs/mockups/` to PNG. |
+| `tools/diagramshot.mjs` | Renders a diagram page in `docs/diagrams/` to PNG. |
 | `tests/` | Test harness (own `package.json`; nothing here ships). |
-| `docs/` | Assessment, plan and acceptance, design decisions, design review map, `mockups/`. |
+| `docs/` | Assessment, plan and acceptance, design decisions, design review map, the listening guide, `diagrams/`, `mockups/`. |
 | `FINAL_HANDOFF.md`, `SESSION_HANDOFF.md` | **Historical** handoffs from the old project. Their paths under `…/T3 Code/t3-nightly-toy/` are historical. |
 
-Runtime files: `manifest.json`, `background.js` (service worker: capture, presets, Stay-open window), `content.js` (reads Tidal's player bar, runs transport commands), `offscreen.html/.js` (Web Audio DSP), `pitch-shifter.worklet.js` (the key shift), `popup.html/.css/.js` (the screen, the window and the mini bar), `physics-view.js` (drawings), `themes.css`, `icons/`.
+Runtime files: `manifest.json`, `background.js` (service worker: capture, presets, Stay-open window), `content.js` (reads Tidal's player bar, runs transport commands), `offscreen.html/.js` (Web Audio DSP), `pitch-shifter.worklet.js` (the key shift), `dynamics.worklet.js` (the bass-only leveler, the loudness match and the look-ahead limiter), `popup.html/.css/.js` (the screen, the window and the mini bar), `physics-view.js` (drawings), `themes.css`, `icons/`.
 
 The old 1.1.0 copy was retired on 2026-10-03 (decision R-24): archived as `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension-1.1.0-retired-2026-10-03.zip` (and as the tag `v1.1.0-extraction-baseline`), the folder removed. Nothing in Chrome points there any more.
 
@@ -52,7 +54,8 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 
 - **Turn the EQ on**: go to the tab that is playing, click the extension icon, and switch **AUDIO EQ** on. Chrome only lets the extension capture a tab you opened it on. If it refuses, the message tells you which tab to switch to. The badge shows the tab being processed.
 - **Stop**: switch **AUDIO EQ** off, or close the tab. The tab's normal audio returns.
-- **Band switches**: click LOW / HPF / MID / HI / AUTO / VOL / PITCH (icon buttons in the side panel) to take that stage out while keeping its slider value; click again to bring it back. Switched-off rows are dimmed. The state is saved with presets.
+- **Band switches**: click PITCH / HPF / LOW / MID / HI / AUTO / VOL (icon buttons in the side panel) to take that stage out while keeping its slider value; click again to bring it back. Switched-off rows are dimmed. The state is saved with presets.
+- **Switches and bars** (the AUTO, MATCH, LIM and CEIL rows): the menu beside Leveler, Limiter and Ceiling picks the stage's design; the first entry is the original. MATCH switches the loudness match on. The bar on each of those rows is how much that stage is turning the music down at this moment (0 to 12 dB; amber from 3 dB, red from 8 dB; "idle" while the EQ is off). These settings are not part of presets; they stay as you set them. What each one does and how to compare them: [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md).
 - **Values**: drag, use − / + (Shift-click for 5× finer steps), or double-click a value to snap it to neutral and double-click again to restore it.
 - **Pitch**: moves the key up or down by up to 12 semitones at the same speed (what DJ software calls a key shift). Clean within a few semitones; further out, long notes warble a little and drums can double. It adds about a sixth of a second of delay while in use, which matters only for video; at 0 st it is out of the chain entirely. It applies while the EQ is on.
 - **Presets**: *+ Save* saves the current values as a new preset; *Update* saves into the selected custom preset; *↺ Reset* restores the selected preset's saved values (factory values for a default); ✕ deletes a custom preset. Your custom presets are never deleted by Reset.
@@ -67,7 +70,7 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 
 ```bash
 cd tests && npm install --ignore-scripts   # one-time: playwright-core only (no install scripts)
-npm test                                    # static checks: manifest, commands, permissions, syntax, no network code, retired surfaces, no emoji, injected files, names, focus rings, pitch worklet
+npm test                                    # static checks: manifest, commands, permissions, syntax, no network code, retired surfaces, no emoji, injected files, names, focus rings, pitch worklet, dynamics worklet and frozen stage values
 node ../tools/build.mjs /tmp/tme-build && node browser/run.mjs /tmp/tme-build --label local
 ```
 
@@ -80,7 +83,7 @@ The browser harness uses Playwright's *Chrome for Testing* with a **fresh tempor
 - `tabCapture`, `offscreen`: EQ processing of the tab you choose. Audio stays in Chrome and is never recorded or uploaded.
 - `tabs`, `activeTab`, `scripting`, `<all_urls>`: find the media tab, read the track shown on the page, and re-inject the page script into tabs opened before an update.
 - `sidePanel`: show the screen in Chrome's side panel (Stay open). UI only; grants no access to pages, audio or devices.
-- `storage`: `chrome.storage.local` only (no sync). Keys: `presets`, `currentPreset`, `currentParams`, `visualTheme`, `stayOpen`, `capturedTabId`, `isAudioCapturing`.
+- `storage`: `chrome.storage.local` only (no sync). Keys: `presets`, `currentPreset`, `currentParams`, `dynamics`, `visualTheme`, `stayOpen`, `capturedTabId`, `isAudioCapturing`.
 - **Network**: the extension makes no requests of its own and reads no Tidal session or token. The one piece of network activity is the cover image, which the screen loads from Tidal's image server while a track is shown (the full-size version of the image Tidal's page shows). A unit test (`no network code`) and a browser check (W-NO-REMOTE-REQUESTS) guard the rest.
 
 ## Recovery

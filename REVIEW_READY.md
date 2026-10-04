@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-03 (round 10: Pitch is a key shift; cut-over done; 1.4.0)
+# Review Ready: 2026-10-04 (round 11: the alternatives as switches, live meters, rows in chain order; 1.5.0)
 
 ## Identity
 
@@ -7,63 +7,81 @@
 | Project root (source) | `~/Documents/ChatGPT/tidal-miniplayer-extension` |
 | Repository | `github.com/cornishandy/tidal-miniplayer-extension`, **PUBLIC** since 2026-10-03 (your request, R-22), MIT licence (R-25), default branch `main` |
 | Tags | `v1.1.0-extraction-baseline` (1b7bedb) · `v1.1.1-before-ui-removals` (5355cac) · `v1.2.1-before-main-screen` (6fcb492) |
-| Old project | **Retired 2026-10-03 (R-24)**: archived as `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension-1.1.0-retired-2026-10-03.zip` (18 files, archive tested), folder removed |
+| Old project | Retired 2026-10-03 (R-24): archived as `~/Documents/ChatGPT/T3 Code/t3-nightly-toy/tidal-miniplayer-extension-1.1.0-retired-2026-10-03.zip`, folder removed |
 
 ## The build (your everyday extension)
 
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
-| Version | **1.4.0** |
+| Version | **1.5.0** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` |
-| Runtime source commit | `4b4975a` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `efa8fe4eed23ff39…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `553e23b` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `8a8b8962edc509b0…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
 
-## What changed in 1.4.0
+## What changed in 1.5.0
 
-- **Pitch is a key shift** (your instruction: "the functionality should just change the pitch, and rename to Pitch"). The slider, now called **Pitch**, moves the pitch by −12 to +12 semitones while the speed stays exactly as it was. The old "Pitch / Speed" changed the page's playback rate, so pitch and tempo moved together like a turntable; that is gone. The shift is done inside the DSP graph (whole segments of the waveform overlapped at their best-matching point, then read out at the new rate: the method DJ software of the SoundTouch family uses), and at 0 st it is out of the chain entirely. Steps of 0.1 st (− / + move 0.5, Shift 0.1); the **PITCH** tag switches it out; the value reads "+2.0 st".
-- **What to expect**: clean within a few semitones. Further out, long steady notes warble a little and drum hits can double; that is the nature of the method, and the reason the range stops at an octave. While a shift is set there is about 0.14 s of delay, which matters only for video lip-sync, not for music.
-- **Presets**: in all eight factory presets the dead field "Pitch / Speed 1.00×" (neutral) became "Pitch 0 st" (neutral). Nothing audible changes in any preset. Presets saved before 1.4.0 load at 0 st. No stored data was rewritten (R-07).
+**The sound you had is untouched.** Every new menu starts on its first entry and MATCH starts off; in that state the signal path is the 1.4.0 path, and the harness proves it: six settings measured on 1.4.0 (flat, bass +10, the worst case, and three AUTO-on settings) come out the same on 1.5.0 to within 0.3 dB (W-DYN-BASELINE). Your rule of 2026-10-04 ("don't change anything about the audio processing without asking me first") is now written into the repo's working rules; this check is how it is enforced.
 
-## Your decisions today (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), rounds 9 and 10)
+**The alternatives, as switches** (your "Oh hell yeah, build these so I can switch between them in the app"):
 
-- **Cut-over: done** (R-24). You removed the 1.1.0 card; the old folder was zipped, checked and removed. `build/review-unpacked` is your everyday extension.
-- **Transport row: keep** (C-01 closed). **Year: none** (R-08). **Licence, description, paths** (R-25) done.
-- **Pitch** (P-01): built as above. **Listening check** (S-04): explained in [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md).
+| Row | Control | Entries (first = the original) | In one line |
+|---|---|---|---|
+| Leveler (AUTO) | menu | **Full band** · Slow release · Bass only | the whole mix levelled · the same, letting go three times more slowly · only what is below 150 Hz levelled, voice and hi-hats untouched |
+| Loudness match (MATCH) | tag | **off** · on | on: the music is kept as loud as the untouched tab, so more bass is a change of tone, not of volume; it also removes the lift AUTO adds (about +3 dB on a quiet signal, measured), which makes AUTO on and off a fair comparison |
+| Limiter (LIM) | menu | **Fast** · Look-ahead | reacts in 1 ms, the fastest peaks slip past to the ceiling · sees peaks 5 ms early, turns down smoothly before them, nothing left for the ceiling; 5 ms of delay while selected |
+| Ceiling (CEIL) | menu | **Clean** · Warm | does nothing below −0.6 dB · rounds the loudest peaks from about −10 dB up, like tape; a deliberate gentle distortion |
+
+The modes are engine settings, not preset values: they stay as you set them whichever preset you choose, so a mode can be compared across presets. No preset was changed (R-07).
+
+**Live bars** (your "add a level or something else to indicate when this sort of thing gets activated"): each of those four rows shows how much that stage is turning the music down right now, 0 to 12 dB, with the figure beside it (theme colour under 3 dB, amber from 3 dB, red from 8 dB; "idle" while the EQ is off).
+
+**Rows in signal order** (your "include the layout in this order, and add any missing pieces"): PITCH, HPF, LOW, MID, HI, AUTO, MATCH, VOL, LIM, CEIL, top to bottom, the way the audio passes through them. Pitch is first because it is first in the chain. The Auto-Balancing row reads "Leveler" because its menu needed the room (the AUTO tag keeps the name). LIM and CEIL have no switch: they are always on. The popup is 592 px tall with ten rows (Chrome's cap is 600).
+
+**The diagram** (your "explain visually with diagram"): [docs/diagrams/leveler-explained-2026-10-04.png](docs/diagrams/leveler-explained-2026-10-04.png), also embedded in [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md).
+
+## Your decisions today (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), round 11)
+
+- **Which tab the EQ grabs: keep** (C-01 closed).
+- **Audio processing frozen without your OK** (A-03, rule).
+- **Listening result**: both heard, "more bass" and "squashed" (S-04); the switches are the answer.
+- **Alternatives built as switches** (D-01), **live bars** (D-02), **rows in chain order** (D-03), **diagram** (D-04), **the "things to try" note kept** (N-01).
 
 ## Installation and state
 
-- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.4.0. Nothing in your Chrome profile was touched by me.
-- No key generated, no Web Store action. The old 1.1.0 copy exists only as the zip above and as the tag `v1.1.0-extraction-baseline`.
+- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.0. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
+- No key generated, no Web Store action.
 
 ## Tests
 
-- **Executed**: 36 installed-browser and objective-audio checks, plus 12 unit checks, all PASS on this exact build (`tests/results/review-v1.4.0/`). New: W-PITCH (objective: +12 st moves the 1 kHz tone to 2 kHz and −12 st to 500 Hz at the same level; the page keeps playing at normal speed; 0 st and the PITCH tag route around the shifter). Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md).
+- **Executed**: 43 installed-browser and objective-audio checks, plus 13 unit checks, all PASS on this exact build (`tests/results/review-v1.5.0/`). New: W-DYN-BASELINE (the 1.4.0 sound reproduced), W-DYN-LEVELER-BASS (60 Hz down 3.5 dB, 1 kHz and 8 kHz unchanged), W-DYN-LEVELER-SLOW, W-DYN-MATCH (within 0.3 dB of the untouched loudness where it was 5.2 dB louder), W-DYN-LIMITER-LOOKAHEAD (peak 0.930, ceiling idle, distortion products 25 to 40 dB lower than Fast), W-DYN-CEILING-WARM (never above −0.3 dB, transparent at a quiet level, +13 dB of colour at the worst case), W-DYN-METERS-UI (the bars follow the engine; the menus and the MATCH tag persist). Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md).
 - **Reported working by you** (1.3.3, 2026-10-03): side panel, cover art, jumps, time, mini bar, heart on real Tidal.
-- **Not run (your ears)**: the pitch shift on real music; the heavy-preset listening check; Alt+M / Alt+E on your Mac.
+- **Not run (your ears and eyes)**: the switches on real music; the pitch shift on real music; the new rows and the diagram; Alt+M / Alt+E on your Mac.
 
 ## What I need from you
 
-1. **Reload**, confirm **1.4.0**, and **try Pitch on a track**: EQ on, move Pitch to +2, then −2, then +7. The key should move while the tempo stays put. Tell me: does it sound right within a few semitones; how far out does the warble or doubling bother you; are the steps and the range right.
-2. **Which tab the EQ grabs: keep or change?** The EQ can process one tab at a time, so when you switch it on it has to pick one. Today's order: the Tidal tab that is making sound; if none, any tab making sound; then any Tidal tab even if paused; then a YouTube, Spotify, SoundCloud, Apple Music or Netflix tab; and only then the tab you happen to be on. The screen names the tab it picked next to the switch. Example: Tidal plays in one tab while you read in another with the panel open; you flip the switch, and it attaches to Tidal, not to the page you are reading. The alternative: always and only the tab you are looking at. Simpler to predict, but in that example it would refuse and send you to the Tidal tab first. One limit either way: Chrome only lets the extension capture a tab you have clicked the extension on at some point in that tab, and the message tells you which tab to go to when that is missing. Recommendation: keep.
-3. **The listening check** (what, why and the alternatives: [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md)). Heaviest preset, a bass-heavy track at your normal volume, then a track with a clear voice and hi-hats. Flip AUTO off and on during a loud passage; flip AUDIO EQ off and on. Report "clean", or the preset, the track, roughly when, and which row of the table it sounded like.
-4. **Alt+M** should open the panel; **Alt+E** on the Tidal tab should switch the EQ.
-5. **The narrow panel**: the cover now sits top right at 56 px (1.3.6). Say if you want it bigger or elsewhere.
+1. **Reload**, confirm **1.5.0**, EQ on, and look at the four bars while a loud track plays. The AUTO bar sitting amber or red during the loud parts is the leveler working hard; that is the "squashed" case made visible.
+2. **Try the switches, one at a time** (how to compare, in full: [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md)). Leveler → Bass only: the voice and hi-hats should stop dipping with the kick. Leveler → Slow release: less breathing between kicks. MATCH on: leave it on while comparing anything else, so loudness stops fooling you. At a high Master setting: Limiter → Look-ahead, then Ceiling → Warm. Report which switch, which preset, which track, roughly when, and what it sounded like.
+3. **The layout**: Pitch moved to the top (chain order) and the Auto-Balancing row now reads "Leveler". Say if you want Pitch back at the bottom or the old label back.
+4. **The diagram**: does it make the full-band / bass-only / loudness point clear?
+5. Still open from before: **Pitch** on a track (+2, −2, +7); **Alt+M** opens the panel and **Alt+E** on the Tidal tab switches the EQ; the **56 px cover** in the narrow panel.
+
+Things to try without code, kept at your request: AUTO off with Master at or under 100 % for punch; HPF from 30 up to 40 Hz on heavy presets; Master down as Bass goes up (about 70 % per +6 dB; with MATCH on this happens by itself).
 
 ## Remaining known issues
 
-No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch applies while the EQ is on and adds about 0.14 s of delay only while a shift is set. Alt+E can only attach to a tab you have opened the extension on (Chrome's rule). Chrome's side panel cannot go below 360 px.
+No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch applies while the EQ is on and adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds, so a quiet-to-loud section change can be heard as a slow level settle. Alt+E can only attach to a tab you have opened the extension on (Chrome's rule). Chrome's side panel cannot go below 360 px.
 
 ## Docs
 
-[README.md](README.md) (operating guide) · [LICENSE](LICENSE) · [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md) · [docs/ASSESSMENT_2026-09-24.md](docs/ASSESSMENT_2026-09-24.md) · [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md) · [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) · [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md) · [docs/mockups/](docs/mockups/) · historical: [FINAL_HANDOFF.md](FINAL_HANDOFF.md), [SESSION_HANDOFF.md](SESSION_HANDOFF.md)
+[README.md](README.md) (operating guide) · [LICENSE](LICENSE) · [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md) · [docs/diagrams/](docs/diagrams/) · [docs/ASSESSMENT_2026-09-24.md](docs/ASSESSMENT_2026-09-24.md) · [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md) · [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md) · [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md) · [docs/mockups/](docs/mockups/) · historical: [FINAL_HANDOFF.md](FINAL_HANDOFF.md), [SESSION_HANDOFF.md](SESSION_HANDOFF.md)
 
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.4.0 is harness-verified on the exact review folder (36/36); your Reload and your listening to Pitch are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.0 is harness-verified on the exact review folder (43/43); your Reload and your listening to the switches are pending.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.

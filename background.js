@@ -121,6 +121,20 @@ const FACTORY_PRESETS = {
 const FACTORY_PRESET_NAMES = Object.keys(FACTORY_PRESETS);
 const DEFAULT_PRESETS = { ...FACTORY_PRESETS };
 
+// Dynamics modes (1.5.0, D-01): which leveler, limiter and ceiling run, and whether the loudness match is on. These are
+// engine settings, not part of any preset (so comparing them is the same whichever preset is loaded). The defaults are
+// the 1.4.0 chain. Stored under `dynamics`.
+const DEFAULT_DYNAMICS = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+function normaliseDynamics(d) {
+  const x = d || {};
+  return {
+    leveler: ['full', 'slow', 'bass'].includes(x.leveler) ? x.leveler : 'full',
+    match: x.match === true,
+    limiter: ['fast', 'lookahead'].includes(x.limiter) ? x.limiter : 'fast',
+    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean'
+  };
+}
+
 chrome.runtime.onInstalled.addListener(async () => {
   const data = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset']);
   if (!data.presets) {
@@ -258,17 +272,19 @@ async function startAudioCapture(tabId) {
     await stopAudioCapture();
   }
 
-  const stored = await chrome.storage.local.get(['currentParams', 'currentPreset', 'presets']);
+  const stored = await chrome.storage.local.get(['currentParams', 'currentPreset', 'presets', 'dynamics']);
   const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
   const currentPreset = stored.currentPreset || "Punchy Bass & Clarity";
   const params = stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS["Punchy Bass & Clarity"];
+  const dynamics = normaliseDynamics(stored.dynamics);
 
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({
       target: 'offscreen',
       type: 'START_AUDIO_CAPTURE',
       streamId,
-      params
+      params,
+      dynamics
     }, async (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
@@ -522,8 +538,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           break;
         }
 
+        case 'SET_DYNAMICS': {
+          const dynamics = normaliseDynamics(message.dynamics);
+          await chrome.storage.local.set({ dynamics });
+          if (await isOffscreenOpen()) {
+            chrome.runtime.sendMessage({ target: 'offscreen', type: 'SET_DYNAMICS', dynamics }, (res) => {
+              if (chrome.runtime.lastError) {}
+              sendResponse({ success: true, dynamics, applied: !!res });
+            });
+          } else {
+            sendResponse({ success: true, dynamics, applied: false });
+          }
+          break;
+        }
+
         case 'GET_STATE': {
-          const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'stayOpen']);
+          const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'stayOpen', 'dynamics']);
           const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
           const currentPreset = stored.currentPreset || "Punchy Bass & Clarity";
           const status = await getActualCaptureStatus();
@@ -540,7 +570,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             factoryPresets: FACTORY_PRESET_NAMES,
             currentPreset,
             currentParams: stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS["Punchy Bass & Clarity"],
-            stayOpen: !!stored.stayOpen
+            stayOpen: !!stored.stayOpen,
+            dynamics: normaliseDynamics(stored.dynamics)
           });
           break;
         }
