@@ -16,8 +16,8 @@
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
 | Version | **1.5.3** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` |
-| Runtime source commit | `__COMMIT__` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `__FP__…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `25e6f90` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `e489f71bacd603cb…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
@@ -69,7 +69,7 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Your decisions (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), "Click report" and "Review round 14")
 
-- **Fix the jumps to your preference** (2026-10-11): built as 1.5.3 (J-01, J-02).
+- **Fix the jumps to your preference** (2026-10-11): built and installed as 1.5.3 (J-01, J-02), after a plan check, three code reviews and two final checks.
 - **Install 1.5.2: yes** (K-01, 2026-10-10).
 - Waiting for your answers (round 14): the mini bar's second click (M-01), the side panel's empty bottom A / B / C (R-26), the artist gauge (R-27), where album and artist facts come from (R-08 reopened); and the low-delay switch only if lips look late (L-01).
 - Your other open items are parked, with their questions and mockups, in [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md) ("Open items, parked 2026-10-10").
