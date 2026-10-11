@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-11 (1.5.3: the jumps on a narrow Tidal page and at the end of a track)
+# Review Ready: 2026-10-11 (1.5.4: the EQ after a restart; 1.5.3: the jumps)
 
 ## Identity
 
@@ -14,13 +14,17 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
-| Version | **1.5.3** |
+| Version | **1.5.4** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` |
-| Runtime source commit | `25e6f90` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `e489f71bacd603cb…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `cab3906` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `0c852570af9e8f8b…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.5.4 (your report: the EQ message after the 1.5.3 Reload and a Chrome restart)
+
+- **One click on the icon turns the EQ on** (E-01). Chrome lets the EQ attach to a tab only after the extension's icon (or Alt+E) was used on it, and takes that back when the tab reloads or Chrome restarts; my request to reload the Tidal tab triggered it. With Stay open on, the icon used to toggle the panel, so the advised click closed it. Now the icon only opens the panel, and if the EQ was just refused for that reason, the same click on that tab turns it on (within 10 minutes; any later start or stop cancels the request).
 
 ## What changed in 1.5.3 (your reports of 2026-10-11 about the +30 s button)
 
@@ -69,6 +73,7 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Your decisions (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), "Click report" and "Review round 14")
 
+- **The EQ message after the Reload** (2026-10-11): fixed and installed as 1.5.4 (E-01).
 - **Fix the jumps to your preference** (2026-10-11): built and installed as 1.5.3 (J-01, J-02), after a plan check, three code reviews and two final checks.
 - **Install 1.5.2: yes** (K-01, 2026-10-10).
 - Waiting for your answers (round 14): the mini bar's second click (M-01), the side panel's empty bottom A / B / C (R-26), the artist gauge (R-27), where album and artist facts come from (R-08 reopened); and the low-delay switch only if lips look late (L-01).
@@ -76,19 +81,20 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Installation and state
 
-- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.3. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
+- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.4. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
 - No key generated, no Web Store action.
 
 ## Tests
 
-- **Executed (1.5.3)**: 58 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on this exact build (`tests/results/review-v1.5.3/`), with the test browser silent and the fake Tidal page served as tidal.com from this Mac only. New: W-JUMP-NARROW, W-JUMP-NARROW-ELEMENT, W-JUMP-END, W-JUMP-END-QUEUE-END, W-JUMP-END-NO-NEXT, W-NEXT-THEN-JUMP, W-JUMP-NOOP-HANDLER, W-JUMP-END-NOOP-NEXT, W-JUMP-DEADBAR, W-JUMP-USER-WINS, W-BRIDGE-PAUSE-TIME, W-BRIDGE-SCOPE, W-NO-REMOTE-REQUESTS-LATE. A test-isolation slip of 1.5.2 in the dropout diagnostic was found and fixed (H-05).
+- **Executed (1.5.4)**: 59 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on this exact build (`tests/results/review-v1.5.4/`), silent. New: W-EQ-AFTER-ICON (Chrome's refusal simulated; a real toolbar click cannot be run headless).
+- **Executed (1.5.3)**: 58 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on the 1.5.3 build (`tests/results/review-v1.5.3/`), with the test browser silent and the fake Tidal page served as tidal.com from this Mac only. New: W-JUMP-NARROW, W-JUMP-NARROW-ELEMENT, W-JUMP-END, W-JUMP-END-QUEUE-END, W-JUMP-END-NO-NEXT, W-NEXT-THEN-JUMP, W-JUMP-NOOP-HANDLER, W-JUMP-END-NOOP-NEXT, W-JUMP-DEADBAR, W-JUMP-USER-WINS, W-BRIDGE-PAUSE-TIME, W-BRIDGE-SCOPE, W-NO-REMOTE-REQUESTS-LATE. A test-isolation slip of 1.5.2 in the dropout diagnostic was found and fixed (H-05).
 - **Executed (1.5.2)**: 45 installed-browser and objective-audio checks, plus 16 unit checks, all PASS (`tests/results/review-v1.5.2/`). New: W-CLICK-PATH (21 ms buffer, pitch stage at rest), W-PITCH-RECOVER (after a −12 to +12 jump Pitch comes back by itself), unit proofs that the limiter and the shifted sound are bit-identical to 1.5.1 and that the 6-hour freeze cannot happen.
 - **Diagnostics** (not in the regular run): the stall series and two 10-minute runs without a loop (0 gaps, 0 dropouts on both versions).
 - **Not run (your ears)**: the track you reported, and the open listening items below.
 
 ## What I need from you
 
-1. **Reload**: open `chrome://extensions`, find the card "Universal Mini-Player & DJ Bass Booster", click its round arrow (Reload), and check it says **1.5.3**. Then reload your Tidal tab once.
+1. **Reload**: open `chrome://extensions`, find the card "Universal Mini-Player & DJ Bass Booster", click its round arrow (Reload), and check it says **1.5.4**. Then, on the Tidal tab, turn AUDIO EQ on in the panel; if Chrome refuses, click OK, then click the extension's icon once: the switch turns on within a second and the panel stays open.
 2. **Try the jumps**: drag the side panel wide until Tidal's timeline disappears, then click +30; pause and check that the time shown is the song's; and click +30 with less than 30 s left. Tell me "works" or what happened, and tell me if a jump ever asks you to reload a tab you had just opened.
 3. **Play "Islands" again** with AUDIO EQ on, the iDSD back at 96 kHz if you changed it. Tell me "clean", or roughly how often the clicks come and whether they are steady or random.
 4. When you have time: the round-14 questions and the parked open items (signal readout, mode defaults, the MATCH bar, the 1.5.0 listening and layout questions).
@@ -104,6 +110,6 @@ Up to about 50 ms more delay since 1.5.2, about 35 to 60 ms in all by Chrome's f
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.3 is harness-verified on the exact review folder (58/58, silent, fake Tidal page served from this Mac only); your Reload, the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.4 is harness-verified on the exact review folder (59/59, silent, fake Tidal page served from this Mac only); your Reload, the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix are pending.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.
