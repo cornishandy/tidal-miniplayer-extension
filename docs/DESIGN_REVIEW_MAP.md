@@ -47,3 +47,14 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 ## Next review point
 
 Reload to 1.5.0, watch the four bars on a loud track, then try the switches one at a time (LISTENING_CHECK.md, "How to compare"). Then: Pitch on a track, the new row order and the "Leveler" label, the diagram, Alt+M / Alt+E, and the cover top right in the narrow panel.
+
+## Open items, parked 2026-10-10 while the click report is investigated
+
+Kept at your request ("keep all the open items available"). Each has its question batch; nothing below is built.
+
+| Item | Raised | What is waiting | Mockup |
+|---|---|---|---|
+| Signal facts readout (rates, channels, delay, levels, Tidal's badge) | 2026-10-04 | Where to show it (recommended: two lines in the popup's live strip, the full table on a click on PHYSICS, a permanent card in the side panel); what the two lines carry; Tidal's badge yes/no; LUFS yes/no | `docs/mockups/r12-signal-a2.png`, `r12-signal-b3.png`, `r12-signal-c2.png` |
+| Defaults for the mode menus and MATCH | 2026-10-04 | Keep them engine-wide for now (recommended) or put them in presets; a one-click reset of the four modes plus a hint that they are engine-wide (recommended); Master Volume at 100 % in every factory preset: leave (recommended) or propose per-preset values (R-07, before/after first) | none |
+| MATCH bar with zero in the middle | 2026-10-04 | Build it (recommended); scale 12 dB each side (recommended) or 6; whether the bars read too much like sliders | `docs/mockups/r13-match-bipolar-2.png` |
+| Listening and layout questions from 1.5.0 | 2026-10-04 | The switches on real music; Pitch on a track; Pitch row at the top or the bottom; the "Leveler" label; whether the diagram makes the point; Alt+M / Alt+E; the 56 px cover in the narrow panel | `docs/diagrams/leveler-explained-2026-10-04.png` |

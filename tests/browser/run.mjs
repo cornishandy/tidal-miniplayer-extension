@@ -94,7 +94,7 @@ const context = await chromium.launchPersistentContext(profile, {
     `--disable-extensions-except=${extDir}`,
     `--load-extension=${extDir}`,
     `--allowlisted-extension-id=${EXT_ID}`,
-    '--mute-audio',
+    '--mute-audio', '--disable-audio-output', // --mute-audio alone left the offscreen engine audible on the user's DAC (2026-10-10); no output device at all now
     '--autoplay-policy=no-user-gesture-required',
     `--host-resolver-rules=MAP fake-tidal.com 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`,
     '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,MediaRouter',
@@ -411,6 +411,14 @@ try {
     captureOk ? 'PASS' : (String(startRes?.error || '').includes('invoked') ? 'BLOCKED' : 'FAIL'),
     { startRes, graph, note: 'Uses --allowlisted-extension-id to stand in for the toolbar click, which automation cannot perform.' });
 
+  // ---- W-CLICK-PATH (1.5.2, K-01): the device buffer is the large one and the pitch shifter is parked while no shift is set ----
+  if (captureOk) {
+    const path = await evalOffscreen(`({ base: audioCtx.baseLatency, primed: pitchPrimed, target: pitchTarget(), wet: pitchWetGain && pitchWetGain.gain.value })`);
+    const v = path.value || {};
+    record('W-CLICK-PATH', 'Large device buffer (no dropouts when the audio thread is briefly late), pitch shifter parked at 0 st',
+      v.base >= 0.01 && v.primed === false && v.target === 0 && v.wet === 0 ? 'PASS' : 'FAIL', path);
+  }
+
   const NONE = { hpf: false, bass: false, mid: false, high: false, gain: false, pitch: false };
   if (captureOk) {
     // Levels are read at the exact tone frequencies from the last 16384 output samples (a Blackman-Harris windowed
@@ -508,6 +516,23 @@ try {
         && offRouting?.dry === 1 && Math.abs(pitchOff.hz1k - flat.hz1k) < 1 && zeroRouting?.dry === 1 && Math.abs(zero.hz1k - flat.hz1k) < 1 && tagFits ? 'PASS' : 'FAIL',
       { flat, up, down, pitchOff, zero, upRouting, offRouting, zeroRouting, pageRate, tagFits }, 'objective-audio');
 
+    // ---- W-PITCH-RECOVER (1.5.2): a jump across the whole range (−12 to +12 st) can run the shifter dry; it must come
+    // back by itself (the unshifted path holds at least 0.5 s, then the shifted path reopens) and end up shifted ----
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: -12, autoBalance: false, bypass: false, stageBypass: NONE });
+    await sleep(1500);
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 12, autoBalance: false, bypass: false, stageBypass: NONE });
+    await sleep(3000);
+    const jumped = (await evalOffscreen(measure)).value;
+    const jumpedRouting = await pitchRouting();
+    const jumpedPrimed = (await evalOffscreen('pitchPrimed')).value;
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
+    await sleep(800);
+    const parkedAgain = (await evalOffscreen(`({ primed: pitchPrimed, target: pitchTarget(), param: pitchNode && pitchNode.parameters.get('semitones').value })`)).value;
+    record('W-PITCH-RECOVER', 'After a jump from −12 to +12 st the shifted path is open again within 3 s and the tone is at 2 kHz; back at 0 st the shifter parks',
+      jumpedRouting?.wet === 1 && jumpedRouting?.dry === 0 && jumpedPrimed === true && !!jumped && jumped.hz2k > flat.hz1k - 4 && jumped.hz1k < flat.hz1k - 15
+        && parkedAgain?.primed === false && parkedAgain?.target === 0 && parkedAgain?.param === 0 ? 'PASS' : 'FAIL',
+      { jumped, jumpedRouting, jumpedPrimed, parkedAgain }, 'objective-audio');
+
     await setParams({ bass: 14, hpf: 20, mid: 6, high: 6, gain: 2.5, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(500);
     const hot = (await evalOffscreen(measure)).value;
@@ -533,10 +558,15 @@ try {
     // 1.5.0 reproduced all six with no difference (tests/results/review-v1.5.0). The readings below are the exact-frequency
     // measurement of that same, proven-identical default path, so they hold at any sample rate (re-derived 2026-10-04).
     const BASELINE_140 = { flatOff: { hz60: -25.3, hz1k: -25.8, hz8k: -25.8, peak: 0.149 }, bass10Off: { hz60: -16, hz1k: -25.8, hz8k: -25.8, peak: 0.253 }, hotOff: { hz60: -4.9, hz1k: -12.4, hz8k: -12.9, peak: 0.965 }, flatAuto: { hz60: -22.5, hz1k: -23, hz8k: -23, peak: 0.207 }, heavyAuto: { hz60: -6.7, hz1k: -20.1, hz8k: -20.1, peak: 0.647 }, deepAuto: { hz60: -14.9, hz1k: -23.2, hz8k: -22.3, peak: 0.317 } }; // 48 kHz run of 2026-10-04 (tests/results/candidate-151c)
-    const same = (a, b) => !!a && !!b && ['hz60', 'hz1k', 'hz8k'].every((k) => Math.abs(a[k] - b[k]) <= 0.3) && Math.abs(a.peak - b.peak) <= 0.004;
-    const baselineDiff = BASELINE_140 ? Object.keys(baselineSet).filter((k) => !same(baselineNow[k], BASELINE_140[k])) : Object.keys(baselineSet);
+    // The levels are rate-independent; a sample peak is not (a finer grid lands nearer each crest). Peaks at 96 kHz were
+    // measured on 1.5.1 itself, unchanged since 1.4.0 (tests/results/control-1.5.1-96k, 2026-10-10); other rates: levels only.
+    const PEAK_96K = { flatOff: 0.155, bass10Off: 0.26, hotOff: 0.965, flatAuto: 0.216, heavyAuto: 0.658, deepAuto: 0.324 };
+    const rateNow = baselineNow.flatOff?.rate;
+    const peakOf = (k) => rateNow === 48000 ? BASELINE_140[k].peak : rateNow === 96000 ? PEAK_96K[k] : null;
+    const same = (a, b, k) => !!a && !!b && ['hz60', 'hz1k', 'hz8k'].every((m) => Math.abs(a[m] - b[m]) <= 0.3) && (peakOf(k) === null || Math.abs(a.peak - peakOf(k)) <= 0.004);
+    const baselineDiff = BASELINE_140 ? Object.keys(baselineSet).filter((k) => !same(baselineNow[k], BASELINE_140[k], k)) : Object.keys(baselineSet);
     record('W-DYN-BASELINE', 'Default modes reproduce the measured sound of 1.4.0: six settings (AUTO off and on), 60 Hz / 1 kHz / 8 kHz within 0.3 dB and peak within 0.004 at the final output',
-      BASELINE_140 && baselineDiff.length === 0 ? 'PASS' : 'FAIL', { baselineNow, baseline140: BASELINE_140, differs: baselineDiff }, 'objective-audio');
+      BASELINE_140 && baselineDiff.length === 0 ? 'PASS' : 'FAIL', { baselineNow, baseline140: BASELINE_140, peak96k: PEAK_96K, rate: rateNow, peaksCompared: peakOf('flatOff') !== null, differs: baselineDiff }, 'objective-audio');
 
     // ---- W-DYN-*: the switchable alternatives (1.5.0, D-01), each measured at the final output ----
     const setDyn = (d) => sendFrom(popup, { type: 'SET_DYNAMICS', dynamics: d });
@@ -569,8 +599,9 @@ try {
     // with a 0.33 s metering constant of its own.
     const heavy3 = { ...BASE, bass: 14, mid: 6, high: 6, gain: 1, autoBalance: true };
     const recoverySnippet = `(async () => {
-      const an = audioCtx.createAnalyser(); an.fftSize = 2048; an.smoothingTimeConstant = 0; outputSum.connect(an);
-      const buf = new Float32Array(2048);
+      const n = audioCtx.sampleRate > 60000 ? 4096 : 2048; // about 43 ms at 48 or 96 kHz (a 21 ms window at 96 kHz was too noisy)
+      const an = audioCtx.createAnalyser(); an.fftSize = n; an.smoothingTimeConstant = 0; outputSum.connect(an);
+      const buf = new Float32Array(n);
       const rms = () => { an.getFloatTimeDomainData(buf); let s = 0; for (const v of buf) s += v * v; return Math.sqrt(s / buf.length); };
       updateParams({ bass: 0, mid: 0, high: 0 });
       const out = []; for (let i = 0; i < 56; i++) { await new Promise(r => setTimeout(r, 25)); out.push(+rms().toFixed(4)); }
@@ -730,7 +761,7 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }

@@ -7,7 +7,11 @@
 // segment is copied intact; the cost is a slight warble on long steady notes that grows with the shift,
 // and about 0.14 s of delay while the stage is in use. The graph routes around this node at 0 st.
 //
-// Parameter `semitones` (k-rate, -12 .. +12). 0 = the input, delayed.
+// Parameter `semitones` (k-rate, -12 .. +12). Exactly 0 parks the processor (1.5.2): it outputs silence, does no work and
+// forgets its history, because the graph routes around it then. A full WSOLA search costs up to ~2 ms at 96 kHz, more
+// than one 1.33 ms block, and running it ten times a second while unused pushed the engine to the edge of real time
+// (dropouts heard as clicks). Leaving 0 it starts afresh; it posts { primed: true } once it is producing audio and
+// { primed: false } when it parks or runs dry, and the graph opens its path only while it is primed.
 
 const OVERLAP_MS = 8;        // crossfade between segments
 const SEQ_MIN_MS = 50;       // segment length at tempo 2 (pitch down an octave) ...
@@ -43,6 +47,21 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     this.rsPos = 1;                     // fractional read position in the stretched audio (>= 1 for the cubic reader)
     this.skipFract = 0;
     this.primed = false;
+    this.parked = false;
+  }
+
+  // Back to the state of a new processor (the buffers' old contents are never read again, except the crossfade tail).
+  reset() {
+    this.inStart = 0; this.inEnd = 0; this.stEnd = 0; this.rsPos = 1; this.skipFract = 0;
+    for (let c = 0; c < this.channels; c++) this.mid[c].fill(0);
+    this.midMix.fill(0);
+    this.setPrimed(false);
+  }
+
+  setPrimed(on) {
+    if (this.primed === on) return;
+    this.primed = on;
+    this.port.postMessage({ primed: on });
   }
 
   // Segment lengths follow the stretch factor, as SoundTouch's automatic setting does.
@@ -124,6 +143,12 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
   process(inputs, outputs, parameters) {
     const output = outputs[0];
     const n = output[0].length;
+    if (parameters.semitones[0] === 0) {
+      if (!this.parked) { this.reset(); this.parked = true; }
+      for (let c = 0; c < output.length; c++) output[c].fill(0);
+      return true;
+    }
+    this.parked = false;
     const ratio = Math.pow(2, parameters.semitones[0] / 12);
     const tempo = 1 / ratio;
     const { seq, seek } = this.lengths(tempo);
@@ -160,7 +185,7 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
     if (!this.primed) {
       const occupancy = this.stEnd - this.rsPos;
       const available = this.inEnd - this.inStart;
-      if (occupancy >= target && available >= seq + seek - (occupancy - target) * tempo) this.primed = true;
+      if (occupancy >= target && available >= seq + seek - (occupancy - target) * tempo) this.setPrimed(true);
       else { for (let c = 0; c < output.length; c++) output[c].fill(0); return true; }
     }
 
@@ -169,7 +194,7 @@ class PitchShifterProcessor extends AudioWorkletProcessor {
       const i = Math.floor(this.rsPos);
       if (i + 2 >= this.stEnd) { // ran dry: silence for the rest of this block, then start again
         for (let c = 0; c < output.length; c++) output[c].fill(0, k);
-        this.primed = false;
+        this.setPrimed(false); // the graph switches to the unshifted path until it is primed again
         break;
       }
       const f = this.rsPos - i;

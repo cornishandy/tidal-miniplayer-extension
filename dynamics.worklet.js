@@ -159,7 +159,9 @@ class LookaheadLimiter extends AudioWorkletProcessor {
     this.L = Math.round(0.005 * sampleRate);
     const N = this.N = this.L + 1;
     this.dL = new Float32Array(N); this.dR = new Float32Array(N); this.dIdx = 0;
-    this.qVal = new Float32Array(N + 1); this.qIdx = new Int32Array(N + 1); this.qHead = 0; this.qTail = 0; // deque (ring)
+    // deque (ring). Sample indices are kept as doubles: an Int32Array wrapped after 2^31 samples (6.2 hours at 96 kHz) and
+    // the expiry loop below then never ended, which stalled the whole audio engine (fixed in 1.5.2).
+    this.qVal = new Float32Array(N + 1); this.qIdx = new Float64Array(N + 1); this.qHead = 0; this.qTail = 0;
     this.box = new Float64Array(N).fill(1); this.boxIdx = 0; this.boxSum = N;
     this.rel = 1; this.aRel = onePole(0.08);
     this.n = 0; this.since = 0;
