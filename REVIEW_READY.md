@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-04 (rounds 11 and 12: the alternatives as switches, live meters, rows in chain order; side-panel tags back to words; 1.5.1)
+# Review Ready: 2026-10-10 (the click report: 1.5.2)
 
 ## Identity
 
@@ -14,13 +14,24 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
-| Version | **1.5.1** |
+| Version | **1.5.2** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` |
-| Runtime source commit | `f0a5adc` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `c6004b1723af49e5…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `7317469` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `7a7b7eb93e0ffd76…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.5.2 (your report: "lots of clicking sounds", Glass, "Islands", iFi DAC at 96 kHz)
+
+**The sound is untouched**: on the default settings every sample is the same as in 1.5.1 (unit proofs against the 1.5.1 code; W-DYN-BASELINE at 96 kHz). You said yes to installing it on 2026-10-10.
+
+- **No more dropouts when the Mac is briefly busy.** At 96 kHz Chrome had been giving the EQ 2.7 ms per audio hand-over; whenever the audio thread was held up for more than about 4 ms, your DAC got a moment of silence: a click. The EQ now hands over 21 ms at a time. Measured with deliberate stalls about 11 times a second: 1.5.1 dropped out on almost every stall from 6 ms (12 to 23 a second), 1.5.2 not once up to 24 ms ([docs/evidence/stall-series-2026-10-10.md](docs/evidence/stall-series-2026-10-10.md)). Cost: about 30 ms more delay, noticeable only as lip sync on video.
+- **The pitch stage rests when Pitch is at 0.** It used to keep working ten times a second even when unused, which made the stalls likelier. Switching Pitch on now plays about 0.15 s unshifted first. A jump across the whole range at once can still click for a moment (it did since 1.4.0); the fix for that changes how Pitch glides, so it waits for your OK (K-04).
+- **A freeze after six hours is gone.** A counter in the look-ahead limiter's code overflowed after 6.2 hours of continuous playback at 96 kHz and stopped all sound.
+- **Tests are silent.** The test browser now has no audio output at all; before, you could hear its test tones on your DAC (sorry).
+
+Ruled out on the evidence: the EQ settings and the 1.5.0 switches, the page script, and your DAC's clock (it runs about 11 ppm fast; 10 minutes without a gap).
 
 ## What changed in 1.5.1
 
@@ -48,37 +59,31 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 **The diagram** (your "explain visually with diagram"): [docs/diagrams/leveler-explained-2026-10-04.png](docs/diagrams/leveler-explained-2026-10-04.png), also embedded in [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md).
 
-## Your decisions today (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), round 11)
+## Your decisions today (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), "Click report")
 
-- **Which tab the EQ grabs: keep** (C-01 closed).
-- **Audio processing frozen without your OK** (A-03, rule).
-- **Listening result**: both heard, "more bass" and "squashed" (S-04); the switches are the answer.
-- **Alternatives built as switches** (D-01), **live bars** (D-02), **rows in chain order** (D-03), **diagram** (D-04), **the "things to try" note kept** (N-01).
+- **Install 1.5.2: yes** (K-01).
+- Your other open items are parked, with their questions and mockups, in [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md) ("Open items, parked 2026-10-10").
 
 ## Installation and state
 
-- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.1. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
+- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.2. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
 - No key generated, no Web Store action.
 
 ## Tests
 
-- **Executed**: 43 installed-browser and objective-audio checks, plus 13 unit checks, all PASS on this exact build (`tests/results/review-v1.5.1/`). New: W-DYN-BASELINE (the 1.4.0 sound reproduced), W-DYN-LEVELER-BASS (60 Hz down 3.5 dB, 1 kHz and 8 kHz unchanged), W-DYN-LEVELER-SLOW, W-DYN-MATCH (within 0.3 dB of the untouched loudness where it was 5.2 dB louder), W-DYN-LIMITER-LOOKAHEAD (peak 0.930, ceiling idle, distortion products 25 to 40 dB lower than Fast), W-DYN-CEILING-WARM (never above −0.3 dB, transparent at a quiet level, +13 dB of colour at the worst case), W-DYN-METERS-UI (the bars follow the engine; the menus and the MATCH tag persist). Matrix and evidence: [docs/PLAN_AND_ACCEPTANCE.md](docs/PLAN_AND_ACCEPTANCE.md).
-- **Reported working by you** (1.3.3, 2026-10-03): side panel, cover art, jumps, time, mini bar, heart on real Tidal.
-- **Not run (your ears and eyes)**: the switches on real music; the pitch shift on real music; the new rows and the diagram; Alt+M / Alt+E on your Mac.
+- **Executed**: 45 installed-browser and objective-audio checks, plus 16 unit checks, all PASS on this exact build (`tests/results/review-v1.5.2/`), with the test browser silent. New: W-CLICK-PATH (21 ms buffer, pitch stage at rest), W-PITCH-RECOVER (after a −12 to +12 jump Pitch comes back by itself), unit proofs that the limiter and the shifted sound are bit-identical to 1.5.1 and that the 6-hour freeze cannot happen.
+- **Diagnostics** (not in the regular run): the stall series and two 10-minute runs without a loop (0 gaps, 0 dropouts on both versions).
+- **Not run (your ears)**: the track you reported, and the open listening items below.
 
 ## What I need from you
 
-1. **Reload**, confirm **1.5.1**, EQ on, and look at the four bars while a loud track plays. The AUTO bar sitting amber or red during the loud parts is the leveler working hard; that is the "squashed" case made visible.
-2. **Try the switches, one at a time** (how to compare, in full: [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md)). Leveler → Bass only: the voice and hi-hats should stop dipping with the kick. Leveler → Slow release: less breathing between kicks. MATCH on: leave it on while comparing anything else, so loudness stops fooling you. At a high Master setting: Limiter → Look-ahead, then Ceiling → Warm. Report which switch, which preset, which track, roughly when, and what it sounded like.
-3. **The layout**: Pitch moved to the top (chain order) and the Auto-Balancing row now reads "Leveler". Say if you want Pitch back at the bottom or the old label back.
-4. **The diagram**: does it make the full-band / bass-only / loudness point clear?
-5. Still open from before: **Pitch** on a track (+2, −2, +7); **Alt+M** opens the panel and **Alt+E** on the Tidal tab switches the EQ; the **56 px cover** in the narrow panel.
-
-Things to try without code, kept at your request: AUTO off with Master at or under 100 % for punch; HPF from 30 up to 40 Hz on heavy presets; Master down as Bass goes up (about 70 % per +6 dB; with MATCH on this happens by itself).
+1. **Reload**: open `chrome://extensions`, find the card "Universal Mini-Player & DJ Bass Booster", click its round arrow (Reload), and check it says **1.5.2**.
+2. **Play "Islands" again** with AUDIO EQ on, the iDSD back at 96 kHz if you changed it. Tell me "clean", or roughly how often the clicks come and whether they are steady or random.
+3. When you have time: the parked open items (signal readout, mode defaults, the MATCH bar, the 1.5.0 listening and layout questions).
 
 ## Remaining known issues
 
-No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch applies while the EQ is on and adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds, so a quiet-to-loud section change can be heard as a slow level settle. Alt+E can only attach to a tab you have opened the extension on (Chrome's rule). Chrome's side panel cannot go below 360 px.
+About 30 ms more delay since 1.5.2 (lip sync on video). A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
 
 ## Docs
 
@@ -87,6 +92,6 @@ No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch appl
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.1 is harness-verified on the exact review folder (43/43); your Reload and your listening to the switches are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.2 is harness-verified on the exact review folder (45/45, silent); your Reload and your listening to the reported track are pending.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.
