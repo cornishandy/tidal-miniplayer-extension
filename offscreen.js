@@ -25,6 +25,10 @@ let pitchNode = null;
 let pitchDryGain = null;
 let pitchWetGain = null;
 let pitchError = null; // set if the worklet could not be loaded; the EQ still runs, pitch has no effect
+let pitchPrimed = false; // the shifter reports when it is producing audio; its path opens only then (1.5.2)
+let pitchHoldUntil = 0;  // after the shifter ran dry, the unshifted path stays open at least 0.5 s (no flapping)
+let pitchHoldTimer = null;
+
 
 // Dynamics alternatives (1.5.0, decision D-01): switchable stages beside the 1.4.0 ones. The defaults route exactly
 // as 1.4.0 did; every alternative is a parallel path opened by a gain, so the default sound is unchanged (W-DYN-BASELINE).
@@ -247,7 +251,9 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
       });
     });
 
-    audioCtx = new AudioContext({ latencyHint: 'interactive' });
+    // 'playback' (1.5.2): Chrome hands the device 2048 frames at a time instead of 256 (21 ms at 96 kHz instead of 2.7 ms),
+    // so a slow moment on the audio thread no longer becomes a dropout. The samples are the same; about 30 ms more delay.
+    audioCtx = new AudioContext({ latencyHint: 'playback' });
     if (audioCtx.state === 'suspended') {
       await audioCtx.resume();
     }
@@ -262,7 +268,16 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
       pitchNode = new AudioWorkletNode(audioCtx, 'pitch-shifter', {
         numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
       });
-      pitchNode.parameters.get('semitones').value = pitchSetting();
+      pitchNode.parameters.get('semitones').value = pitchTarget();
+      pitchPrimed = false;
+      const node = pitchNode;
+      node.port.onmessage = (e) => {
+        if (pitchNode !== node || typeof e.data?.primed !== 'boolean' || !audioCtx) return;
+        if (!e.data.primed && pitchPrimed && pitchTarget() !== 0) pitchHoldUntil = audioCtx.currentTime + 0.5; // ran dry
+        pitchPrimed = e.data.primed;
+        if (pitchPrimed) reopenAfterHold(node);
+        applyRoutingState();
+      };
     } catch (err) {
       pitchError = err.message;
     }
@@ -488,6 +503,9 @@ function stopCapture() {
   isCapturing = false;
   sourceNode = null;
   pitchNode = null;
+  pitchPrimed = false;
+  pitchHoldUntil = 0;
+  clearTimeout(pitchHoldTimer);
   pitchDryGain = null;
   pitchWetGain = null;
   inputAnalyser = null;
@@ -521,7 +539,7 @@ function updateParams(newParams) {
   if (midNode) midNode.gain.setTargetAtTime(off.mid ? 0 : (currentParams.mid || 0), now, rampTime);
   if (highNode) highNode.gain.setTargetAtTime(off.high ? 0 : (currentParams.high || 0), now, rampTime);
   if (volumeGain) volumeGain.gain.setTargetAtTime(off.gain ? 1.0 : (currentParams.gain || 1.0), now, rampTime);
-  if (pitchNode) pitchNode.parameters.get('semitones').setTargetAtTime(pitchSetting(), now, rampTime);
+  if (pitchNode) schedulePitch(now, rampTime);
 
   applyRoutingState();
 }
@@ -562,8 +580,36 @@ function applyRoutingState({ immediate = false } = {}) {
   set(ceilingWarmGain, dyn.ceiling === 'warm' ? 1.0 : 0.0);
   set(ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
 
-  // The shifter is in the path only while a shift is set (it adds about 0.14 s of delay); 0 st is a true bypass.
-  const shifting = !!pitchNode && Math.abs(pitchSetting()) >= 0.05;
+  // The shifter is in the path only while a shift is set and it is producing audio (it adds about 0.14 s of delay);
+  // 0 st is a true bypass, and the shifter is parked then.
+  const shifting = !!pitchNode && pitchTarget() !== 0 && pitchPrimed && audioCtx.currentTime >= pitchHoldUntil;
   set(pitchWetGain, shifting ? 1.0 : 0.0);
   set(pitchDryGain, shifting ? 0.0 : 1.0);
+}
+
+// Re-route once the audio clock has passed the hold. A timer runs on the computer's clock and the audio clock lags it by
+// the output buffer, so the check repeats until the hold is really over (or the shifter or the capture is replaced).
+function reopenAfterHold(node) {
+  clearTimeout(pitchHoldTimer);
+  if (!audioCtx || pitchNode !== node) return;
+  const wait = pitchHoldUntil - audioCtx.currentTime;
+  if (wait <= 0) { applyRoutingState(); return; }
+  pitchHoldTimer = setTimeout(() => reopenAfterHold(node), wait * 1000 + 20);
+}
+
+// The shift the worklet is given: below 0.05 st it is exactly 0, which parks it.
+function pitchTarget() {
+  const st = pitchSetting();
+  return Math.abs(st) >= 0.05 ? st : 0;
+}
+
+// Glide to a new shift in 30 ms. Going to 0, the value is set to exactly 0 once the crossfade back to the unshifted path
+// is over (250 ms), so the shifter parks.
+function schedulePitch(now, rampTime) {
+  const p = pitchNode.parameters.get('semitones');
+  const st = pitchTarget();
+  p.cancelScheduledValues(now);
+  p.setValueAtTime(p.value, now);
+  p.setTargetAtTime(st, now, rampTime);
+  if (st === 0) p.setValueAtTime(0, now + 0.25);
 }

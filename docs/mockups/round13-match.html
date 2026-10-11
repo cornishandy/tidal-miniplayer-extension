@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Round 13 mockup: MATCH bar with zero in the middle</title>
+<link rel="stylesheet" href="../../popup.css"><link rel="stylesheet" href="../../themes.css">
+<style>
+  html, body { background: #2a2a30; }
+  body { width: auto; overflow: visible; padding: 10px; }
+  .sheet { display: inline-block; width: 920px; background: var(--bg-primary); padding: 10px 12px 6px; box-sizing: border-box; }
+  h1 { font-size: 13px; font-weight: 700; margin: 0 0 8px; color: #e8e8ee; }
+  .grid { display: grid; grid-template-columns: 440px 440px; gap: 6px 16px; align-items: start; }
+  .colhd { font-size: 11px; font-weight: 700; color: var(--text-muted); padding: 0 12px 2px; }
+  .colhd b { color: #e8e8ee; }
+  .state { grid-column: 1 / span 2; font-size: 10.5px; color: var(--text-muted); padding: 6px 12px 0; border-top: 1px solid var(--border-color); }
+  .state:first-of-type { border-top: 0; }
+  .cell { width: 440px; background: var(--bg-card, rgba(255,255,255,0.03)); border: 1px solid var(--border-color); border-radius: 8px; }
+  .note { font-size: 10px; color: #6f6f7a; padding: 8px 12px 0; }
+
+  /* Proposed: the MATCH bar has zero in the middle; the fill grows to the left when the match turns the music down
+     and to the right when it turns it up. 12 dB each side. Same colours as the other bars. */
+  .gr-meter.bipolar > i { position: absolute; top: 0; height: 100%; width: 0; }
+  .gr-meter.bipolar.down > i { right: 50%; border-radius: 3px 0 0 3px; }
+  .gr-meter.bipolar.up > i { left: 50%; border-radius: 0 3px 3px 0; }
+  .gr-meter.bipolar::after { content: ''; position: absolute; left: calc(50% - 1px); top: 0; bottom: 0; width: 2px; background: rgba(255,255,255,0.75); }
+</style></head>
+<body>
+<div class="sheet">
+  <h1>MATCH bar: today (left) and with zero in the middle (right). Example values.</h1>
+  <div class="grid">
+    <div class="colhd"><b>Today.</b> The bar fills from the left by the size of the trim; only the figure shows the direction.</div>
+    <div class="colhd"><b>Proposed.</b> Zero in the middle. Left: turning down. Right: turning up. The other bars stay as they are.</div>
+
+    <div class="state">1. The bass boost made the track louder; MATCH is turning it down 3.2 dB.</div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter warn"><i style="width:38%"></i></div><span class="eq-val dyn-val">−4.6 dB</span></div>
+      <div class="eq-row dyn-row"><button class="band-tag">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter warn"><i style="width:26.7%"></i></div><span class="eq-val dyn-val">−3.2 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+    </main></section></div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter warn"><i style="width:38%"></i></div><span class="eq-val dyn-val">−4.6 dB</span></div>
+      <div class="eq-row dyn-row"><button class="band-tag">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter bipolar down warn"><i style="width:13.3%"></i></div><span class="eq-val dyn-val">−3.2 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+    </main></section></div>
+
+    <div class="state">2. HPF high and bass cut made the track quieter; MATCH is turning it up 1.8 dB.</div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter"><i style="width:6%"></i></div><span class="eq-val dyn-val">−0.7 dB</span></div>
+      <div class="eq-row dyn-row"><button class="band-tag">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter"><i style="width:15%"></i></div><span class="eq-val dyn-val">+1.8 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+    </main></section></div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter"><i style="width:6%"></i></div><span class="eq-val dyn-val">−0.7 dB</span></div>
+      <div class="eq-row dyn-row"><button class="band-tag">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter bipolar up"><i style="width:7.5%"></i></div><span class="eq-val dyn-val">+1.8 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+    </main></section></div>
+
+    <div class="state">3. Heavy preset at a high Master setting; MATCH is turning it down 9.5 dB.</div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter heavy"><i style="width:70%"></i></div><span class="eq-val dyn-val">−8.4 dB</span></div>
+      <div class="eq-row dyn-row"><button class="band-tag">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter heavy"><i style="width:79.2%"></i></div><span class="eq-val dyn-val">−9.5 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1.8"><button class="eq-nudge-btn">+</button><span class="eq-val">180%</span></div>
+    </main></section></div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter heavy"><i style="width:70%"></i></div><span class="eq-val dyn-val">−8.4 dB</span></div>
+      <div class="eq-row dyn-row"><button class="band-tag">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter bipolar down heavy"><i style="width:39.6%"></i></div><span class="eq-val dyn-val">−9.5 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1.8"><button class="eq-nudge-btn">+</button><span class="eq-val">180%</span></div>
+    </main></section></div>
+
+    <div class="state">4. MATCH switched off (today the figure reads 0.0 dB; the proposal says "off").</div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter warn"><i style="width:38%"></i></div><span class="eq-val dyn-val">−4.6 dB</span></div>
+      <div class="eq-row dyn-row is-off"><button class="band-tag off">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter"><i style="width:0"></i></div><span class="eq-val dyn-val">0.0 dB</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+    </main></section></div>
+    <div class="cell"><section class="eq-pane"><main class="controls-area">
+      <div class="eq-row dyn-row"><button class="band-tag">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter warn"><i style="width:38%"></i></div><span class="eq-val dyn-val">−4.6 dB</span></div>
+      <div class="eq-row dyn-row is-off"><button class="band-tag off">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter bipolar"><i style="width:0"></i></div><span class="eq-val dyn-val idle">off</span></div>
+      <div class="eq-row"><button class="band-tag">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn">+</button><span class="eq-val">100%</span></div>
+    </main></section></div>
+  </div>
+  <div class="note">Mockup, example values. Round 13, 2026-10-04. Proposed scale: 12 dB each side of the middle (the trim stays within −14 and +6 dB). Colours as on the other bars: amber from 3 dB, red from 8 dB, whichever way it goes. The AUTO bar and the Master Volume slider are shown for comparison and do not change.</div>
+</div>
+</body></html>

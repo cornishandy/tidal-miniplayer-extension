@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Round 12 mockup: signal facts</title>
+<link rel="stylesheet" href="../../popup.css"><link rel="stylesheet" href="../../themes.css">
+<style>
+  html, body { background: #2a2a30; }
+  [hidden] { display: none !important; }
+  body { width: auto; overflow: visible; padding: 10px; }
+  .sheet { display: inline-block; width: 440px; background: var(--bg-primary); }
+  body.panel .sheet { width: 360px; }
+  body.panel { width: auto; height: auto; }
+  body.panel .popup-container { width: 360px; }
+  .note { font-size: 10px; color: #6f6f7a; padding: 4px 12px 6px; background: var(--bg-secondary); }
+
+  /* Variant A: two short lines inside the live strip, top right (no extra height) */
+  .physics { position: relative; }
+  .signal-strip { position: absolute; right: 8px; top: 18px; text-align: right; font-size: 9.5px; line-height: 12px; color: #c8c8d0;
+    background: rgba(12,12,16,0.72); padding: 2px 5px; border-radius: 4px; pointer-events: none; }
+  .signal-strip b { color: #fff; font-weight: 600; }
+
+  /* Variant B: the full table over the physics box, opened by a click on PHYSICS */
+  .signal-overlay { position: absolute; inset: 0; background: #0c0c10; border-radius: 8px; padding: 4px 10px 3px; display: flex; flex-direction: column; }
+  .signal-overlay .hd { display: flex; justify-content: space-between; align-items: center; height: 14px; margin-bottom: 2px; }
+  .signal-overlay .hd span { font-size: 10px; font-weight: 800; letter-spacing: .8px; color: var(--text-muted); }
+  .signal-overlay .hd em { font-style: normal; font-size: 10px; color: var(--text-muted); }
+  .sig { display: grid; grid-template-columns: 74px 1fr; gap: 0 8px; font-size: 10px; line-height: 12.5px; }
+  .sig dt { color: var(--text-muted); white-space: nowrap; }
+  .sig dd { margin: 0; color: #e8e8ee; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sig dd b { color: var(--accent); font-weight: 600; }
+  .sig dd small { color: var(--text-muted); }
+
+  /* Variant C: the side panel shows the table as its own card under PHYSICS */
+  .signal-card { background: #0c0c10; border: 1px solid var(--border-color); border-radius: 8px; padding: 6px 10px 7px; }
+  .signal-card .hd { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+  .signal-card .hd span { font-size: 10px; font-weight: 800; letter-spacing: .8px; color: var(--text-muted); }
+  .signal-card .hd em { font-style: normal; font-size: 10px; color: var(--text-muted); }
+  .signal-card .sig { font-size: 11px; line-height: 15px; grid-template-columns: 84px 1fr; }
+  .signal-card .sig dd { white-space: normal; }
+</style></head>
+<body>
+<div class="sheet"><div class="popup-container">
+  <aside class="art-strip"><div style="position:absolute;inset:0;background:radial-gradient(circle at 30% 40%, #ff6a3d 0, #c2185b 35%, #311b92 70%, #0b0b10 100%)"></div></aside>
+  <div class="popup-main">
+    <section class="np">
+      <div class="np-main">
+        <div class="np-title">Hyperballad</div>
+        <div class="np-artist"><b>Björk</b><span> · 1:48 / 5:21</span></div>
+        <div class="transport">
+          <button class="tbtn heart on" title="Heart"><svg viewBox="0 0 24 24"><path d="M12 21s-7-4.6-9.3-9A5.2 5.2 0 0 1 12 6.2 5.2 5.2 0 0 1 21.3 12C19 16.4 12 21 12 21z"/></svg></button>
+          <button class="tbtn small" title="Prev"><svg viewBox="0 0 24 24"><path d="M6 5v14"/><path d="M18 5 8 12l10 7z"/></svg></button>
+          <button class="tbtn jump" title="Back"><svg viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 3v5h5"/></svg><span>15</span></button>
+          <button class="tbtn play" title="Pause"><svg viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg></button>
+          <button class="tbtn jump" title="Fwd"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 3v5h-5"/></svg><span>30</span></button>
+          <button class="tbtn small" title="Next"><svg viewBox="0 0 24 24"><path d="M18 5v14"/><path d="M6 5l10 7-10 7z"/></svg></button>
+        </div>
+      </div>
+      <div class="np-cover" style="background:radial-gradient(circle at 30% 40%, #ff6a3d 0, #c2185b 35%, #311b92 70%, #0b0b10 100%)"></div>
+      <div class="progress"><div style="width:34%"></div></div>
+    </section>
+    <section class="status-bar">
+      <span class="power-title">AUDIO EQ</span>
+      <label class="switch power-switch"><input type="checkbox" checked><span class="slider-round"></span></label>
+      <span class="power-badge on">● ON · TIDAL</span>
+    </section>
+    <section class="eq-pane">
+      <div class="preset-section">
+        <div class="section-title-row"><div class="section-title-group"><label class="section-title">PRESETS</label><span class="preset-badge-saved">● Saved</span></div>
+          <div class="preset-actions"><button class="btn-text">+ Save</button><button class="btn-text">↺ Reset</button></div></div>
+        <select class="preset-dropdown"><option>Deep Sub-Bass (Dub/Trap)</option></select>
+      </div>
+      <div class="physics" id="physics">
+        <div class="phys-hdr"><span>PHYSICS</span><em id="readout">HPF 25Hz · Low +8.0 · Mid +0.0 · Hi +1.0 · Vol 100%</em></div>
+        <canvas id="live-canvas" class="phys-canvas live"></canvas>
+        <canvas id="bode-canvas" class="phys-canvas bode"></canvas>
+        <div class="signal-strip" id="strip" hidden><div><b>96 kHz</b> in · <b>96 kHz</b> 32-bit float · <b>96 kHz</b> out · 2 ch</div><div>delay <b>12 ms</b> · peak in <b>−6.2</b> / out <b>−0.6</b> dBFS</div></div>
+        <div class="signal-overlay" id="overlay" hidden>
+          <div class="hd"><span>SIGNAL · right now</span><em>click to close</em></div>
+          <dl class="sig">
+            <dt>Tab audio in</dt><dd><b>96 000 Hz</b> · 2 ch · float · voice processing off</dd>
+            <dt>Processing</dt><dd><b>96 000 Hz</b> · 32-bit float · 128-sample blocks</dd>
+            <dt>To the Mac</dt><dd><b>96 000 Hz</b> · 2 ch <small>· bit depth: Audio MIDI Setup</small></dd>
+            <dt>Delay added</dt><dd><b>12 ms</b> <small>limiter 6 + AUTO 6 · Pitch +140 · Look-ahead +5</small></dd>
+            <dt>Levels</dt><dd>peak <b>−6.2</b> in / <b>−0.6</b> out dBFS · <b>−18.4</b> → <b>−14.1</b> LUFS</dd>
+            <dt>Headroom</dt><dd><b>0.3 dB</b> to the ceiling · limiter at <b>1.1 dB</b></dd>
+            <dt>Tidal says</dt><dd><b>MAX</b> <small>quality badge read from the page</small></dd>
+          </dl>
+        </div>
+      </div>
+      <div class="signal-card" id="card" hidden>
+        <div class="hd"><span>SIGNAL · right now</span><em>example values</em></div>
+        <dl class="sig">
+          <dt>Tab audio in</dt><dd><b>96 000 Hz</b> · 2 channels · float · Chrome's voice processing off</dd>
+          <dt>Processing</dt><dd><b>96 000 Hz</b> · 32-bit float · 128-sample blocks</dd>
+          <dt>To the Mac</dt><dd><b>96 000 Hz</b> · 2 channels <small>(the output device's current setting; its bit depth is set in Audio MIDI Setup and is not visible here)</small></dd>
+          <dt>Delay added</dt><dd><b>12 ms</b> <small>(limiter 6 ms + AUTO 6 ms; Pitch adds 140 ms while set, Look-ahead 5 ms)</small></dd>
+          <dt>Levels</dt><dd>peak in <b>−6.2</b> / out <b>−0.6</b> dBFS · loudness <b>−18.4</b> → <b>−14.1</b> LUFS</dd>
+          <dt>Headroom</dt><dd><b>0.3 dB</b> to the ceiling · limiter working <b>1.1 dB</b></dd>
+          <dt>Tidal says</dt><dd><b>MAX</b> <small>(quality badge read from the page, when it shows one)</small></dd>
+        </dl>
+      </div>
+      <main class="controls-area">
+        <div class="eq-row" data-band="pitch"><button class="band-tag" data-band="pitch" title="p">PITCH</button><div class="eq-label">Pitch <small>key, same speed</small></div><button class="eq-nudge-btn" title="-">−</button><input type="range" class="eq-slider" min="-12" max="12" step="0.1" value="0"><button class="eq-nudge-btn" title="+">+</button><span class="eq-val">0.0 st</span></div>
+        <div class="eq-row" data-band="hpf"><button class="band-tag" data-band="hpf" title="h">HPF</button><div class="eq-label">HPF <small>anti-distort</small></div><button class="eq-nudge-btn" title="-">−</button><input type="range" class="eq-slider" min="20" max="200" step="5" value="25"><button class="eq-nudge-btn" title="+">+</button><span class="eq-val">25 Hz</span></div>
+        <div class="eq-row" data-band="bass"><button class="band-tag" data-band="bass" title="b">LOW</button><div class="eq-label">Bass Boost</div><button class="eq-nudge-btn" title="-">−</button><input type="range" class="eq-slider" min="0" max="14" step="0.5" value="8"><button class="eq-nudge-btn" title="+">+</button><span class="eq-val">+8.0 dB</span></div>
+        <div class="eq-row" data-band="mid"><button class="band-tag" data-band="mid" title="m">MID</button><div class="eq-label">Mid <small>vocals / body</small></div><button class="eq-nudge-btn" title="-">−</button><input type="range" class="eq-slider" min="-6" max="6" step="0.5" value="0"><button class="eq-nudge-btn" title="+">+</button><span class="eq-val">+0.0 dB</span></div>
+        <div class="eq-row" data-band="high"><button class="band-tag" data-band="high" title="h">HI</button><div class="eq-label">High <small>sparkle</small></div><button class="eq-nudge-btn" title="-">−</button><input type="range" class="eq-slider" min="-6" max="6" step="0.5" value="1"><button class="eq-nudge-btn" title="+">+</button><span class="eq-val">+1.0 dB</span></div>
+        <div class="eq-row dyn-row" data-band="comp"><button class="band-tag" data-band="comp" title="a">AUTO</button><div class="eq-label dyn-label"><span>Leveler</span><select class="mode-select"><option>Full band</option></select></div><div class="gr-meter warn"><i style="width:38%"></i></div><span class="eq-val dyn-val">−4.6 dB</span></div>
+        <div class="eq-row dyn-row is-off" data-band="match"><button class="band-tag off" data-band="match" title="m">MATCH</button><div class="eq-label dyn-label"><span>Loudness match</span><small>auto gain</small></div><div class="gr-meter"><i style="width:0"></i></div><span class="eq-val dyn-val">0.0 dB</span></div>
+        <div class="eq-row" data-band="gain"><button class="band-tag" data-band="gain" title="g">VOL</button><div class="eq-label">Master Volume</div><button class="eq-nudge-btn" title="-">−</button><input type="range" class="eq-slider" min="0.5" max="2.5" step="0.05" value="1"><button class="eq-nudge-btn" title="+">+</button><span class="eq-val">100%</span></div>
+        <div class="eq-row dyn-row" data-band="limiter"><span class="band-tag static" title="l">LIM</span><div class="eq-label dyn-label"><span>Limiter</span><select class="mode-select"><option>Fast</option></select></div><div class="gr-meter"><i style="width:9%"></i></div><span class="eq-val dyn-val">−1.1 dB</span></div>
+        <div class="eq-row dyn-row" data-band="ceiling"><span class="band-tag static" title="c">CEIL</span><div class="eq-label dyn-label"><span>Ceiling</span><select class="mode-select"><option>Clean</option></select></div><div class="gr-meter"><i style="width:2%"></i></div><span class="eq-val dyn-val">−0.2 dB</span></div>
+      </main>
+    </section>
+    <footer class="foot">
+      <label class="opt"><span class="switch"><input type="checkbox"><span class="slider-round"></span></span><b>Stay open</b></label>
+      <div class="dots"><button class="dot sel" style="background:#00e5ff" title="c"></button><button class="dot" style="background:#ff9d00" title="a"></button><button class="dot" style="background:#ff007f" title="s"></button><button class="dot" style="background:#00ff66" title="m"></button><button class="dot" style="background:#b388ff" title="o"></button></div>
+      <button class="link">Mini bar ▣</button>
+    </footer>
+    <div class="note" id="note">Mockup, example values. Round 12, 2026-10-04.</div>
+  </div>
+</div></div>
+<script src="../../physics-view.js"></script>
+<script>
+  const v = new URLSearchParams(location.search).get('variant') || 'a';
+  if (v === 'c') { document.body.classList.add('panel'); document.getElementById('card').hidden = false; document.getElementById('readout').style.display = 'none'; }
+  if (v === 'a') document.getElementById('strip').hidden = false;
+  if (v === 'b') document.getElementById('overlay').hidden = false;
+  if (v === 'b') document.getElementById('readout').textContent = 'click for the settings';
+  const pv = new PhysicsView({ liveCanvas: document.getElementById('live-canvas'), bodeCanvas: document.getElementById('bode-canvas'), readoutEl: null });
+  pv.updateState({ bass: 8, hpf: 25, mid: 0, high: 1, gain: 1, semitones: 0, autoBalance: true, stageBypass: {} }, true);
+  const input = [], output = [];
+  for (let i = 0; i < 72; i++) {
+    const f = 20 * Math.pow(1000, i / 72);
+    let db = -42 - 9 * Math.log2(Math.max(f, 60) / 60) + 6 * Math.exp(-Math.pow(Math.log2(f / 55), 2) * 2) + 4 * Math.exp(-Math.pow(Math.log2(f / 220), 2) * 3) + 3 * Math.exp(-Math.pow(Math.log2(f / 3000), 2) * 2) + (Math.sin(i * 1.7) * 1.5);
+    input.push(db);
+    const lift = 8 / (1 + Math.pow((f - 65) / 72, 2)) + 1 / (1 + Math.pow(8000 / f, 2)) - 3 * (f < 25 ? 1 : 0);
+    output.push(db + lift);
+  }
+  pv.setFrame({ input, output });
+</script>
+</body></html>
