@@ -1028,6 +1028,63 @@ try {
     atEndNoNext.t1 > 59 && atEndPaused.t > 59.9 && atEndPaused.ended && atEndNoNext.errs.length === 0 && atEndNoNext.ppErrors.length === 0
       && atEndPaused.errs.length === 0 && atEndPaused.ppErrors.length === 0 ? 'PASS' : 'FAIL', { playing: atEndNoNext, paused: atEndPaused });
 
+  // ---- Review round 2: each route is checked; a route that does nothing hands over to the next; anything else
+  // moving the playback during the check (the user in Tidal itself) wins; Next on the screen also holds jumps. ----
+  const nextThenJump = await jumpCase('?tracks=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pp.click('#player-btn-next'); await sleep(150); await pp.click('#player-btn-fwd30');
+    await sleep(1500);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, title: document.querySelector('[data-test="footer-track-title"]').textContent, ...window.clicks }));
+    return { next: after.next, seek: after.seek, title: after.title, t: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-NEXT-THEN-JUMP', 'Next on the screen and +30 straight after: one new track, not skipped and not moved to the old track\'s time',
+    nextThenJump.next === 1 && nextThenJump.seek === 0 && nextThenJump.title === 'Synthetic Tone 2' && nextThenJump.t < 5
+      && nextThenJump.errs.length === 0 && nextThenJump.ppErrors.length === 0 ? 'PASS' : 'FAIL', nextThenJump);
+
+  const noopHandler = await jumpCase('?narrow=1&media=detached&session=noop', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(2000);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    const c = await pg.evaluate(() => window.clicks);
+    return { fwd: +(t1 - t0).toFixed(2), handlerCalls: c.sessionSeek, errs, ppErrors };
+  });
+  record('W-JUMP-NOOP-HANDLER', 'A Tidal seek handler that does nothing hands over to the player element: +30 still moves',
+    noopHandler.fwd > 28 && noopHandler.fwd < 34 && noopHandler.handlerCalls === 1 && noopHandler.errs.length === 0 && noopHandler.ppErrors.length === 0 ? 'PASS' : 'FAIL', noopHandler);
+
+  const noopNext = await jumpCase('?narrow=1&media=detached&nonext=1&session=noop', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pg.click('#footer-play'); await sleep(1200); // paused
+    await pp.click('#player-btn-fwd30'); await sleep(6500);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ended: window.audioEl.ended, handlerCalls: window.clicks.sessionNext }));
+    return { ...after, t: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-END-NOOP-NEXT', 'No Next button and a next-track handler that does nothing: after 3 s +30 near the end still ends the track',
+    noopNext.t > 59.9 && noopNext.ended && noopNext.handlerCalls === 1 && noopNext.errs.length === 0 && noopNext.ppErrors.length === 0 ? 'PASS' : 'FAIL', noopNext);
+
+  const deadBar = await jumpCase('?deadbar=1&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(2200);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    const c = await pg.evaluate(() => window.clicks);
+    return { fwd: +(t1 - t0).toFixed(2), barEvents: c.seek, handlerSeeks: c.sessionSeek, errs, ppErrors };
+  });
+  record('W-JUMP-DEADBAR', 'A seek bar that is there but does nothing hands over to Tidal\'s seek handler after the check',
+    deadBar.fwd > 28 && deadBar.fwd < 35 && deadBar.barEvents === 1 && deadBar.handlerSeeks === 1 && deadBar.errs.length === 0 && deadBar.ppErrors.length === 0 ? 'PASS' : 'FAIL', deadBar);
+
+  const userWins = await jumpCase('?deadbar=1&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    await pp.click('#player-btn-fwd30'); await sleep(300);
+    await pg.evaluate(() => { window.audioEl.currentTime = 12; }); // the user moves Tidal's own timeline meanwhile
+    await sleep(2000);
+    const t = await pg.evaluate(() => window.audioEl.currentTime);
+    const c = await pg.evaluate(() => window.clicks);
+    return { t: +t.toFixed(2), handlerSeeks: c.sessionSeek, errs, ppErrors };
+  });
+  record('W-JUMP-USER-WINS', 'If the playback is moved in Tidal itself during the check, the extension leaves it there (no fallback seek)',
+    userWins.t > 12 && userWins.t < 16 && userWins.handlerSeeks === 0 && userWins.errs.length === 0 && userWins.ppErrors.length === 0 ? 'PASS' : 'FAIL', userWins);
+
   // ---- W-BRIDGE-PAUSE-TIME: with only Tidal's position report (no element known), paused time is not counted ----
   const pauseTime = await (async () => {
     const pg = await context.newPage();

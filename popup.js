@@ -344,12 +344,14 @@ function playerCommand(command, after = 250) {
 }
 
 function handlePlayPause() { playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
-function handlePrev() { playerCommand({ type: 'PREV_TRACK' }, 300); }
-function handleNext() { playerCommand({ type: 'NEXT_TRACK' }, 300); }
-
-// After a jump into the next track, the screen still shows the old one for up to a second; jumps wait for the
-// new track (at most 3 s), so a second click never skips it or seeks it to the old track's time.
+// After Next, Previous or a jump into the next track, the screen still shows the old track for up to a second;
+// jumps wait for the new one (at most 2 s, 3 s after an end jump), so a quick click never skips it or seeks it
+// to the old track's time. Previous that only restarts the same track holds jumps for those 2 s.
 let leavingTrack = null;
+const leaveTrack = (ms) => { leavingTrack = currentTrackInfo ? { title: currentTrackInfo.title, until: Date.now() + ms } : null; };
+
+function handlePrev() { leaveTrack(2000); playerCommand({ type: 'PREV_TRACK' }, 300); }
+function handleNext() { leaveTrack(2000); playerCommand({ type: 'NEXT_TRACK' }, 300); }
 
 function handleJump(deltaSecs) {
   if (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until) return;
@@ -362,7 +364,7 @@ function handleJump(deltaSecs) {
   const cur = currentTrackInfo.currentTime || 0;
   if (deltaSecs > 0 && cur + deltaSecs >= dur - 0.5) {
     // The jump reaches the end: finish this track and go to the next one, as if it had played out.
-    leavingTrack = { title: currentTrackInfo.title, until: Date.now() + 3000 };
+    leaveTrack(3000);
     chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'NEXT_TRACK', orEnd: true } }, (res) => {
       if (res && res.next === false) {
         leavingTrack = null;

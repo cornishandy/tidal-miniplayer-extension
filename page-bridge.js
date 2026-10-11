@@ -83,12 +83,14 @@
     return null;
   }
 
-  // Tidal's own seek handler first (what the Mac's Now Playing scrubber uses), else the element itself.
-  function seek(time) {
-    if (handlers.seekto) {
-      try { handlers.seekto({ action: 'seekto', seekTime: time, fastSeek: false }); return 'session'; } catch (_) { /* next route */ }
+  // route 'session': Tidal's own seek handler (what the Mac's Now Playing scrubber uses); 'element': the element itself.
+  // content.js tries them in that order and checks each one took.
+  function seek(time, route) {
+    if (route === 'session') {
+      if (!handlers.seekto) return false;
+      try { handlers.seekto({ action: 'seekto', seekTime: time, fastSeek: false }); return 'session'; } catch (_) { return false; }
     }
-    const m = media();
+    const m = route === 'element' ? media() : null;
     if (m) { m.currentTime = Math.max(0, Math.min(m.duration, time)); return 'element'; }
     return false;
   }
@@ -104,7 +106,7 @@
     let reply = null;
     try {
       if (req.op === 'state') reply = state();
-      else if (req.op === 'seek' && typeof req.time === 'number' && isFinite(req.time)) reply = { seeked: seek(req.time) };
+      else if (req.op === 'seek' && typeof req.time === 'number' && isFinite(req.time)) reply = { seeked: seek(req.time, req.route) };
       else if (req.op === 'next') reply = { next: next() };
     } catch (_) { reply = null; }
     document.dispatchEvent(new CustomEvent('tme-bridge-reply', { detail: JSON.stringify({ id: req.id, reply }) }));
