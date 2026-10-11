@@ -61,3 +61,4 @@ Kept at your request ("keep all the open items available"). Each has its questio
 | Mini bar from the toolbar (M-01) | 2026-10-11 | Whether the second click, in the side panel, floats the bar; then one click anywhere in the panel (recommended) or a helper window | — |
 | The side panel's empty bottom (R-26) and the artist gauge (R-27) | 2026-10-11 | A (cover on top), B (album and artist cards at the bottom) or C (both); the gauge's lanes; the data source (R-08 reopened: MusicBrainz as an opt-in, recommended) | `docs/mockups/r14-a-cover-top.png`, `r14-b-album-artist.png`, `r14-c-both.png`, `r14-today.png` |
 | Low-delay switch for video (L-01) | 2026-10-11 | Only if lips look late with Pitch at 0 (recommended: not yet) | — |
+| Jumps on a narrow Tidal page; +30 s near the end goes to the next track (J-01, J-02, built in 1.5.3) | 2026-10-11 | Your check on real Tidal: +30 with the panel wide, and +30 in the last 30 s | — |

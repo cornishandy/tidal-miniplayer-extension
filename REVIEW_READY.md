@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-10 (the click report: 1.5.2)
+# Review Ready: 2026-10-11 (1.5.3: the jumps on a narrow Tidal page and at the end of a track)
 
 ## Identity
 
@@ -14,13 +14,21 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
-| Version | **1.5.2** |
+| Version | **1.5.3** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` |
-| Runtime source commit | `7317469` (see `BUILD_INFO.json` in the load path) |
-| Build fingerprint | `7a7b7eb93e0ffd76…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
+| Runtime source commit | `__COMMIT__` (see `BUILD_INFO.json` in the load path) |
+| Build fingerprint | `__FP__…` (SHA-256 over all shipped files; full value in `BUILD_INFO.json`) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
 Later commits on `main` change docs only. The runtime files at `main`'s tip are identical to this build.
+
+## What changed in 1.5.3 (your reports of 2026-10-11 about the +30 s button)
+
+**Nothing about the sound changed.** Only the transport: content.js, the new page helper, the jump in popup.js and the worker's re-injection.
+
+- **+30 s and −15 s work when Tidal hides its timeline** (J-01). With the side panel dragged wide, Tidal's page gets narrow and drops its seek bar, which the jumps used to drive. A small helper inside Tidal's own page (`page-bridge.js`, on Tidal only) now remembers the seek handler Tidal gives the Mac's media controls, and Tidal's player; when the seek bar is missing, the jump goes through those. The time also keeps showing. The helper passes everything through unchanged, reads no login, storage or cookies, and sends nothing anywhere.
+- **+30 s in the last 30 seconds goes to the next track** (J-02), as if the track had played out. If there is no Next (end of the queue), the track plays to its end.
+- **One reload of the Tidal tab** is needed if that tab was already open when you clicked Reload on the extension; new Tidal tabs have the helper from the start. If a jump fails on Tidal, the screen says so.
 
 ## What changed in 1.5.2 (your report: "lots of clicking sounds", Glass, "Islands", iFi DAC at 96 kHz)
 
@@ -59,31 +67,35 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 **The diagram** (your "explain visually with diagram"): [docs/diagrams/leveler-explained-2026-10-04.png](docs/diagrams/leveler-explained-2026-10-04.png), also embedded in [docs/LISTENING_CHECK.md](docs/LISTENING_CHECK.md).
 
-## Your decisions today (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), "Click report")
+## Your decisions (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), "Click report" and "Review round 14")
 
-- **Install 1.5.2: yes** (K-01).
+- **Fix the jumps to your preference** (2026-10-11): built as 1.5.3 (J-01, J-02).
+- **Install 1.5.2: yes** (K-01, 2026-10-10).
+- Waiting for your answers (round 14): the mini bar's second click (M-01), the side panel's empty bottom A / B / C (R-26), the artist gauge (R-27), where album and artist facts come from (R-08 reopened); and the low-delay switch only if lips look late (L-01).
 - Your other open items are parked, with their questions and mockups, in [docs/DESIGN_REVIEW_MAP.md](docs/DESIGN_REVIEW_MAP.md) ("Open items, parked 2026-10-10").
 
 ## Installation and state
 
-- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.2. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
+- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.3. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
 - No key generated, no Web Store action.
 
 ## Tests
 
-- **Executed**: 45 installed-browser and objective-audio checks, plus 16 unit checks, all PASS on this exact build (`tests/results/review-v1.5.2/`), with the test browser silent. New: W-CLICK-PATH (21 ms buffer, pitch stage at rest), W-PITCH-RECOVER (after a −12 to +12 jump Pitch comes back by itself), unit proofs that the limiter and the shifted sound are bit-identical to 1.5.1 and that the 6-hour freeze cannot happen.
+- **Executed (1.5.3)**: 53 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on this exact build (`tests/results/review-v1.5.3/`), with the test browser silent and the fake Tidal page served as tidal.com from this Mac only. New: W-JUMP-NARROW, W-JUMP-NARROW-ELEMENT, W-JUMP-END, W-JUMP-END-QUEUE-END, W-JUMP-END-NO-NEXT, W-BRIDGE-PAUSE-TIME, W-BRIDGE-SCOPE, W-NO-REMOTE-REQUESTS-LATE. A test-isolation slip of 1.5.2 in the dropout diagnostic was found and fixed (H-05).
+- **Executed (1.5.2)**: 45 installed-browser and objective-audio checks, plus 16 unit checks, all PASS (`tests/results/review-v1.5.2/`). New: W-CLICK-PATH (21 ms buffer, pitch stage at rest), W-PITCH-RECOVER (after a −12 to +12 jump Pitch comes back by itself), unit proofs that the limiter and the shifted sound are bit-identical to 1.5.1 and that the 6-hour freeze cannot happen.
 - **Diagnostics** (not in the regular run): the stall series and two 10-minute runs without a loop (0 gaps, 0 dropouts on both versions).
 - **Not run (your ears)**: the track you reported, and the open listening items below.
 
 ## What I need from you
 
-1. **Reload**: open `chrome://extensions`, find the card "Universal Mini-Player & DJ Bass Booster", click its round arrow (Reload), and check it says **1.5.2**.
-2. **Play "Islands" again** with AUDIO EQ on, the iDSD back at 96 kHz if you changed it. Tell me "clean", or roughly how often the clicks come and whether they are steady or random.
-3. When you have time: the parked open items (signal readout, mode defaults, the MATCH bar, the 1.5.0 listening and layout questions).
+1. **Reload**: open `chrome://extensions`, find the card "Universal Mini-Player & DJ Bass Booster", click its round arrow (Reload), and check it says **1.5.3**. Then reload your Tidal tab once.
+2. **Try the jumps**: drag the side panel wide until Tidal's timeline disappears, then click +30; and click +30 with less than 30 s left. Tell me "works" or what happened.
+3. **Play "Islands" again** with AUDIO EQ on, the iDSD back at 96 kHz if you changed it. Tell me "clean", or roughly how often the clicks come and whether they are steady or random.
+4. When you have time: the round-14 questions and the parked open items (signal readout, mode defaults, the MATCH bar, the 1.5.0 listening and layout questions).
 
 ## Remaining known issues
 
-Up to about 50 ms more delay since 1.5.2, about 35 to 60 ms in all by Chrome's figures (lip sync on video; corrected 2026-10-11 from "about 30 ms"). A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
+Up to about 50 ms more delay since 1.5.2, about 35 to 60 ms in all by Chrome's figures (lip sync on video; corrected 2026-10-11 from "about 30 ms"). A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. The 1.5.3 page helper is visible to Tidal's scripts: if Tidal starts showing a captcha, it is the first suspect. Pitch adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
 
 ## Docs
 
