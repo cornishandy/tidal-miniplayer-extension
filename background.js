@@ -28,6 +28,12 @@ async function applyStayOpen(on) {
 let pendingEq = null; // { tabId, at }
 const PENDING_EQ_MS = 10 * 60 * 1000;
 
+// Any EQ start or stop, by any route (screen, Alt+E, icon), settles the pending switch-on.
+function clearPendingEq() {
+  pendingEq = null;
+  return chrome.storage.session.remove('pendingEq').catch(() => {});
+}
+
 // The pending switch-on for this tab, taken (cleared); a click on another tab leaves it waiting.
 async function takePendingEq(tabId) {
   let p = pendingEq;
@@ -35,8 +41,7 @@ async function takePendingEq(tabId) {
   if (!p) return null;
   const live = Date.now() - p.at < PENDING_EQ_MS;
   if (live && p.tabId !== tabId) return null;
-  pendingEq = null;
-  await chrome.storage.session.remove('pendingEq');
+  await clearPendingEq();
   return live ? p : null;
 }
 
@@ -326,6 +331,7 @@ async function startAudioCapture(tabId) {
         reject(new Error(response.error));
       } else {
         capturedTabId = tabId;
+        await clearPendingEq();
         await chrome.storage.local.set({ capturedTabId: tabId, isAudioCapturing: true });
         broadcastAudioState(true, tabId);
         resolve(response);
@@ -337,6 +343,7 @@ async function startAudioCapture(tabId) {
 async function stopAudioCapture() {
   const oldTabId = capturedTabId;
   capturedTabId = null;
+  await clearPendingEq();
   await chrome.storage.local.set({ capturedTabId: null, isAudioCapturing: false });
 
   if (!(await isOffscreenOpen())) {
@@ -510,11 +517,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: false, error: 'No active media tab found. Open Tidal or any music/video tab.' });
             return;
           }
-          const docked = /[?&](panel=1|undocked=true)/.test(sender.url || '');
           try {
-            const result = await startAudioCapture(targetTab.id);
+            const result = await startAudioCapture(targetTab.id); // first, while the click is fresh
             sendResponse({ success: true, result, capturedTabId, tabTitle: targetTab.title || null });
           } catch (err) {
+            // The icon completes a refused switch-on only while it opens the panel (Stay open on); otherwise it
+            // opens the popup, and the popup's own advice applies.
+            const docked = /[?&](panel=1|undocked=true)/.test(sender.url || '') && !!(await chrome.storage.local.get('stayOpen')).stayOpen;
             if (docked && /invoked|activeTab/i.test(err?.message || '')) {
               pendingEq = { tabId: targetTab.id, at: Date.now() };
               await chrome.storage.session.set({ pendingEq }).catch(() => {});
@@ -535,8 +544,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'STOP_CAPTURE': {
-          pendingEq = null;
-          await chrome.storage.session.remove('pendingEq').catch(() => {});
           const result = await stopAudioCapture();
           sendResponse({ success: true, result });
           break;

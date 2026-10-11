@@ -766,8 +766,16 @@ try {
     const panelEq = await context.newPage();
     await panelEq.goto(`chrome-extension://${EXT_ID}/popup.html?panel=1`);
     await sleep(800);
+    // Stay open off: the icon opens the popup, so nothing is queued and the popup's advice is given.
+    const refusedOff = await sendFrom(panelEq, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
+    const pendingWhenOff = await sw.evaluate(() => pendingEq);
+    await sw.evaluate(() => chrome.storage.local.set({ stayOpen: true })); // the flag only; the icon behaviour is W-STAY-OPEN's
     const refused = await sendFrom(panelEq, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
     const pendingAfterRefusal = await sw.evaluate(() => pendingEq);
+    // A stop by any route (here the worker's own stop, as Alt+E uses) settles the request: a later click starts nothing.
+    await sw.evaluate(() => stopAudioCapture());
+    const clearedByStop = await sw.evaluate(() => pendingEq === null);
+    const refusedAgain = await sendFrom(panelEq, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
     await sw.evaluate(() => {
       try { chrome.tabCapture.getMediaStreamId = self.__realGetMediaStreamId; } catch (_) {}
       if (chrome.tabCapture.getMediaStreamId !== self.__realGetMediaStreamId) Object.defineProperty(chrome.tabCapture, 'getMediaStreamId', { value: self.__realGetMediaStreamId, configurable: true, writable: true });
@@ -780,15 +788,17 @@ try {
     await sleep(600);
     const eqState = await sendFrom(popup, { type: 'GET_STATE' });
     const eqCaptured = await sw.evaluate(() => capturedTabId);
+    await sw.evaluate(() => chrome.storage.local.set({ stayOpen: false }));
     await panelEq.close();
     // Outside a real click Chrome refuses to open the panel, so the handler fell back to the Stay-open window: close it.
     await sleep(800);
     for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
     await sleep(300);
-    record('W-EQ-AFTER-ICON', 'EQ refused from the side panel for lack of Chrome\'s permission: the message says to click the icon; a click on another tab does nothing; the click on that tab turns the EQ on',
-      stubbed && refused?.success === false && /Click the icon now/.test(refused?.error || '') && pendingAfterRefusal?.tabId === mediaTabId
+    record('W-EQ-AFTER-ICON', 'EQ refused from the side panel for lack of Chrome\'s permission: with Stay open on, the message says to click the icon, a stop by any route settles it, a click on another tab does nothing, and the click on that tab turns the EQ on; with Stay open off, the popup\'s advice and nothing queued',
+      stubbed && refusedOff?.success === false && /then turn Audio EQ on/.test(refusedOff?.error || '') && pendingWhenOff === null
+        && refused?.success === false && /Click the icon now/.test(refused?.error || '') && pendingAfterRefusal?.tabId === mediaTabId && clearedByStop && refusedAgain?.success === false
         && clickOther === false && stillPending && clickRight === true && eqState.isCapturing === true && eqCaptured === mediaTabId ? 'PASS' : 'FAIL',
-      { stubbed, refused, pendingAfterRefusal, clickOther, stillPending, clickRight, isCapturing: eqState.isCapturing, eqCaptured, mediaTabId });
+      { stubbed, refusedOff: refusedOff?.error, pendingWhenOff, refused, pendingAfterRefusal, clearedByStop, clickOther, stillPending, clickRight, isCapturing: eqState.isCapturing, eqCaptured, mediaTabId });
 
     // ---- W-TAB-CLOSE-CLEANUP ----
     await media.close();
