@@ -25,17 +25,19 @@
        Flags (1.5.3): ?narrow=1 drops the seek bar and the time labels, as a narrow Tidal page does; ?media=closed puts the
        element in a closed shadow root, ?media=detached keeps it out of the document; ?session=1 registers media-session
        handlers (seekto, nexttrack) and reports the position, as players do for the system's media controls; ?nonext=1
-       removes the Next button and stops the loop. -->
+       removes the Next button, ?nextdisabled=1 disables it (end of the queue), both stop the loop; ?tracks=1 makes
+       Next start a new track (title "Synthetic Tone 2", 3, ... from 0:00). -->
   <div id="player-host"></div>
   <script>
     window.clicks = { decoy: 0, footerPlay: 0, prev: 0, next: 0, fav: 0, seek: 0, sessionSeek: 0, sessionNext: 0 };
     const flags = new URLSearchParams(location.search);
     const a = document.createElement('audio');
-    a.id = 'a'; a.src = '/tone.wav'; a.loop = flags.get('nonext') !== '1';
+    a.id = 'a'; a.src = '/tone.wav'; a.loop = flags.get('nonext') !== '1' && flags.get('nextdisabled') !== '1';
     if (flags.get('media') !== 'detached') document.getElementById('player-host').attachShadow({ mode: flags.get('media') === 'closed' ? 'closed' : 'open' }).appendChild(a);
     window.audioEl = a; // for the harness only
     if (flags.get('narrow') === '1') for (const id of ['cur', 'bar', 'dur']) document.getElementById(id).remove();
     if (flags.get('nonext') === '1') document.getElementById('next').remove();
+    if (flags.get('nextdisabled') === '1') { document.getElementById('next').disabled = true; document.getElementById('next').setAttribute('aria-disabled', 'true'); }
     if (flags.get('session') === '1' && navigator.mediaSession) {
       navigator.mediaSession.setActionHandler('seekto', (d) => { window.clicks.sessionSeek++; a.currentTime = d.seekTime; });
       navigator.mediaSession.setActionHandler('nexttrack', () => { window.clicks.sessionNext++; });
@@ -56,7 +58,10 @@
     };
     document.getElementById('prev').onclick = () => { window.clicks.prev++; };
     const nextBtn = document.getElementById('next');
-    if (nextBtn) nextBtn.onclick = () => { window.clicks.next++; };
+    if (nextBtn) nextBtn.onclick = () => {
+      window.clicks.next++;
+      if (flags.get('tracks') === '1') { document.querySelector('[data-test="footer-track-title"]').textContent = `Synthetic Tone ${window.clicks.next + 1}`; a.currentTime = 0; }
+    };
     const fav = document.getElementById('fav');
     fav.onclick = () => { window.clicks.fav++; fav.setAttribute('aria-checked', String(fav.getAttribute('aria-checked') !== 'true')); };
   </script>

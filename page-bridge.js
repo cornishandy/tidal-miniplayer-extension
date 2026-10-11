@@ -4,11 +4,12 @@
 // media-session handlers and position) and the media element that last started playing. Every call is passed
 // through unchanged. content.js asks through DOM events; only strings cross between the two worlds.
 (() => {
-  if (!location.hostname.includes('tidal.com') || window.__tmePageBridge) return;
+  const host = location.hostname;
+  if (!(host === 'tidal.com' || host.endsWith('.tidal.com')) || window.__tmePageBridge) return;
   Object.defineProperty(window, '__tmePageBridge', { value: true });
 
   const handlers = Object.create(null); // action -> Tidal's handler (seekto, nexttrack, ...)
-  let position = null;                  // the last position state Tidal reported
+  let position = null;                  // the last position state Tidal reported, moved on at each play/pause
   const played = [];                    // the media elements that last called play(), newest last (at most 4)
   const session = navigator.mediaSession;
 
@@ -24,12 +25,26 @@
     if (session && typeof session.setPositionState === 'function') {
       const setPositionState = session.setPositionState;
       session.setPositionState = function (state) {
-        const result = setPositionState.call(this, state);
-        position = state && state.duration > 0 && isFinite(state.duration)
-          ? { duration: state.duration, position: state.position || 0, rate: state.playbackRate || 1, at: performance.now() }
-          : null;
+        const result = setPositionState.call(this, state); // throws exactly as before on a bad state
+        try { position = toPosition(state); } catch (_) { position = null; }
         return result;
       };
+    }
+    // A pause or resume moves the reported position on to that moment, so paused time is not counted.
+    const playbackState = typeof MediaSession !== 'undefined' && Object.getOwnPropertyDescriptor(MediaSession.prototype, 'playbackState');
+    if (session && playbackState && playbackState.get && playbackState.set) {
+      Object.defineProperty(session, 'playbackState', {
+        configurable: true,
+        enumerable: true,
+        get() { return playbackState.get.call(this); },
+        set(value) {
+          const before = playbackState.get.call(this);
+          playbackState.set.call(this, value);
+          try {
+            if (position && playbackState.get.call(this) !== before) position = { ...position, position: positionAt(before), at: performance.now() };
+          } catch (_) { /* keep the last report */ }
+        }
+      });
     }
     const play = HTMLMediaElement.prototype.play;
     HTMLMediaElement.prototype.play = function () {
@@ -41,6 +56,20 @@
     };
   } catch (_) { /* leave the page exactly as it was */ }
 
+  function toPosition(state) {
+    if (!state) return null;
+    const duration = Number(state.duration), at = Number(state.position), rate = Number(state.playbackRate);
+    if (!(duration > 0) || !isFinite(duration)) return null;
+    return { duration, position: isFinite(at) && at >= 0 ? at : 0, rate: isFinite(rate) && rate > 0 ? rate : 1, at: performance.now() };
+  }
+
+  // Where the reported position has got to now, if playback was in `state` since the report.
+  function positionAt(state) {
+    const moving = state !== 'paused';
+    const t = position.position + (moving ? (performance.now() - position.at) / 1000 * position.rate : 0);
+    return Math.max(0, Math.min(position.duration, t));
+  }
+
   // The element that is playing now, else the one that played last; only one with a known length.
   function media() {
     const known = played.filter((m) => isFinite(m.duration) && m.duration > 0).reverse(); // newest first
@@ -50,11 +79,7 @@
   function state() {
     const m = media();
     if (m) return { currentTime: m.currentTime, duration: m.duration, paused: m.paused, from: 'element' };
-    if (position) {
-      const moving = session.playbackState !== 'paused';
-      const t = position.position + (moving ? (performance.now() - position.at) / 1000 * position.rate : 0);
-      return { currentTime: Math.max(0, Math.min(position.duration, t)), duration: position.duration, from: 'session' };
-    }
+    if (position) return { currentTime: positionAt(session.playbackState), duration: position.duration, from: 'session' };
     return null;
   }
 

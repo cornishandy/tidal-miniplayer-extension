@@ -206,15 +206,18 @@
     setTimeout(getTrackInfo, 250);
   }
 
-  // `orEnd` (a forward jump that reaches the end): with no Next button and no Tidal handler, play out to the end.
+  // `orEnd` (a forward jump that reaches the end): with no usable Next, play the track out to its end.
+  // A disabled Next is the end of the queue: then Tidal's next-track handler is not tried either.
   async function nextTrack(orEnd = false) {
     const btn = getNextButton();
+    const disabled = !!btn && (btn.disabled || btn.getAttribute('aria-disabled') === 'true');
     let route = false;
-    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') { btn.click(); route = 'button'; } // disabled: end of the queue
-    else if (isTidal) route = (bridge('next') || {}).next || false;
+    if (btn && !disabled) { btn.click(); route = 'button'; }
+    else if (!btn && isTidal) route = (bridge('next') || {}).next || false; // a narrow page without the button
     if (!route && orEnd) {
       const info = getTrackInfo();
-      if (info.duration > 0 && (await seekAudio(info.duration - 0.25)).seeked) route = 'end';
+      // Playing: land just before the end and let it play out. Paused: the very end, so the track ends now.
+      if (info.duration > 0 && (await seekAudio(info.isPlaying ? info.duration - 0.25 : info.duration)).seeked) route = 'end';
     }
     setTimeout(getTrackInfo, 250);
     return route;
@@ -224,6 +227,7 @@
   // Only strings cross between the worlds; only the reply carrying this request's id counts. null when the
   // helper is not there (other sites, or a Tidal tab opened before 1.5.3).
   let bridgeSeq = 0;
+  let transportSeq = 0; // counts the commands that move playback, so a pending seek check never acts on a newer one
   function bridge(op, args = {}) {
     const id = `${Date.now()}-${++bridgeSeq}`;
     let reply = null;
@@ -256,6 +260,8 @@
   // (Tidal keeps its player element out of reach). On Tidal, when a narrow page hides the bar, or the
   // bar did not move the playback, ask Tidal's page through page-bridge.js. The target is absolute, so
   // a second route never jumps twice. Reports which route worked, or false.
+  // While the check after a seek-bar jump waits, any newer command or a change of track ends it untouched.
+  // `unverified`: the bar was driven but the move could not be confirmed (the screen then shows the real time).
   async function seekAudio(targetSecs) {
     if (isNaN(targetSecs)) return { seeked: false };
     const media = document.querySelector('audio, video');
@@ -263,14 +269,23 @@
       media.currentTime = Math.max(0, Math.min(media.duration, targetSecs));
       return { seeked: 'media' };
     }
+    const seq = transportSeq;
+    const title = isTidal ? getTrackInfo().title : '';
     const viaBar = seekWithBar(targetSecs);
     if (!isTidal) return { seeked: viaBar };
     if (viaBar) {
-      await new Promise((r) => setTimeout(r, 400));
-      if (Math.abs(getTrackInfo().currentTime - targetSecs) < 3) return { seeked: viaBar };
+      for (let i = 0; i < 6; i++) { // up to 1.2 s for Tidal to show the new position
+        await new Promise((r) => setTimeout(r, 200));
+        if (seq !== transportSeq) return { seeked: viaBar, unverified: true };
+        const now = getTrackInfo();
+        if (now.title !== title) return { seeked: viaBar, unverified: true };
+        if (Math.abs(now.currentTime - targetSecs) < 3) return { seeked: viaBar };
+      }
     }
     const viaPage = bridge('seek', { time: targetSecs });
-    return { seeked: (viaPage && viaPage.seeked) || viaBar, bridge: viaPage ? (viaPage.seeked ? 'used' : 'empty') : false };
+    const helper = viaPage ? (viaPage.seeked ? 'used' : 'empty') : false;
+    if (viaPage && viaPage.seeked) return { seeked: viaPage.seeked, bridge: helper };
+    return viaBar ? { seeked: viaBar, unverified: true, bridge: helper } : { seeked: false, bridge: helper };
   }
 
   function seekWithBar(targetSecs) {
@@ -317,6 +332,7 @@
 
   // 4. Message dispatcher
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (['TOGGLE_PLAY_PAUSE', 'PREV_TRACK', 'NEXT_TRACK', 'SEEK_AUDIO'].includes(message.type)) transportSeq++;
     switch (message.type) {
       case 'GET_TRACK_INFO':
         sendResponse(getTrackInfo());

@@ -347,7 +347,13 @@ function handlePlayPause() { playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
 function handlePrev() { playerCommand({ type: 'PREV_TRACK' }, 300); }
 function handleNext() { playerCommand({ type: 'NEXT_TRACK' }, 300); }
 
+// After a jump into the next track, the screen still shows the old one for up to a second; jumps wait for the
+// new track (at most 3 s), so a second click never skips it or seeks it to the old track's time.
+let leavingTrack = null;
+
 function handleJump(deltaSecs) {
+  if (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until) return;
+  leavingTrack = null;
   if (!currentTrackInfo || !currentTrackInfo.duration) {
     showHint("The track length isn't known on this page, so the jump can't be placed.");
     return;
@@ -356,9 +362,12 @@ function handleJump(deltaSecs) {
   const cur = currentTrackInfo.currentTime || 0;
   if (deltaSecs > 0 && cur + deltaSecs >= dur - 0.5) {
     // The jump reaches the end: finish this track and go to the next one, as if it had played out.
+    leavingTrack = { title: currentTrackInfo.title, until: Date.now() + 3000 };
     chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'NEXT_TRACK', orEnd: true } }, (res) => {
-      if (res && res.next === false) showHint("Couldn't go to the next track on this page (no Next button found).");
-      if (res && res.title) updatePlayerUI(res);
+      if (res && res.next === false) {
+        leavingTrack = null;
+        showHint("Couldn't go to the next track or to the end of this one on this page.");
+      }
       setTimeout(refreshTrackInfo, 300);
     });
     return;
@@ -371,8 +380,10 @@ function handleJump(deltaSecs) {
         : "Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
       return;
     }
-    currentTrackInfo.currentTime = newTime;
-    updatePlayerUI(currentTrackInfo);
+    if (!res || !res.unverified) { // unverified: show the real time from the next reading instead of the target
+      currentTrackInfo.currentTime = newTime;
+      updatePlayerUI(currentTrackInfo);
+    }
     setTimeout(refreshTrackInfo, 250);
   });
 }

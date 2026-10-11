@@ -31,7 +31,7 @@ const context = await chromium.launchPersistentContext(profile, {
   headless: true,
   ignoreDefaultArgs: ['--disable-extensions', '--mute-audio'],
   args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, `--allowlisted-extension-id=${EXT_ID}`,
-    '--mute-audio', '--disable-audio-output', '--host-resolver-rules=MAP * ~NOTFOUND', '--no-first-run', '--no-default-browser-check'],
+    '--mute-audio', '--disable-audio-output', '--host-resolver-rules=MAP * ~NOTFOUND', '--no-proxy-server', '--no-first-run', '--no-default-browser-check'],
   viewport: { width, height },
   deviceScaleFactor: 2
 });

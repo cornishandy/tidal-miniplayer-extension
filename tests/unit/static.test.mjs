@@ -70,7 +70,7 @@ test('the page-world helper (1.5.3) acts on Tidal only, reads no login, storage 
   assert.deepEqual(entry.matches, ['https://tidal.com/*', 'https://*.tidal.com/*'], 'Tidal pages only');
   assert.equal(entry.all_frames, undefined, 'top frame only');
   assert.match(background, /if \(isTidalUrl\(targetTab\.url\)\)/, 'the worker re-injects it into Tidal tabs only');
-  assert.match(src, /if \(!location\.hostname\.includes\('tidal\.com'\)/, 'the helper must leave every other site alone');
+  assert.match(src, /if \(!\(host === 'tidal\.com' \|\| host\.endsWith\('\.tidal\.com'\)\)/, 'the helper must leave every other site alone (exact host)');
   assert.doesNotMatch(src, /localStorage|sessionStorage|indexedDB|document\.cookie|[Tt]oken|[Aa]uthori[sz]ation|WebSocket|postMessage/);
 });
 
@@ -157,3 +157,12 @@ function FACTORY_PRESET_VALUES(background) {
   assert.ok(m, 'FACTORY_PRESETS not found');
   return new Function(`return ${m[1]}`)();
 }
+
+test('every test browser stays isolated and silent: host blocking, no proxy and no audio output outside comments', () => {
+  const code = (f) => readFileSync(join(root, f), 'utf8').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  for (const f of ['tests/browser/run.mjs', 'tests/browser/glitch-check.mjs', 'tools/panelshot.mjs']) {
+    const src = code(f);
+    for (const flag of ['--host-resolver-rules=MAP', '--no-proxy-server', '--disable-audio-output', '--mute-audio']) assert.ok(src.includes(flag), `${f} lacks ${flag}`);
+  }
+  assert.ok(code('tools/diagramshot.mjs').includes('--no-proxy-server'));
+});
