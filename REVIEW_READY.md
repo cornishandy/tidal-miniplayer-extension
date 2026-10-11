@@ -26,7 +26,7 @@ Later commits on `main` change docs only. The runtime files at `main`'s tip are 
 
 **The sound is untouched**: on the default settings every sample is the same as in 1.5.1 (unit proofs against the 1.5.1 code; W-DYN-BASELINE at 96 kHz). You said yes to installing it on 2026-10-10.
 
-- **No more dropouts when the Mac is briefly busy.** At 96 kHz Chrome had been giving the EQ 2.7 ms per audio hand-over; whenever the audio thread was held up for more than about 4 ms, your DAC got a moment of silence: a click. The EQ now hands over 21 ms at a time. Measured with deliberate stalls about 11 times a second: 1.5.1 dropped out on almost every stall from 6 ms (12 to 23 a second), 1.5.2 not once up to 24 ms ([docs/evidence/stall-series-2026-10-10.md](docs/evidence/stall-series-2026-10-10.md)). Cost: about 30 ms more delay, noticeable only as lip sync on video.
+- **No more dropouts when the Mac is briefly busy.** At 96 kHz Chrome had been giving the EQ 2.7 ms per audio hand-over; whenever the audio thread was held up for more than about 4 ms, your DAC got a moment of silence: a click. The EQ now hands over 21 ms at a time. Measured with deliberate stalls about 11 times a second: 1.5.1 dropped out on almost every stall from 6 ms (12 to 23 a second), 1.5.2 not once up to 24 ms ([docs/evidence/stall-series-2026-10-10.md](docs/evidence/stall-series-2026-10-10.md)). Cost: up to about 50 ms more delay (corrected 2026-10-11 from "about 30 ms"), noticeable only as lip sync on video.
 - **The pitch stage rests when Pitch is at 0.** It used to keep working ten times a second even when unused, which made the stalls likelier. Switching Pitch on now plays about 0.15 s unshifted first. A jump across the whole range at once can still click for a moment (it did since 1.4.0); the fix for that changes how Pitch glides, so it waits for your OK (K-04).
 - **A freeze after six hours is gone.** A counter in the look-ahead limiter's code overflowed after 6.2 hours of continuous playback at 96 kHz and stopped all sound.
 - **Tests are silent.** The test browser now has no audio output at all; before, you could hear its test tones on your DAC (sorry).
@@ -83,7 +83,7 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Remaining known issues
 
-About 30 ms more delay since 1.5.2 (lip sync on video). A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
+Up to about 50 ms more delay since 1.5.2, about 35 to 60 ms in all by Chrome's figures (lip sync on video; corrected 2026-10-11 from "about 30 ms"). A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. Pitch adds about 0.14 s of delay only while a shift is set. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
 
 ## Docs
 
