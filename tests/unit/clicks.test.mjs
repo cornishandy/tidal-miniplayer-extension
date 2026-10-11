@@ -9,8 +9,8 @@ import vm from 'node:vm';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (f) => readFileSync(join(root, f), 'utf8');
-// The same file as it was in 1.5.1 (tag-free: the last commit before the fix that touched it on main).
-const before = (f) => execFileSync('git', ['show', `dbc1dd7:${f}`], { cwd: root, encoding: 'utf8' });
+// The same file as it was in 1.5.1: febabc2 is the 1.5.1 merge on main (Merge #18), so it stays in every clone.
+const before = (f) => execFileSync('git', ['show', `febabc2:${f}`], { cwd: root, encoding: 'utf8' });
 
 // Load worklet source in a small shim: no browser, no audio device.
 function load(source, fs = 96000) {
