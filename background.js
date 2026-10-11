@@ -12,18 +12,47 @@ let capturedTabId = null;
 
 // "Stay open": when on, the toolbar icon opens the screen in Chrome's side panel (docked beside the
 // page, it stays while you click anything) instead of the auto-closing popup. Chrome without a side
-// panel gets the standalone window instead.
+// panel gets the standalone window instead. The icon click opens the panel through onActionClicked
+// rather than Chrome's own toggle (1.5.4), so a click never closes the panel and can finish an EQ
+// switch-on that Chrome refused (see pendingEq).
 async function applyStayOpen(on) {
   await chrome.action.setPopup({ popup: on ? '' : 'popup.html' });
   if (chrome.sidePanel) {
-    try { await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: !!on }); } catch (e) {}
+    try { await chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: false }); } catch (e) {}
   }
 }
 
-chrome.action.onClicked.addListener(() => {
-  // Only fires while no popup is set (Stay open on). With a side panel, Chrome opens it itself.
-  if (!chrome.sidePanel) openFallbackWindow().catch(() => {});
-});
+// Chrome lets the EQ attach to a tab only after the extension was invoked there (its icon or Alt+E); a reload
+// of the tab or a Chrome restart takes that back. An EQ switch-on refused for that reason is remembered for
+// 10 minutes, and the next icon click on the same tab, which is the permission, completes it.
+let pendingEq = null; // { tabId, at }
+const PENDING_EQ_MS = 10 * 60 * 1000;
+
+// The pending switch-on for this tab, taken (cleared); a click on another tab leaves it waiting.
+async function takePendingEq(tabId) {
+  let p = pendingEq;
+  if (!p) p = (await chrome.storage.session.get('pendingEq')).pendingEq || null;
+  if (!p) return null;
+  const live = Date.now() - p.at < PENDING_EQ_MS;
+  if (live && p.tabId !== tabId) return null;
+  pendingEq = null;
+  await chrome.storage.session.remove('pendingEq');
+  return live ? p : null;
+}
+
+function onActionClicked(tab) {
+  // Only fires while no popup is set (Stay open on). Opening the panel must happen inside the click.
+  if (chrome.sidePanel && chrome.sidePanel.open && tab && tab.windowId !== undefined) {
+    chrome.sidePanel.open({ windowId: tab.windowId }).catch(() => openFallbackWindow().catch(() => {}));
+  } else {
+    openFallbackWindow().catch(() => {});
+  }
+  if (!tab || tab.id === undefined) return Promise.resolve(false);
+  return takePendingEq(tab.id)
+    .then((p) => (p && capturedTabId !== tab.id ? startAudioCapture(tab.id).then(() => true) : false))
+    .catch(() => false);
+}
+chrome.action.onClicked.addListener(onActionClicked);
 
 async function openPanelOrWindow() {
   if (chrome.sidePanel) {
@@ -247,11 +276,14 @@ async function getActualCaptureStatus() {
 }
 
 // Translate Chrome's tabCapture errors into something actionable.
-function explainCaptureError(err, tab) {
+// `docked`: asked from the side panel or the Stay-open window, where an icon click completes the switch-on.
+function explainCaptureError(err, tab, docked = false) {
   const msg = err?.message || String(err);
   const name = tab?.title ? `"${tab.title}"` : 'the tab that is playing';
   if (/invoked|activeTab/i.test(msg)) {
-    return `Chrome only lets the EQ attach to a tab after you open this extension on that tab. Switch to ${name}, click the extension icon there, then turn Audio EQ on.`;
+    return docked
+      ? `Chrome wants one click on this extension's icon in the toolbar while ${name} is showing (it asks again after Chrome restarts or that tab reloads). Click the icon now and the EQ turns on by itself.`
+      : `Chrome only lets the EQ attach to a tab after you open this extension on that tab. Switch to ${name}, click the extension icon there, then turn Audio EQ on.`;
   }
   if (/active stream/i.test(msg)) {
     return `${name} is already being captured, possibly by another copy of this extension or another audio extension. Turn that one off first.`;
@@ -478,11 +510,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             sendResponse({ success: false, error: 'No active media tab found. Open Tidal or any music/video tab.' });
             return;
           }
+          const docked = /[?&](panel=1|undocked=true)/.test(sender.url || '');
           try {
             const result = await startAudioCapture(targetTab.id);
             sendResponse({ success: true, result, capturedTabId, tabTitle: targetTab.title || null });
           } catch (err) {
-            sendResponse({ success: false, error: explainCaptureError(err, targetTab) });
+            if (docked && /invoked|activeTab/i.test(err?.message || '')) {
+              pendingEq = { tabId: targetTab.id, at: Date.now() };
+              await chrome.storage.session.set({ pendingEq }).catch(() => {});
+            }
+            sendResponse({ success: false, error: explainCaptureError(err, targetTab, docked) });
           }
           break;
         }
@@ -498,6 +535,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'STOP_CAPTURE': {
+          pendingEq = null;
+          await chrome.storage.session.remove('pendingEq').catch(() => {});
           const result = await stopAudioCapture();
           sendResponse({ success: true, result });
           break;

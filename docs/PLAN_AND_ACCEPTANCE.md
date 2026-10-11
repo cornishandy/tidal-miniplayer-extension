@@ -23,6 +23,7 @@ Current review build: **v1.5.1**, runtime commit `f0a5adc`, fingerprint `c6004b1
 | W-TRANSPORT-SCOPE | Play/Prev/Next hit footer, never playlist cards | installed-browser (decoy) | PASS | PASS |
 | W-HEART | Heart clicks the footer heart and shows its state | installed-browser | — | PASS |
 | W-JUMP | +30 s / −15 s jumps through the footer seek bar (media element out of reach, as on Tidal) | installed-browser | — (was W-SKIP-25) | PASS (+29.2 / −14.0 while playing) |
+| W-EQ-AFTER-ICON | 1.5.4: an EQ switch-on refused in the side panel for lack of Chrome's permission names the icon click, and that click on the same tab turns the EQ on (a click on another tab does nothing) | installed-browser (refusal simulated) | — | PASS |
 | W-JUMP-NARROW | 1.5.3: with the seek bar and time labels gone (a narrow Tidal page) and the player element out of reach, +30 s / −15 s go through Tidal's own seek handler via the page helper, and the time still shows | installed-browser (fixture served as https://tidal.com from this machine) | — | PASS (+30.3 / −12.6; 2 handler seeks, 0 seek-bar events) |
 | W-JUMP-NARROW-ELEMENT | 1.5.3: the same with no media-session handler and the player in a closed shadow root: +30 s moves the element that played | installed-browser | — | PASS (+30.3) |
 | W-JUMP-END | 1.5.3: +30 s with less than 30 s left presses Next once, with no seek; a quick second click neither skips the new track nor moves it (J-02) | installed-browser | — | PASS |
