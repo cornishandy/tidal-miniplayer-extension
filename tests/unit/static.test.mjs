@@ -46,7 +46,7 @@ test('fallback window is the working undocked popup, not the broken miniplayer p
 });
 
 test('no network code: the shipped scripts never contact Tidal or any server', () => {
-  for (const f of ['background.js', 'content.js', 'popup.js', 'offscreen.js', 'physics-view.js', 'pitch-shifter.worklet.js', 'dynamics.worklet.js']) {
+  for (const f of ['background.js', 'content.js', 'page-bridge.js', 'popup.js', 'offscreen.js', 'physics-view.js', 'pitch-shifter.worklet.js', 'dynamics.worklet.js']) {
     const src = readFileSync(join(root, f), 'utf8');
     assert.doesNotMatch(src, /\bfetch\s*\(|XMLHttpRequest|tidal\.com\/v1|api\.tidal\.com/, `${f} contains network code`);
   }
@@ -58,8 +58,20 @@ test('retired surfaces stay out: no Playlists, Lab, header icons, floating butto
   assert.doesNotMatch(popup, /tab-btn-playlists|tab-btn-lab|lab-btn-create|btn-size-toggle|btn-micro-toggle|btn-always-on-top|btn-undock|toggle-floating-btn|btn-open-router/);
   assert.doesNotMatch(content, /FETCH_USER_PLAYLISTS|CREATE_PLAYLIST_WITH_TRACKS|getTidalSession|injectFloatingButton|documentPictureInPicture/);
   for (const f of ['tidal-bridge.js', 'miniplayer.html', 'miniplayer.js', 'router-visualizer.js']) assert.ok(!existsSync(join(root, f)), `${f} should be gone`);
-  assert.deepEqual(manifest.content_scripts.map((c) => c.js).flat(), ['content.js']);
+  assert.deepEqual(manifest.content_scripts.map((c) => c.js).flat(), ['content.js', 'page-bridge.js']);
   assert.equal(manifest.web_accessible_resources, undefined, 'nothing needs to be web-accessible any more');
+});
+
+test('the page-world helper (1.5.3) acts on Tidal only, reads no login, storage or cookies, and runs before the page', () => {
+  const src = readFileSync(join(root, 'page-bridge.js'), 'utf8');
+  const entry = manifest.content_scripts.find((c) => c.js.includes('page-bridge.js'));
+  assert.equal(entry.world, 'MAIN');
+  assert.equal(entry.run_at, 'document_start');
+  assert.deepEqual(entry.matches, ['https://tidal.com/*', 'https://*.tidal.com/*'], 'Tidal pages only');
+  assert.equal(entry.all_frames, undefined, 'top frame only');
+  assert.match(background, /if \(isTidalUrl\(targetTab\.url\)\)/, 'the worker re-injects it into Tidal tabs only');
+  assert.match(src, /if \(!\(host === 'tidal\.com' \|\| host\.endsWith\('\.tidal\.com'\)\)/, 'the helper must leave every other site alone (exact host)');
+  assert.doesNotMatch(src, /localStorage|sessionStorage|indexedDB|document\.cookie|[Tt]oken|[Aa]uthori[sz]ation|WebSocket|postMessage/);
 });
 
 test('no emoji in the popup markup (icons are drawn)', () => {
@@ -145,3 +157,12 @@ function FACTORY_PRESET_VALUES(background) {
   assert.ok(m, 'FACTORY_PRESETS not found');
   return new Function(`return ${m[1]}`)();
 }
+
+test('every test browser stays isolated and silent: host blocking, no proxy and no audio output outside comments', () => {
+  const code = (f) => readFileSync(join(root, f), 'utf8').split('\n').map((l) => l.replace(/\/\/.*$/, '')).join('\n');
+  for (const f of ['tests/browser/run.mjs', 'tests/browser/glitch-check.mjs', 'tools/panelshot.mjs']) {
+    const src = code(f);
+    for (const flag of ['--host-resolver-rules=MAP', '--no-proxy-server', '--disable-audio-output', '--mute-audio']) assert.ok(src.includes(flag), `${f} lacks ${flag}`);
+  }
+  assert.ok(code('tools/diagramshot.mjs').includes('--no-proxy-server'));
+});

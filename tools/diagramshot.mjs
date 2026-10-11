@@ -16,7 +16,7 @@ const [name, out] = argv.filter((a, i) => !a.startsWith('--') && !(i > 0 && argv
 if (!name || !out) { console.error('usage: node tools/diagramshot.mjs <name.html> <out.png> [--variant x] [--width px]'); process.exit(1); }
 const variant = opt('--variant', '');
 const width = +opt('--width', 1200);
-const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND'] });
+const browser = await chromium.launch({ executablePath: CHROME, headless: true, args: ['--host-resolver-rules=MAP * ~NOTFOUND', '--no-proxy-server'] });
 const ctx = await browser.newContext({ viewport: { width, height: 900 }, deviceScaleFactor: 2 });
 const tab = await ctx.newPage();
 await tab.goto(pathToFileURL(join(root, 'docs/diagrams', name)).href + (variant ? `?variant=${variant}` : ''));

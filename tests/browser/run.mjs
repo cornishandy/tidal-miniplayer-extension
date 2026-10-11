@@ -3,14 +3,18 @@
 // Safety properties (do not weaken):
 //   * Fresh temporary Chrome profile; never touches the everyday Chrome profile.
 //   * All hostnames except the local fixture server resolve to NOTFOUND, so nothing
-//     (including Tidal) can be contacted. The fake Tidal host maps to 127.0.0.1.
-//   * --mute-audio: the synthetic tone never reaches speakers/headphones.
+//     (including Tidal) can be contacted. The fake Tidal page is served as https://tidal.com:<port> from this
+//     machine (tidal.com maps to 127.0.0.1; a throwaway self-signed certificate made per run, accepted by this
+//     test browser only), so the Tidal-only page-world script of 1.5.3 runs on it exactly as shipped.
+//   * --mute-audio plus --disable-audio-output: the synthetic tone never reaches speakers/headphones.
 //   * Only synthetic fixtures (generated sine tones, fake Tidal DOM) are used.
 //
 // Usage: node browser/run.mjs <unpackedDir> [--label name]
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -51,7 +55,7 @@ function toneWav({ seconds = 60, rate = 48000, freqs = [60, 1000, 8000], amp = 0
 const WAV = toneWav();
 
 const hanging = [];
-const server = createServer((req, res) => {
+const serve = (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname === '/tone.wav') {
     // Range support is required for the media element to be seekable.
@@ -77,11 +81,18 @@ const server = createServer((req, res) => {
     return;
   }
   res.end(readFileSync(p));
-});
+};
+const server = createServer(serve);
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const PORT = server.address().port;
+const certDir = mkdtempSync(join(tmpdir(), 'tme-cert-'));
+execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=tidal.com',
+  '-keyout', join(certDir, 'key.pem'), '-out', join(certDir, 'cert.pem')], { stdio: 'ignore' });
+const tlsServer = createHttpsServer({ key: readFileSync(join(certDir, 'key.pem')), cert: readFileSync(join(certDir, 'cert.pem')) }, serve);
+await new Promise((r) => tlsServer.listen(0, '127.0.0.1', r));
+const TLS_PORT = tlsServer.address().port;
 const MEDIA_URL = `http://127.0.0.1:${PORT}/media.html`;
-const TIDAL_URL = `http://fake-tidal.com:${PORT}/fake-tidal.html`;
+const TIDAL_URL = `https://tidal.com:${TLS_PORT}/fake-tidal.html`;
 
 // ---------- browser ----------
 const profile = mkdtempSync(join(tmpdir(), 'tme-profile-'));
@@ -96,7 +107,9 @@ const context = await chromium.launchPersistentContext(profile, {
     `--allowlisted-extension-id=${EXT_ID}`,
     '--mute-audio', '--disable-audio-output', // --mute-audio alone left the offscreen engine audible on the user's DAC (2026-10-10); no output device at all now
     '--autoplay-policy=no-user-gesture-required',
-    `--host-resolver-rules=MAP fake-tidal.com 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`,
+    `--host-resolver-rules=MAP tidal.com 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`,
+    '--ignore-certificate-errors', // the throwaway certificate of the local tidal.com stand-in; every other host is NOTFOUND
+    '--no-proxy-server', // a system proxy would resolve tidal.com itself and reach the real site
     '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,MediaRouter',
     `--remote-debugging-port=${DEBUG_PORT}`,
     '--no-first-run',
@@ -109,6 +122,8 @@ const results = [];
 // Every request made by pages and extension documents during the run (privacy check at the end).
 const allRequests = [];
 const watchRequests = (page) => page.on('request', (r) => allRequests.push(r.url()));
+const localOrigins = () => [`http://127.0.0.1:${PORT}/`, `https://tidal.com:${TLS_PORT}/`];
+const remoteRequests = () => allRequests.filter((u) => !/^(chrome-extension:|data:|blob:|about:)/.test(u) && !localOrigins().some((o) => u.startsWith(o)));
 
 // Screenshot at the document's own size (the popup is sized by its content).
 async function shot(page, name) {
@@ -895,7 +910,7 @@ try {
   for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
 
   // ---- W-NO-REMOTE-REQUESTS: nothing is contacted beyond the local fixture server ----
-  const remote = allRequests.filter((u) => !/^(chrome-extension:|http:\/\/127\.0\.0\.1:|http:\/\/fake-tidal\.com:|data:|blob:|about:)/.test(u));
+  const remote = remoteRequests();
   record('W-NO-REMOTE-REQUESTS', 'Popup, windows and page script make no requests beyond the local fixture server (no Tidal API, no telemetry)',
     remote.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remote.slice(0, 10), note: 'On real Tidal the popup also loads the cover image from Tidal\'s image server.' });
 
@@ -928,6 +943,195 @@ try {
   record('W-REINJECT-ORPHAN', 'A tab with no listening page script (orphaned by an update/Reload) gets it re-injected by the worker: the screen shows its track',
     reinjections >= 1 && titleAfter === 'Synthetic Tone' && after === 'Synthetic Tone' && popupRErrors.length === 0 ? 'PASS' : 'FAIL',
     { pageScriptBefore: before, reinjectionsByWorker: reinjections, titleShown: titleAfter, pageScriptAfter: after, panelClosed, popupRErrors, screenshot: `results/${label}/popup-orphan-tab.png` });
+
+  // ---- 1.5.3: a narrow Tidal page drops its seek bar and time labels. The jumps then go through Tidal's own page
+  // (page-bridge.js, world MAIN): its media-session seek handler, else the media element that last played. A forward
+  // jump that reaches the end goes to the next track. One fixture tab at a time (the worker picks the Tidal tab). ----
+  const jumpCase = async (query, run) => {
+    const pg = await context.newPage();
+    const errs = [];
+    pg.on('pageerror', (e) => errs.push(String(e)));
+    watchRequests(pg);
+    await pg.goto(TIDAL_URL + query);
+    await sleep(600);
+    await pg.click('#footer-play'); // the page's own play(): the bridge notes the element
+    await sleep(700);
+    const { page: pp, errors: ppErrors } = await openPopup();
+    try { return await run(pg, pp, errs, ppErrors); } finally { await pp.close(); await pg.close(); }
+  };
+  const settle = async (pg, t) => { await pg.evaluate((x) => { window.audioEl.currentTime = x; }, t); await sleep(2300); };
+
+  const narrowSession = await jumpCase('?narrow=1&media=detached&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const meta = await pp.locator('#player-meta').textContent();
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(900);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    await sleep(1600);
+    await pp.click('#player-btn-back15'); await sleep(900);
+    const t2 = await pg.evaluate(() => window.audioEl.currentTime);
+    const clicks = await pg.evaluate(() => window.clicks);
+    return { meta, fwd: +(t1 - t0).toFixed(2), back: +(t2 - t1).toFixed(2), sessionSeeks: clicks.sessionSeek, barSeeks: clicks.seek, errs, ppErrors };
+  });
+  record('W-JUMP-NARROW', 'With the seek bar and time labels gone (narrow Tidal page) and the media element out of reach, +30 / -15 go through Tidal\'s own seek handler, and the time still shows',
+    narrowSession.fwd > 28 && narrowSession.fwd < 33 && narrowSession.back > -18.5 && narrowSession.back < -12 && narrowSession.sessionSeeks === 2
+      && /\d:\d\d \/ 1:00/.test(narrowSession.meta) && narrowSession.errs.length === 0 && narrowSession.ppErrors.length === 0 ? 'PASS' : 'FAIL', narrowSession);
+
+  const narrowElement = await jumpCase('?narrow=1&media=closed', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const meta = await pp.locator('#player-meta').textContent();
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(900);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    return { meta, fwd: +(t1 - t0).toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-NARROW-ELEMENT', 'Same without any media-session handler, the element in a closed shadow root: +30 moves the element that played',
+    narrowElement.fwd > 28 && narrowElement.fwd < 33 && /\d:\d\d \/ 1:00/.test(narrowElement.meta) && narrowElement.errs.length === 0 && narrowElement.ppErrors.length === 0 ? 'PASS' : 'FAIL', narrowElement);
+
+  const atEnd = await jumpCase('?tracks=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    const before = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ...window.clicks }));
+    await pp.click('#player-btn-fwd30'); await sleep(150); await pp.click('#player-btn-fwd30'); // a quick second click
+    await sleep(1200);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, title: document.querySelector('[data-test="footer-track-title"]').textContent, ...window.clicks }));
+    await sleep(1500);
+    const shown = await pp.locator('#player-title').textContent();
+    return { nextClicks: after.next - before.next, barSeeks: after.seek - before.seek, title: after.title, shown, t1: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-END', '+30 with less than 30 s left goes to the next track (Tidal\'s Next), with no seek; a quick second click neither skips the new track nor moves it',
+    atEnd.nextClicks === 1 && atEnd.barSeeks === 0 && atEnd.title === 'Synthetic Tone 2' && atEnd.shown === 'Synthetic Tone 2' && atEnd.t1 < 5
+      && atEnd.errs.length === 0 && atEnd.ppErrors.length === 0 ? 'PASS' : 'FAIL', atEnd);
+
+  const atEndDisabled = await jumpCase('?nextdisabled=1&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pp.click('#player-btn-fwd30'); await sleep(1500);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ended: window.audioEl.ended, sessionNext: window.clicks.sessionNext, next: window.clicks.next }));
+    return { ...after, t: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-END-QUEUE-END', 'At the end of the queue (Next disabled, a next-track handler present), +30 near the end plays the track out instead',
+    atEndDisabled.t > 59 && atEndDisabled.sessionNext === 0 && atEndDisabled.next === 0 && atEndDisabled.errs.length === 0 && atEndDisabled.ppErrors.length === 0 ? 'PASS' : 'FAIL', atEndDisabled);
+
+  const atEndNoNext = await jumpCase('?narrow=1&media=detached&nonext=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pp.click('#player-btn-fwd30'); await sleep(1200);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ended: window.audioEl.ended }));
+    return { t1: +after.t.toFixed(2), ended: after.ended, errs, ppErrors };
+  });
+  const atEndPaused = await jumpCase('?narrow=1&media=detached&nonext=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pg.click('#footer-play'); await sleep(1500); // paused
+    await pp.click('#player-btn-fwd30'); await sleep(1200);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ended: window.audioEl.ended, paused: window.audioEl.paused }));
+    return { ...after, t: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-END-NO-NEXT', 'With no Next button and no Tidal handler, +30 near the end plays the track out to its end; when paused, it goes to the very end',
+    atEndNoNext.t1 > 59 && atEndPaused.t > 59.9 && atEndPaused.ended && atEndNoNext.errs.length === 0 && atEndNoNext.ppErrors.length === 0
+      && atEndPaused.errs.length === 0 && atEndPaused.ppErrors.length === 0 ? 'PASS' : 'FAIL', { playing: atEndNoNext, paused: atEndPaused });
+
+  // ---- Review round 2: each route is checked; a route that does nothing hands over to the next; anything else
+  // moving the playback during the check (the user in Tidal itself) wins; Next on the screen also holds jumps. ----
+  const nextThenJump = await jumpCase('?tracks=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pp.click('#player-btn-next'); await sleep(150); await pp.click('#player-btn-fwd30');
+    await sleep(1500);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, title: document.querySelector('[data-test="footer-track-title"]').textContent, ...window.clicks }));
+    return { next: after.next, seek: after.seek, title: after.title, t: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-NEXT-THEN-JUMP', 'Next on the screen and +30 straight after: one new track, not skipped and not moved to the old track\'s time',
+    nextThenJump.next === 1 && nextThenJump.seek === 0 && nextThenJump.title === 'Synthetic Tone 2' && nextThenJump.t < 5
+      && nextThenJump.errs.length === 0 && nextThenJump.ppErrors.length === 0 ? 'PASS' : 'FAIL', nextThenJump);
+
+  const noopHandler = await jumpCase('?narrow=1&media=detached&session=noop', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(2000);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    const c = await pg.evaluate(() => window.clicks);
+    return { fwd: +(t1 - t0).toFixed(2), handlerCalls: c.sessionSeek, errs, ppErrors };
+  });
+  record('W-JUMP-NOOP-HANDLER', 'A Tidal seek handler that does nothing hands over to the player element: +30 still moves',
+    noopHandler.fwd > 28 && noopHandler.fwd < 34 && noopHandler.handlerCalls === 1 && noopHandler.errs.length === 0 && noopHandler.ppErrors.length === 0 ? 'PASS' : 'FAIL', noopHandler);
+
+  const noopNext = await jumpCase('?narrow=1&media=detached&nonext=1&session=noop', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pg.click('#footer-play'); await sleep(1200); // paused
+    await pp.click('#player-btn-fwd30'); await sleep(6500);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ended: window.audioEl.ended, handlerCalls: window.clicks.sessionNext }));
+    return { ...after, t: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-END-NOOP-NEXT', 'No Next button and a next-track handler that does nothing: after 3 s +30 near the end still ends the track',
+    noopNext.t > 59.9 && noopNext.ended && noopNext.handlerCalls === 1 && noopNext.errs.length === 0 && noopNext.ppErrors.length === 0 ? 'PASS' : 'FAIL', noopNext);
+
+  const deadBar = await jumpCase('?deadbar=1&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(2200);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    const c = await pg.evaluate(() => window.clicks);
+    return { fwd: +(t1 - t0).toFixed(2), barEvents: c.seek, handlerSeeks: c.sessionSeek, errs, ppErrors };
+  });
+  record('W-JUMP-DEADBAR', 'A seek bar that is there but does nothing hands over to Tidal\'s seek handler after the check',
+    deadBar.fwd > 28 && deadBar.fwd < 35 && deadBar.barEvents === 1 && deadBar.handlerSeeks === 1 && deadBar.errs.length === 0 && deadBar.ppErrors.length === 0 ? 'PASS' : 'FAIL', deadBar);
+
+  const userWins = await jumpCase('?deadbar=1&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    await pp.click('#player-btn-fwd30'); await sleep(300);
+    await pg.evaluate(() => { window.audioEl.currentTime = 12; }); // the user moves Tidal's own timeline meanwhile
+    await sleep(2000);
+    const t = await pg.evaluate(() => window.audioEl.currentTime);
+    const c = await pg.evaluate(() => window.clicks);
+    return { t: +t.toFixed(2), handlerSeeks: c.sessionSeek, errs, ppErrors };
+  });
+  record('W-JUMP-USER-WINS', 'If the playback is moved in Tidal itself during the check, the extension leaves it there (no fallback seek)',
+    userWins.t > 12 && userWins.t < 16 && userWins.handlerSeeks === 0 && userWins.errs.length === 0 && userWins.ppErrors.length === 0 ? 'PASS' : 'FAIL', userWins);
+
+  // ---- W-BRIDGE-PAUSE-TIME: with only Tidal's position report (no element known), paused time is not counted ----
+  const pauseTime = await (async () => {
+    const pg = await context.newPage();
+    watchRequests(pg);
+    await pg.goto(TIDAL_URL + '?session=1');
+    await sleep(700);
+    const ask = () => pg.evaluate(() => {
+      const id = `harness-${Math.random()}`;
+      let reply;
+      const on = (e) => { const m = JSON.parse(e.detail); if (m.id === id) reply = m.reply; };
+      document.addEventListener('tme-bridge-reply', on);
+      document.dispatchEvent(new CustomEvent('tme-bridge-request', { detail: JSON.stringify({ id, op: 'state' }) }));
+      document.removeEventListener('tme-bridge-reply', on);
+      return reply;
+    });
+    await pg.evaluate(() => { navigator.mediaSession.playbackState = 'playing'; navigator.mediaSession.setPositionState({ duration: 60, position: 20, playbackRate: 1 }); });
+    await sleep(1000); const playing = await ask();
+    await pg.evaluate(() => { navigator.mediaSession.playbackState = 'paused'; });
+    await sleep(1000); const paused = await ask();
+    await pg.evaluate(() => { navigator.mediaSession.playbackState = 'playing'; });
+    await sleep(1000); const resumed = await ask();
+    const stateReads = await pg.evaluate(() => navigator.mediaSession.playbackState);
+    await pg.close();
+    const r = (x) => x && +x.currentTime.toFixed(2);
+    return { from: playing && playing.from, playing: r(playing), paused: r(paused), resumed: r(resumed), stateReads };
+  })();
+  record('W-BRIDGE-PAUSE-TIME', 'Time from Tidal\'s position report alone stops while paused and goes on from there (no rewind, no paused time counted)',
+    pauseTime.from === 'session' && Math.abs(pauseTime.playing - 21) < 0.3 && Math.abs(pauseTime.paused - 21) < 0.3 && Math.abs(pauseTime.resumed - 22) < 0.3
+      && pauseTime.stateReads === 'playing' ? 'PASS' : 'FAIL', pauseTime);
+
+  // ---- W-BRIDGE-SCOPE: the page-world helper changes nothing outside Tidal ----
+  const plain = await context.newPage();
+  await plain.goto(MEDIA_URL);
+  await sleep(500);
+  const plainNative = await plain.evaluate(() => ({
+    play: /\[native code\]/.test(HTMLMediaElement.prototype.play.toString()),
+    session: !navigator.mediaSession || !Object.prototype.hasOwnProperty.call(navigator.mediaSession, 'setActionHandler'),
+    flag: '__tmePageBridge' in window
+  }));
+  await plain.close();
+  record('W-BRIDGE-SCOPE', 'Outside Tidal the page-world helper does nothing (play() and the media session untouched)',
+    plainNative.play && plainNative.session && !plainNative.flag ? 'PASS' : 'FAIL', plainNative);
+
+  // ---- W-NO-REMOTE-REQUESTS-LATE: the same audit over the whole run, including the 1.5.3 cases ----
+  const remoteLate = remoteRequests();
+  record('W-NO-REMOTE-REQUESTS-LATE', 'No request left the two local fixture origins during the whole run (1.5.3 cases included)',
+    remoteLate.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remoteLate.slice(0, 10), origins: localOrigins() });
 } catch (e) {
   record('HARNESS', 'Harness exception', 'FAIL', String(e?.stack || e));
 } finally {
@@ -944,5 +1148,7 @@ try {
   await context.close();
   for (const r of hanging) r.end();
   server.close();
+  tlsServer.close();
   rmSync(profile, { recursive: true, force: true });
+  rmSync(certDir, { recursive: true, force: true });
 }

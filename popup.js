@@ -344,24 +344,48 @@ function playerCommand(command, after = 250) {
 }
 
 function handlePlayPause() { playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
-function handlePrev() { playerCommand({ type: 'PREV_TRACK' }, 300); }
-function handleNext() { playerCommand({ type: 'NEXT_TRACK' }, 300); }
+// After Next, Previous or a jump into the next track, the screen still shows the old track for up to a second;
+// jumps wait for the new one (at most 2 s, 3 s after an end jump), so a quick click never skips it or seeks it
+// to the old track's time. Previous that only restarts the same track holds jumps for those 2 s.
+let leavingTrack = null;
+const leaveTrack = (ms) => { leavingTrack = currentTrackInfo ? { title: currentTrackInfo.title, until: Date.now() + ms } : null; };
+
+function handlePrev() { leaveTrack(2000); playerCommand({ type: 'PREV_TRACK' }, 300); }
+function handleNext() { leaveTrack(2000); playerCommand({ type: 'NEXT_TRACK' }, 300); }
 
 function handleJump(deltaSecs) {
+  if (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until) return;
+  leavingTrack = null;
   if (!currentTrackInfo || !currentTrackInfo.duration) {
     showHint("The track length isn't known on this page, so the jump can't be placed.");
     return;
   }
   const dur = currentTrackInfo.duration;
   const cur = currentTrackInfo.currentTime || 0;
+  if (deltaSecs > 0 && cur + deltaSecs >= dur - 0.5) {
+    // The jump reaches the end: finish this track and go to the next one, as if it had played out.
+    leaveTrack(3000);
+    chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'NEXT_TRACK', orEnd: true } }, (res) => {
+      if (res && res.next === false) {
+        leavingTrack = null;
+        showHint("Couldn't go to the next track or to the end of this one on this page.");
+      }
+      setTimeout(refreshTrackInfo, 300);
+    });
+    return;
+  }
   const newTime = Math.max(0, Math.min(dur, cur + deltaSecs));
   chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SEEK_AUDIO', time: newTime } }, (res) => {
     if (res && res.seeked === false) {
-      showHint("Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
+      showHint(res.bridge !== undefined // a Tidal tab
+        ? "Couldn't move the playback position in Tidal. If the Tidal tab was open before this update, reload it once."
+        : "Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
       return;
     }
-    currentTrackInfo.currentTime = newTime;
-    updatePlayerUI(currentTrackInfo);
+    if (!res || !res.unverified) { // unverified: show the real time from the next reading instead of the target
+      currentTrackInfo.currentTime = newTime;
+      updatePlayerUI(currentTrackInfo);
+    }
     setTimeout(refreshTrackInfo, 250);
   });
 }

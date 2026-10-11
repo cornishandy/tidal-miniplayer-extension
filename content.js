@@ -67,6 +67,11 @@
     } else if (allTimes.length === 1 && (!duration || duration <= 0)) {
       duration = parseTimeToSeconds(allTimes[0].textContent.trim());
     }
+    // A narrow Tidal page drops its time labels: ask the page itself (page-bridge.js).
+    if (!(duration > 0) || allTimes.length < 2) {
+      const s = bridge('state');
+      if (s && s.duration > 0) { duration = s.duration; currentTime = s.currentTime; }
+    }
 
     const favBtn = getFavoriteButton();
     currentTrackInfo = {
@@ -201,10 +206,68 @@
     setTimeout(getTrackInfo, 250);
   }
 
-  function nextTrack() {
+  // `orEnd` (a forward jump that reaches the end): if no Next takes, play the track out to its end.
+  // A disabled Next is the end of the queue: then Tidal's next-track handler is not tried either.
+  async function nextTrack(orEnd = false) {
     const btn = getNextButton();
-    if (btn) btn.click();
+    const disabled = !!btn && (btn.disabled || btn.getAttribute('aria-disabled') === 'true');
+    const course = orEnd ? startCourse() : null;
+    const advanced = (now) => now.title !== course.title || now.currentTime < course.from - 3; // a new track, or back near the start
+    let route = false;
+    if (btn && !disabled) { btn.click(); route = 'button'; }
+    else if (!btn && isTidal) route = (bridge('next') || {}).next || false; // a narrow page without the button
+    // Tidal's Next button is trusted (verified on real Tidal; a fallback after a slow Next could skip two tracks).
+    // Its next-track handler, used only without the button, gets 3 s to show a new track before the end fallback.
+    if (route === 'session' && orEnd && (await watch(advanced, course, 15)) === 'timeout') route = false;
+    if (!route && orEnd && course.seq === transportSeq) {
+      const info = getTrackInfo();
+      // Playing: land just before the end and let it play out. Paused: the very end, so the track ends now.
+      if (info.duration > 0 && (await seekAudio(info.isPlaying ? info.duration - 0.25 : info.duration, course)).seeked) route = 'end';
+    }
     setTimeout(getTrackInfo, 250);
+    return route;
+  }
+
+  // Tidal moves playback a moment after it is asked, if at all. `watch` checks every 200 ms (6 times: 1.2 s),
+  // whether `done` has happened. It stops early, leaving everything as it is, when a newer command came in,
+  // the track changed, or the time left its old course without reaching the goal (someone else moved it,
+  // for instance in Tidal itself). Only 'timeout' means the request demonstrably did nothing.
+  function startCourse() {
+    const now = getTrackInfo();
+    return { from: now.currentTime || 0, playing: !!now.isPlaying, title: now.title, seq: transportSeq, t0: performance.now() };
+  }
+
+  async function watch(done, course, steps = 6) {
+    for (let i = 0; i < steps; i++) {
+      await new Promise((r) => setTimeout(r, 200));
+      if (course.seq !== transportSeq) return 'stale';
+      const now = getTrackInfo();
+      if (done(now)) return 'done';
+      if (now.title !== course.title) return 'stale';
+      const expected = course.from + (course.playing ? (performance.now() - course.t0) / 1000 : 0);
+      if (Math.abs(now.currentTime - expected) > 3) return 'moved';
+    }
+    return 'timeout';
+  }
+
+  // Tidal's page-world helper (page-bridge.js) answers synchronously while the request event is dispatched.
+  // Only strings cross between the worlds; only the reply carrying this request's id counts. null when the
+  // helper is not there (other sites, or a Tidal tab opened before 1.5.3).
+  let bridgeSeq = 0;
+  let transportSeq = 0; // counts the commands that move playback, so a pending seek check never acts on a newer one
+  function bridge(op, args = {}) {
+    const id = `${Date.now()}-${++bridgeSeq}`;
+    let reply = null;
+    const onReply = (e) => {
+      try { const m = JSON.parse(e.detail); if (m && m.id === id) reply = m.reply; } catch (_) { /* not ours */ }
+    };
+    document.addEventListener('tme-bridge-reply', onReply);
+    try {
+      document.dispatchEvent(new CustomEvent('tme-bridge-request', { detail: JSON.stringify({ id, op, ...args }) }));
+    } finally {
+      document.removeEventListener('tme-bridge-reply', onReply);
+    }
+    return reply;
   }
 
   // Clicks Tidal's own heart. Reports honestly when it cannot be found.
@@ -220,18 +283,46 @@
     });
   }
 
-  // Seek: a reachable media element first; otherwise drive the page's own seek bar in the footer
-  // (Tidal keeps its player element out of reach). Reports which route worked, or false.
-  function seekAudio(targetSecs) {
+  // Seek: a reachable media element first; otherwise, on Tidal, one route after another until one takes:
+  // the page's own seek bar in the footer (verified on real Tidal), then through page-bridge.js Tidal's own
+  // seek handler, then its player element. A route is left for the next only when `watch` shows it did
+  // nothing; anything else (done, a newer command, another change) ends the attempt. The target is
+  // absolute, so a later route never jumps twice. `unverified`: driven but not confirmed (the screen then
+  // shows the real time). `bridge`: false when the helper is missing (an old tab), else 'used' or 'empty'.
+  async function seekAudio(targetSecs, course = null) {
     if (isNaN(targetSecs)) return { seeked: false };
     const media = document.querySelector('audio, video');
     if (media && isFinite(media.duration) && media.duration > 0) {
       media.currentTime = Math.max(0, Math.min(media.duration, targetSecs));
       return { seeked: 'media' };
     }
+    if (!isTidal) return { seeked: seekWithBar(targetSecs) };
+    course = course || startCourse();
+    const reached = (now) => Math.abs(now.currentTime - targetSecs) < 3;
+    let driven = false, helper = false;
+    for (const route of ['bar', 'session', 'element']) {
+      let took;
+      if (route === 'bar') took = seekWithBar(targetSecs);
+      else {
+        const reply = bridge('seek', { time: targetSecs, route });
+        if (!reply) break; // no helper in this tab
+        helper = helper || 'empty';
+        took = reply.seeked;
+      }
+      if (!took) continue;
+      driven = took;
+      if (route !== 'bar') helper = 'used';
+      const outcome = await watch(reached, course);
+      if (outcome === 'done') return { seeked: took, bridge: helper };
+      if (outcome !== 'timeout') return { seeked: took, unverified: true, bridge: helper };
+    }
+    return driven ? { seeked: driven, unverified: true, bridge: helper } : { seeked: false, bridge: helper };
+  }
+
+  function seekWithBar(targetSecs) {
     const footer = getFooterPlayerElement();
     const duration = (currentTrackInfo || getTrackInfo()).duration;
-    if (!footer || !(duration > 0)) return { seeked: false };
+    if (!footer || !(duration > 0)) return false;
     const frac = Math.max(0, Math.min(1, targetSecs / duration));
 
     // A native range input (set the value the way a user would, so React-style handlers fire)
@@ -242,7 +333,7 @@
       setter.call(range, String(min + frac * (max - min)));
       range.dispatchEvent(new Event('input', { bubbles: true }));
       range.dispatchEvent(new Event('change', { bubbles: true }));
-      return { seeked: 'range' };
+      return 'range';
     }
 
     // A custom slider: click it at the right spot
@@ -259,10 +350,10 @@
         el.dispatchEvent(new PointerEvent('pointerup', init(false)));
         el.dispatchEvent(new MouseEvent('mouseup', init(false)));
         el.dispatchEvent(new MouseEvent('click', init(false)));
-        return { seeked: 'bar' };
+        return 'bar';
       }
     }
-    return { seeked: false };
+    return false;
   }
 
   function setMediaVolume(vol) {
@@ -272,6 +363,7 @@
 
   // 4. Message dispatcher
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (['TOGGLE_PLAY_PAUSE', 'PREV_TRACK', 'NEXT_TRACK', 'SEEK_AUDIO'].includes(message.type)) transportSeq++;
     switch (message.type) {
       case 'GET_TRACK_INFO':
         sendResponse(getTrackInfo());
@@ -285,17 +377,14 @@
         sendResponse(getTrackInfo());
         return true;
       case 'NEXT_TRACK':
-        nextTrack();
-        sendResponse(getTrackInfo());
+        nextTrack(!!message.orEnd).then((route) => sendResponse({ ...getTrackInfo(), next: route }));
         return true;
       case 'TOGGLE_FAVORITE':
         toggleFavorite().then(sendResponse);
         return true;
-      case 'SEEK_AUDIO': {
-        const r = seekAudio(message.time);
-        sendResponse({ success: r.seeked !== false, ...r });
+      case 'SEEK_AUDIO':
+        seekAudio(message.time).then((r) => sendResponse({ success: r.seeked !== false, ...r }));
         return true;
-      }
       case 'SET_VOLUME':
         setMediaVolume(message.volume);
         sendResponse({ success: true, volume: message.volume });

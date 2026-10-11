@@ -21,20 +21,36 @@
     <input type="range" data-test="progress-bar" id="bar" min="0" max="100" step="0.1" value="0">
     <span data-test="duration" id="dur">0:00</span>
   </div>
-  <!-- Like Tidal, the media element is not reachable with document.querySelector: it lives in a shadow root. -->
+  <!-- Like Tidal, the media element is not reachable with document.querySelector: it lives in a shadow root.
+       Flags (1.5.3): ?narrow=1 drops the seek bar and the time labels, as a narrow Tidal page does; ?media=closed puts the
+       element in a closed shadow root, ?media=detached keeps it out of the document; ?session=1 registers media-session
+       handlers (seekto, nexttrack) and reports the position, as players do for the system's media controls; ?nonext=1
+       removes the Next button, ?nextdisabled=1 disables it (end of the queue), both stop the loop; ?tracks=1 makes
+       Next start a new track (title "Synthetic Tone 2", 3, ... from 0:00); ?session=noop registers handlers that do
+       nothing; ?deadbar=1 leaves the seek bar in place but ignores it. -->
   <div id="player-host"></div>
   <script>
-    window.clicks = { decoy: 0, footerPlay: 0, prev: 0, next: 0, fav: 0, seek: 0 };
-    const root = document.getElementById('player-host').attachShadow({ mode: 'open' });
+    window.clicks = { decoy: 0, footerPlay: 0, prev: 0, next: 0, fav: 0, seek: 0, sessionSeek: 0, sessionNext: 0 };
+    const flags = new URLSearchParams(location.search);
     const a = document.createElement('audio');
-    a.id = 'a'; a.src = '/tone.wav'; a.loop = true;
-    root.appendChild(a);
+    a.id = 'a'; a.src = '/tone.wav'; a.loop = flags.get('nonext') !== '1' && flags.get('nextdisabled') !== '1';
+    if (flags.get('media') !== 'detached') document.getElementById('player-host').attachShadow({ mode: flags.get('media') === 'closed' ? 'closed' : 'open' }).appendChild(a);
     window.audioEl = a; // for the harness only
+    if (flags.get('narrow') === '1') for (const id of ['cur', 'bar', 'dur']) document.getElementById(id).remove();
+    if (flags.get('nonext') === '1') document.getElementById('next').remove();
+    if (flags.get('nextdisabled') === '1') { document.getElementById('next').disabled = true; document.getElementById('next').setAttribute('aria-disabled', 'true'); }
+    const noop = flags.get('session') === 'noop';
+    if ((flags.get('session') === '1' || noop) && navigator.mediaSession) {
+      navigator.mediaSession.setActionHandler('seekto', (d) => { window.clicks.sessionSeek++; if (!noop) a.currentTime = d.seekTime; });
+      navigator.mediaSession.setActionHandler('nexttrack', () => { window.clicks.sessionNext++; });
+      const report = () => { if (a.duration) navigator.mediaSession.setPositionState({ duration: a.duration, position: Math.min(a.currentTime, a.duration), playbackRate: 1 }); };
+      a.addEventListener('timeupdate', report); a.addEventListener('loadedmetadata', report);
+    }
     const fmt = (s) => isFinite(s) ? `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}` : '0:00';
     const cur = document.getElementById('cur'), dur = document.getElementById('dur'), bar = document.getElementById('bar');
-    const sync = () => { cur.textContent = fmt(a.currentTime); dur.textContent = fmt(a.duration); if (a.duration) bar.value = (a.currentTime / a.duration * 100).toFixed(1); };
+    const sync = () => { if (!bar) return; cur.textContent = fmt(a.currentTime); dur.textContent = fmt(a.duration); if (a.duration) bar.value = (a.currentTime / a.duration * 100).toFixed(1); };
     a.addEventListener('timeupdate', sync); a.addEventListener('loadedmetadata', sync); a.addEventListener('seeked', sync);
-    bar.addEventListener('input', () => { if (a.duration) { a.currentTime = bar.value / 100 * a.duration; window.clicks.seek++; } });
+    if (bar) bar.addEventListener('input', () => { window.clicks.seek++; if (a.duration && flags.get('deadbar') !== '1') a.currentTime = bar.value / 100 * a.duration; });
     document.getElementById('decoy-play').onclick = () => { window.clicks.decoy++; };
     const fp = document.getElementById('footer-play');
     fp.onclick = () => {
@@ -43,7 +59,11 @@
       else { a.pause(); fp.setAttribute('data-test', 'play'); fp.setAttribute('aria-label', 'Play'); }
     };
     document.getElementById('prev').onclick = () => { window.clicks.prev++; };
-    document.getElementById('next').onclick = () => { window.clicks.next++; };
+    const nextBtn = document.getElementById('next');
+    if (nextBtn) nextBtn.onclick = () => {
+      window.clicks.next++;
+      if (flags.get('tracks') === '1') { document.querySelector('[data-test="footer-track-title"]').textContent = `Synthetic Tone ${window.clicks.next + 1}`; a.currentTime = 0; }
+    };
     const fav = document.getElementById('fav');
     fav.onclick = () => { window.clicks.fav++; fav.setAttribute('aria-checked', String(fav.getAttribute('aria-checked') !== 'true')); };
   </script>

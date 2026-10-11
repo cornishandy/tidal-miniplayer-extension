@@ -16,6 +16,7 @@ const RUNTIME = [
   'manifest.json',
   'background.js',
   'content.js',
+  'page-bridge.js',
   'offscreen.html',
   'offscreen.js',
   'pitch-shifter.worklet.js',

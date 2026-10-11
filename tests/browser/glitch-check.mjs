@@ -66,7 +66,9 @@ const context = await chromium.launchPersistentContext(profile, {
   executablePath: CHROME, headless: true,
   ignoreDefaultArgs: ['--disable-extensions', '--mute-audio'],
   args: [`--disable-extensions-except=${extDir}`, `--load-extension=${extDir}`, `--allowlisted-extension-id=${EXT_ID}`,
-    '--mute-audio', '--disable-audio-output', // --mute-audio alone left the offscreen engine audible on the user's DAC (2026-10-10); no output device at all now '--enable-blink-features=AudioContextPlayoutStats', ...(process.argv.includes('--real-autoplay') ? [] : ['--autoplay-policy=no-user-gesture-required']), '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+    '--mute-audio', '--disable-audio-output', // --mute-audio alone left the offscreen engine audible on the user's DAC (2026-10-10); no output device at all now
+    '--enable-blink-features=AudioContextPlayoutStats', ...(process.argv.includes('--real-autoplay') ? [] : ['--autoplay-policy=no-user-gesture-required']), '--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1',
+    '--no-proxy-server', // a system proxy would otherwise resolve names itself
     '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,MediaRouter', `--remote-debugging-port=${DEBUG_PORT}`,
     '--no-first-run', '--no-default-browser-check'],
   viewport: { width: 800, height: 600 }
