@@ -28,6 +28,11 @@ Current review build: **v1.5.1**, runtime commit `f0a5adc`, fingerprint `c6004b1
 | W-JUMP-END | 1.5.3: +30 s with less than 30 s left presses Next once, with no seek; a quick second click neither skips the new track nor moves it (J-02) | installed-browser | — | PASS |
 | W-JUMP-END-QUEUE-END | 1.5.3: at the end of the queue (Next disabled, a next-track handler present) +30 s near the end plays the track out | installed-browser | — | PASS |
 | W-JUMP-END-NO-NEXT | 1.5.3: with no Next button and no handler, +30 s near the end plays the track out; paused, it goes to the very end | installed-browser | — | PASS (ended at 60 s, both) |
+| W-NEXT-THEN-JUMP | 1.5.3: Next on the screen and +30 straight after: one new track, not skipped and not moved | installed-browser | — | PASS |
+| W-JUMP-NOOP-HANDLER | 1.5.3: a Tidal seek handler that does nothing hands over to the player element | installed-browser | — | PASS (+30.2) |
+| W-JUMP-END-NOOP-NEXT | 1.5.3: no Next button and a next-track handler that does nothing: after 3 s the track still ends | installed-browser | — | PASS |
+| W-JUMP-DEADBAR | 1.5.3: a seek bar that is there but does nothing hands over to Tidal's seek handler after the check | installed-browser | — | PASS (+29.7) |
+| W-JUMP-USER-WINS | 1.5.3: playback moved in Tidal itself during the check stays where it was put (no fallback seek) | installed-browser | — | PASS |
 | W-BRIDGE-PAUSE-TIME | 1.5.3: time from Tidal's position report alone stops while paused and goes on from there | installed-browser | — | PASS (21.0, 21.0, 22.0 s) |
 | W-BRIDGE-SCOPE | 1.5.3: outside Tidal the page helper is absent (play() and the media session untouched) | installed-browser | — | PASS |
 | W-NO-REMOTE-REQUESTS-LATE | 1.5.3: no request left the two exact local fixture origins during the whole run | installed-browser | — | PASS |

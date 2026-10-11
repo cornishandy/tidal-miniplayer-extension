@@ -81,7 +81,7 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Tests
 
-- **Executed (1.5.3)**: 53 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on this exact build (`tests/results/review-v1.5.3/`), with the test browser silent and the fake Tidal page served as tidal.com from this Mac only. New: W-JUMP-NARROW, W-JUMP-NARROW-ELEMENT, W-JUMP-END, W-JUMP-END-QUEUE-END, W-JUMP-END-NO-NEXT, W-BRIDGE-PAUSE-TIME, W-BRIDGE-SCOPE, W-NO-REMOTE-REQUESTS-LATE. A test-isolation slip of 1.5.2 in the dropout diagnostic was found and fixed (H-05).
+- **Executed (1.5.3)**: 58 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on this exact build (`tests/results/review-v1.5.3/`), with the test browser silent and the fake Tidal page served as tidal.com from this Mac only. New: W-JUMP-NARROW, W-JUMP-NARROW-ELEMENT, W-JUMP-END, W-JUMP-END-QUEUE-END, W-JUMP-END-NO-NEXT, W-NEXT-THEN-JUMP, W-JUMP-NOOP-HANDLER, W-JUMP-END-NOOP-NEXT, W-JUMP-DEADBAR, W-JUMP-USER-WINS, W-BRIDGE-PAUSE-TIME, W-BRIDGE-SCOPE, W-NO-REMOTE-REQUESTS-LATE. A test-isolation slip of 1.5.2 in the dropout diagnostic was found and fixed (H-05).
 - **Executed (1.5.2)**: 45 installed-browser and objective-audio checks, plus 16 unit checks, all PASS (`tests/results/review-v1.5.2/`). New: W-CLICK-PATH (21 ms buffer, pitch stage at rest), W-PITCH-RECOVER (after a −12 to +12 jump Pitch comes back by itself), unit proofs that the limiter and the shifted sound are bit-identical to 1.5.1 and that the 6-hour freeze cannot happen.
 - **Diagnostics** (not in the regular run): the stall series and two 10-minute runs without a loop (0 gaps, 0 dropouts on both versions).
 - **Not run (your ears)**: the track you reported, and the open listening items below.
@@ -104,6 +104,6 @@ Up to about 50 ms more delay since 1.5.2, about 35 to 60 ms in all by Chrome's f
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.3 is harness-verified on the exact review folder (53/53, silent, fake Tidal page served from this Mac only); your Reload, the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.3 is harness-verified on the exact review folder (58/58, silent, fake Tidal page served from this Mac only); your Reload, the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix are pending.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.
