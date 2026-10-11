@@ -5,6 +5,8 @@ const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
 const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
 // The page script, re-injected into tabs that were open before an update or reload (their copy is orphaned).
 const PAGE_SCRIPT_FILES = ['content.js'];
+const PAGE_WORLD_FILES = ['page-bridge.js']; // runs in Tidal's own page world (see the file); Tidal tabs only
+const isTidalUrl = (url) => { try { const h = new URL(url).hostname; return h === 'tidal.com' || h.endsWith('.tidal.com'); } catch (_) { return false; } };
 const reinjectedTabs = new Map(); // tabId -> how many times the page script was re-injected (diagnostics)
 let capturedTabId = null;
 
@@ -686,6 +688,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                     files: PAGE_SCRIPT_FILES,
                     injectImmediately: true // the screen is asking now; do not wait for the page to go idle
                   });
+                  // Tidal tabs only. The helper has no tie to the extension, so it outlives a Reload; it is missing only
+                  // in Tidal tabs opened before 1.5.3 was installed, where it comes late: it misses what Tidal set up
+                  // before and catches the next play(). Reloading the Tidal tab once gives it everything.
+                  if (isTidalUrl(targetTab.url)) {
+                    await chrome.scripting.executeScript({
+                      target: { tabId: targetTab.id },
+                      files: PAGE_WORLD_FILES,
+                      world: 'MAIN',
+                      injectImmediately: true
+                    }).catch(() => {});
+                  }
                   reinjectedTabs.set(targetTab.id, (reinjectedTabs.get(targetTab.id) || 0) + 1);
                   chrome.tabs.sendMessage(targetTab.id, message.command, (retryRes) => {
                     if (chrome.runtime.lastError) {

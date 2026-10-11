@@ -67,6 +67,11 @@
     } else if (allTimes.length === 1 && (!duration || duration <= 0)) {
       duration = parseTimeToSeconds(allTimes[0].textContent.trim());
     }
+    // A narrow Tidal page drops its time labels: ask the page itself (page-bridge.js).
+    if (!(duration > 0) || allTimes.length < 2) {
+      const s = bridge('state');
+      if (s && s.duration > 0) { duration = s.duration; currentTime = s.currentTime; }
+    }
 
     const favBtn = getFavoriteButton();
     currentTrackInfo = {
@@ -201,10 +206,37 @@
     setTimeout(getTrackInfo, 250);
   }
 
-  function nextTrack() {
+  // `orEnd` (a forward jump that reaches the end): with no Next button and no Tidal handler, play out to the end.
+  async function nextTrack(orEnd = false) {
     const btn = getNextButton();
-    if (btn) btn.click();
+    let route = false;
+    if (btn && !btn.disabled && btn.getAttribute('aria-disabled') !== 'true') { btn.click(); route = 'button'; } // disabled: end of the queue
+    else if (isTidal) route = (bridge('next') || {}).next || false;
+    if (!route && orEnd) {
+      const info = getTrackInfo();
+      if (info.duration > 0 && (await seekAudio(info.duration - 0.25)).seeked) route = 'end';
+    }
     setTimeout(getTrackInfo, 250);
+    return route;
+  }
+
+  // Tidal's page-world helper (page-bridge.js) answers synchronously while the request event is dispatched.
+  // Only strings cross between the worlds; only the reply carrying this request's id counts. null when the
+  // helper is not there (other sites, or a Tidal tab opened before 1.5.3).
+  let bridgeSeq = 0;
+  function bridge(op, args = {}) {
+    const id = `${Date.now()}-${++bridgeSeq}`;
+    let reply = null;
+    const onReply = (e) => {
+      try { const m = JSON.parse(e.detail); if (m && m.id === id) reply = m.reply; } catch (_) { /* not ours */ }
+    };
+    document.addEventListener('tme-bridge-reply', onReply);
+    try {
+      document.dispatchEvent(new CustomEvent('tme-bridge-request', { detail: JSON.stringify({ id, op, ...args }) }));
+    } finally {
+      document.removeEventListener('tme-bridge-reply', onReply);
+    }
+    return reply;
   }
 
   // Clicks Tidal's own heart. Reports honestly when it cannot be found.
@@ -221,17 +253,30 @@
   }
 
   // Seek: a reachable media element first; otherwise drive the page's own seek bar in the footer
-  // (Tidal keeps its player element out of reach). Reports which route worked, or false.
-  function seekAudio(targetSecs) {
+  // (Tidal keeps its player element out of reach). On Tidal, when a narrow page hides the bar, or the
+  // bar did not move the playback, ask Tidal's page through page-bridge.js. The target is absolute, so
+  // a second route never jumps twice. Reports which route worked, or false.
+  async function seekAudio(targetSecs) {
     if (isNaN(targetSecs)) return { seeked: false };
     const media = document.querySelector('audio, video');
     if (media && isFinite(media.duration) && media.duration > 0) {
       media.currentTime = Math.max(0, Math.min(media.duration, targetSecs));
       return { seeked: 'media' };
     }
+    const viaBar = seekWithBar(targetSecs);
+    if (!isTidal) return { seeked: viaBar };
+    if (viaBar) {
+      await new Promise((r) => setTimeout(r, 400));
+      if (Math.abs(getTrackInfo().currentTime - targetSecs) < 3) return { seeked: viaBar };
+    }
+    const viaPage = bridge('seek', { time: targetSecs });
+    return { seeked: (viaPage && viaPage.seeked) || viaBar, bridge: viaPage ? (viaPage.seeked ? 'used' : 'empty') : false };
+  }
+
+  function seekWithBar(targetSecs) {
     const footer = getFooterPlayerElement();
     const duration = (currentTrackInfo || getTrackInfo()).duration;
-    if (!footer || !(duration > 0)) return { seeked: false };
+    if (!footer || !(duration > 0)) return false;
     const frac = Math.max(0, Math.min(1, targetSecs / duration));
 
     // A native range input (set the value the way a user would, so React-style handlers fire)
@@ -242,7 +287,7 @@
       setter.call(range, String(min + frac * (max - min)));
       range.dispatchEvent(new Event('input', { bubbles: true }));
       range.dispatchEvent(new Event('change', { bubbles: true }));
-      return { seeked: 'range' };
+      return 'range';
     }
 
     // A custom slider: click it at the right spot
@@ -259,10 +304,10 @@
         el.dispatchEvent(new PointerEvent('pointerup', init(false)));
         el.dispatchEvent(new MouseEvent('mouseup', init(false)));
         el.dispatchEvent(new MouseEvent('click', init(false)));
-        return { seeked: 'bar' };
+        return 'bar';
       }
     }
-    return { seeked: false };
+    return false;
   }
 
   function setMediaVolume(vol) {
@@ -285,17 +330,14 @@
         sendResponse(getTrackInfo());
         return true;
       case 'NEXT_TRACK':
-        nextTrack();
-        sendResponse(getTrackInfo());
+        nextTrack(!!message.orEnd).then((route) => sendResponse({ ...getTrackInfo(), next: route }));
         return true;
       case 'TOGGLE_FAVORITE':
         toggleFavorite().then(sendResponse);
         return true;
-      case 'SEEK_AUDIO': {
-        const r = seekAudio(message.time);
-        sendResponse({ success: r.seeked !== false, ...r });
+      case 'SEEK_AUDIO':
+        seekAudio(message.time).then((r) => sendResponse({ success: r.seeked !== false, ...r }));
         return true;
-      }
       case 'SET_VOLUME':
         setMediaVolume(message.volume);
         sendResponse({ success: true, volume: message.volume });

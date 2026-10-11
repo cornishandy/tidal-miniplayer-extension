@@ -3,14 +3,18 @@
 // Safety properties (do not weaken):
 //   * Fresh temporary Chrome profile; never touches the everyday Chrome profile.
 //   * All hostnames except the local fixture server resolve to NOTFOUND, so nothing
-//     (including Tidal) can be contacted. The fake Tidal host maps to 127.0.0.1.
-//   * --mute-audio: the synthetic tone never reaches speakers/headphones.
+//     (including Tidal) can be contacted. The fake Tidal page is served as https://tidal.com:<port> from this
+//     machine (tidal.com maps to 127.0.0.1; a throwaway self-signed certificate made per run, accepted by this
+//     test browser only), so the Tidal-only page-world script of 1.5.3 runs on it exactly as shipped.
+//   * --mute-audio plus --disable-audio-output: the synthetic tone never reaches speakers/headphones.
 //   * Only synthetic fixtures (generated sine tones, fake Tidal DOM) are used.
 //
 // Usage: node browser/run.mjs <unpackedDir> [--label name]
 import { chromium } from 'playwright-core';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { createServer as createHttpsServer } from 'node:https';
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -51,7 +55,7 @@ function toneWav({ seconds = 60, rate = 48000, freqs = [60, 1000, 8000], amp = 0
 const WAV = toneWav();
 
 const hanging = [];
-const server = createServer((req, res) => {
+const serve = (req, res) => {
   const url = new URL(req.url, 'http://x');
   if (url.pathname === '/tone.wav') {
     // Range support is required for the media element to be seekable.
@@ -77,11 +81,18 @@ const server = createServer((req, res) => {
     return;
   }
   res.end(readFileSync(p));
-});
+};
+const server = createServer(serve);
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
 const PORT = server.address().port;
+const certDir = mkdtempSync(join(tmpdir(), 'tme-cert-'));
+execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2', '-subj', '/CN=tidal.com',
+  '-keyout', join(certDir, 'key.pem'), '-out', join(certDir, 'cert.pem')], { stdio: 'ignore' });
+const tlsServer = createHttpsServer({ key: readFileSync(join(certDir, 'key.pem')), cert: readFileSync(join(certDir, 'cert.pem')) }, serve);
+await new Promise((r) => tlsServer.listen(0, '127.0.0.1', r));
+const TLS_PORT = tlsServer.address().port;
 const MEDIA_URL = `http://127.0.0.1:${PORT}/media.html`;
-const TIDAL_URL = `http://fake-tidal.com:${PORT}/fake-tidal.html`;
+const TIDAL_URL = `https://tidal.com:${TLS_PORT}/fake-tidal.html`;
 
 // ---------- browser ----------
 const profile = mkdtempSync(join(tmpdir(), 'tme-profile-'));
@@ -96,7 +107,8 @@ const context = await chromium.launchPersistentContext(profile, {
     `--allowlisted-extension-id=${EXT_ID}`,
     '--mute-audio', '--disable-audio-output', // --mute-audio alone left the offscreen engine audible on the user's DAC (2026-10-10); no output device at all now
     '--autoplay-policy=no-user-gesture-required',
-    `--host-resolver-rules=MAP fake-tidal.com 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`,
+    `--host-resolver-rules=MAP tidal.com 127.0.0.1, MAP * ~NOTFOUND, EXCLUDE 127.0.0.1`,
+    '--ignore-certificate-errors', // the throwaway certificate of the local tidal.com stand-in; every other host is NOTFOUND
     '--disable-features=HttpsUpgrades,HttpsFirstBalancedModeAutoEnable,MediaRouter',
     `--remote-debugging-port=${DEBUG_PORT}`,
     '--no-first-run',
@@ -895,7 +907,7 @@ try {
   for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
 
   // ---- W-NO-REMOTE-REQUESTS: nothing is contacted beyond the local fixture server ----
-  const remote = allRequests.filter((u) => !/^(chrome-extension:|http:\/\/127\.0\.0\.1:|http:\/\/fake-tidal\.com:|data:|blob:|about:)/.test(u));
+  const remote = allRequests.filter((u) => !/^(chrome-extension:|http:\/\/127\.0\.0\.1:|https:\/\/tidal\.com:\d+\/|data:|blob:|about:)/.test(u));
   record('W-NO-REMOTE-REQUESTS', 'Popup, windows and page script make no requests beyond the local fixture server (no Tidal API, no telemetry)',
     remote.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remote.slice(0, 10), note: 'On real Tidal the popup also loads the cover image from Tidal\'s image server.' });
 
@@ -928,6 +940,82 @@ try {
   record('W-REINJECT-ORPHAN', 'A tab with no listening page script (orphaned by an update/Reload) gets it re-injected by the worker: the screen shows its track',
     reinjections >= 1 && titleAfter === 'Synthetic Tone' && after === 'Synthetic Tone' && popupRErrors.length === 0 ? 'PASS' : 'FAIL',
     { pageScriptBefore: before, reinjectionsByWorker: reinjections, titleShown: titleAfter, pageScriptAfter: after, panelClosed, popupRErrors, screenshot: `results/${label}/popup-orphan-tab.png` });
+
+  // ---- 1.5.3: a narrow Tidal page drops its seek bar and time labels. The jumps then go through Tidal's own page
+  // (page-bridge.js, world MAIN): its media-session seek handler, else the media element that last played. A forward
+  // jump that reaches the end goes to the next track. One fixture tab at a time (the worker picks the Tidal tab). ----
+  const jumpCase = async (query, run) => {
+    const pg = await context.newPage();
+    const errs = [];
+    pg.on('pageerror', (e) => errs.push(String(e)));
+    watchRequests(pg);
+    await pg.goto(TIDAL_URL + query);
+    await sleep(600);
+    await pg.click('#footer-play'); // the page's own play(): the bridge notes the element
+    await sleep(700);
+    const { page: pp, errors: ppErrors } = await openPopup();
+    try { return await run(pg, pp, errs, ppErrors); } finally { await pp.close(); await pg.close(); }
+  };
+  const settle = async (pg, t) => { await pg.evaluate((x) => { window.audioEl.currentTime = x; }, t); await sleep(2300); };
+
+  const narrowSession = await jumpCase('?narrow=1&media=detached&session=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const meta = await pp.locator('#player-meta').textContent();
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(900);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    await sleep(1600);
+    await pp.click('#player-btn-back15'); await sleep(900);
+    const t2 = await pg.evaluate(() => window.audioEl.currentTime);
+    const clicks = await pg.evaluate(() => window.clicks);
+    return { meta, fwd: +(t1 - t0).toFixed(2), back: +(t2 - t1).toFixed(2), sessionSeeks: clicks.sessionSeek, barSeeks: clicks.seek, errs, ppErrors };
+  });
+  record('W-JUMP-NARROW', 'With the seek bar and time labels gone (narrow Tidal page) and the media element out of reach, +30 / -15 go through Tidal\'s own seek handler, and the time still shows',
+    narrowSession.fwd > 28 && narrowSession.fwd < 33 && narrowSession.back > -18.5 && narrowSession.back < -12 && narrowSession.sessionSeeks === 2
+      && /\d:\d\d \/ 1:00/.test(narrowSession.meta) && narrowSession.errs.length === 0 && narrowSession.ppErrors.length === 0 ? 'PASS' : 'FAIL', narrowSession);
+
+  const narrowElement = await jumpCase('?narrow=1&media=closed', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 2);
+    const meta = await pp.locator('#player-meta').textContent();
+    const t0 = await pg.evaluate(() => window.audioEl.currentTime);
+    await pp.click('#player-btn-fwd30'); await sleep(900);
+    const t1 = await pg.evaluate(() => window.audioEl.currentTime);
+    return { meta, fwd: +(t1 - t0).toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-NARROW-ELEMENT', 'Same without any media-session handler, the element in a closed shadow root: +30 moves the element that played',
+    narrowElement.fwd > 28 && narrowElement.fwd < 33 && /\d:\d\d \/ 1:00/.test(narrowElement.meta) && narrowElement.errs.length === 0 && narrowElement.ppErrors.length === 0 ? 'PASS' : 'FAIL', narrowElement);
+
+  const atEnd = await jumpCase('', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    const before = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ...window.clicks }));
+    await pp.click('#player-btn-fwd30'); await sleep(900);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ...window.clicks }));
+    return { nextClicks: after.next - before.next, barSeeks: after.seek - before.seek, t0: +before.t.toFixed(2), t1: +after.t.toFixed(2), errs, ppErrors };
+  });
+  record('W-JUMP-END', '+30 with less than 30 s left goes to the next track (Tidal\'s Next button), with no seek',
+    atEnd.nextClicks === 1 && atEnd.barSeeks === 0 && atEnd.errs.length === 0 && atEnd.ppErrors.length === 0 ? 'PASS' : 'FAIL', atEnd);
+
+  const atEndNoNext = await jumpCase('?narrow=1&media=detached&nonext=1', async (pg, pp, errs, ppErrors) => {
+    await settle(pg, 45);
+    await pp.click('#player-btn-fwd30'); await sleep(1200);
+    const after = await pg.evaluate(() => ({ t: window.audioEl.currentTime, ended: window.audioEl.ended }));
+    return { t1: +after.t.toFixed(2), ended: after.ended, errs, ppErrors };
+  });
+  record('W-JUMP-END-NO-NEXT', 'With no Next button and no Tidal handler, +30 near the end plays the track out to its end',
+    atEndNoNext.t1 > 59 && atEndNoNext.errs.length === 0 && atEndNoNext.ppErrors.length === 0 ? 'PASS' : 'FAIL', atEndNoNext);
+
+  // ---- W-BRIDGE-SCOPE: the page-world helper changes nothing outside Tidal ----
+  const plain = await context.newPage();
+  await plain.goto(MEDIA_URL);
+  await sleep(500);
+  const plainNative = await plain.evaluate(() => ({
+    play: /\[native code\]/.test(HTMLMediaElement.prototype.play.toString()),
+    session: !navigator.mediaSession || !Object.prototype.hasOwnProperty.call(navigator.mediaSession, 'setActionHandler'),
+    flag: '__tmePageBridge' in window
+  }));
+  await plain.close();
+  record('W-BRIDGE-SCOPE', 'Outside Tidal the page-world helper does nothing (play() and the media session untouched)',
+    plainNative.play && plainNative.session && !plainNative.flag ? 'PASS' : 'FAIL', plainNative);
 } catch (e) {
   record('HARNESS', 'Harness exception', 'FAIL', String(e?.stack || e));
 } finally {
@@ -944,5 +1032,7 @@ try {
   await context.close();
   for (const r of hanging) r.end();
   server.close();
+  tlsServer.close();
   rmSync(profile, { recursive: true, force: true });
+  rmSync(certDir, { recursive: true, force: true });
 }

@@ -354,10 +354,21 @@ function handleJump(deltaSecs) {
   }
   const dur = currentTrackInfo.duration;
   const cur = currentTrackInfo.currentTime || 0;
+  if (deltaSecs > 0 && cur + deltaSecs >= dur - 0.5) {
+    // The jump reaches the end: finish this track and go to the next one, as if it had played out.
+    chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'NEXT_TRACK', orEnd: true } }, (res) => {
+      if (res && res.next === false) showHint("Couldn't go to the next track on this page (no Next button found).");
+      if (res && res.title) updatePlayerUI(res);
+      setTimeout(refreshTrackInfo, 300);
+    });
+    return;
+  }
   const newTime = Math.max(0, Math.min(dur, cur + deltaSecs));
   chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SEEK_AUDIO', time: newTime } }, (res) => {
     if (res && res.seeked === false) {
-      showHint("Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
+      showHint(res.bridge !== undefined // a Tidal tab
+        ? "Couldn't move the playback position in Tidal. If the Tidal tab was open before this update, reload it once."
+        : "Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
       return;
     }
     currentTrackInfo.currentTime = newTime;
