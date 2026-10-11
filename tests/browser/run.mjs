@@ -751,6 +751,55 @@ try {
     const reGraph = await evalOffscreen(`({ isCapturing, ctx: audioCtx && audioCtx.state })`);
     record('W-CAPTURE-RESTART', 'EQ can be re-attached after stop', re?.success && reGraph.value?.isCapturing ? 'PASS' : 'FAIL', { re, reGraph });
 
+    // ---- W-EQ-AFTER-ICON (1.5.4): Chrome refuses the EQ from the side panel (no permission for the tab after a
+    // reload or restart); the panel says to click the icon, and that click turns the EQ on. Chrome's refusal is
+    // simulated (this test browser is allow-listed); the click is the worker's own click handler. ----
+    await sendFrom(popup, { type: 'STOP_CAPTURE' });
+    await sleep(400);
+    const stubbed = await sw.evaluate(() => {
+      self.__realGetMediaStreamId = chrome.tabCapture.getMediaStreamId;
+      const refuse = async () => { throw new Error('Extension has not been invoked for the current page (see activeTab permission). Chrome pages cannot be captured.'); };
+      try { chrome.tabCapture.getMediaStreamId = refuse; } catch (_) {}
+      if (chrome.tabCapture.getMediaStreamId !== refuse) { try { Object.defineProperty(chrome.tabCapture, 'getMediaStreamId', { value: refuse, configurable: true, writable: true }); } catch (_) {} }
+      return chrome.tabCapture.getMediaStreamId === refuse;
+    });
+    const panelEq = await context.newPage();
+    await panelEq.goto(`chrome-extension://${EXT_ID}/popup.html?panel=1`);
+    await sleep(800);
+    // Stay open off: the icon opens the popup, so nothing is queued and the popup's advice is given.
+    const refusedOff = await sendFrom(panelEq, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
+    const pendingWhenOff = await sw.evaluate(() => pendingEq);
+    await sw.evaluate(() => chrome.storage.local.set({ stayOpen: true })); // the flag only; the icon behaviour is W-STAY-OPEN's
+    const refused = await sendFrom(panelEq, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
+    const pendingAfterRefusal = await sw.evaluate(() => pendingEq);
+    // A stop by any route (here the worker's own stop, as Alt+E uses) settles the request: a later click starts nothing.
+    await sw.evaluate(() => stopAudioCapture());
+    const clearedByStop = await sw.evaluate(() => pendingEq === null);
+    const refusedAgain = await sendFrom(panelEq, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
+    await sw.evaluate(() => {
+      try { chrome.tabCapture.getMediaStreamId = self.__realGetMediaStreamId; } catch (_) {}
+      if (chrome.tabCapture.getMediaStreamId !== self.__realGetMediaStreamId) Object.defineProperty(chrome.tabCapture, 'getMediaStreamId', { value: self.__realGetMediaStreamId, configurable: true, writable: true });
+    });
+    const tidalTabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '*' }))[0]?.id, TIDAL_URL.split('?')[0]);
+    const windowId = await sw.evaluate(async (id) => (await chrome.tabs.get(id)).windowId, mediaTabId);
+    const clickOther = await sw.evaluate(async ({ id, w }) => onActionClicked({ id, windowId: w }), { id: tidalTabId, w: windowId });
+    const stillPending = await sw.evaluate(() => !!pendingEq);
+    const clickRight = await sw.evaluate(async ({ id, w }) => onActionClicked({ id, windowId: w }), { id: mediaTabId, w: windowId });
+    await sleep(600);
+    const eqState = await sendFrom(popup, { type: 'GET_STATE' });
+    const eqCaptured = await sw.evaluate(() => capturedTabId);
+    await sw.evaluate(() => chrome.storage.local.set({ stayOpen: false }));
+    await panelEq.close();
+    // Outside a real click Chrome refuses to open the panel, so the handler fell back to the Stay-open window: close it.
+    await sleep(800);
+    for (const pg of context.pages()) if (pg.url().includes('undocked=true')) await pg.close();
+    await sleep(300);
+    record('W-EQ-AFTER-ICON', 'EQ refused from the side panel for lack of Chrome\'s permission: with Stay open on, the message says to click the icon, a stop by any route settles it, a click on another tab does nothing, and the click on that tab turns the EQ on; with Stay open off, the popup\'s advice and nothing queued',
+      stubbed && refusedOff?.success === false && /then turn Audio EQ on/.test(refusedOff?.error || '') && pendingWhenOff === null
+        && refused?.success === false && /Click the icon now/.test(refused?.error || '') && pendingAfterRefusal?.tabId === mediaTabId && clearedByStop && refusedAgain?.success === false
+        && clickOther === false && stillPending && clickRight === true && eqState.isCapturing === true && eqCaptured === mediaTabId ? 'PASS' : 'FAIL',
+      { stubbed, refusedOff: refusedOff?.error, pendingWhenOff, refused, pendingAfterRefusal, clearedByStop, clickOther, stillPending, clickRight, isCapturing: eqState.isCapturing, eqCaptured, mediaTabId });
+
     // ---- W-TAB-CLOSE-CLEANUP ----
     await media.close();
     await sleep(1200);
@@ -795,8 +844,8 @@ try {
   const popupWhenOff = await sw.evaluate(() => chrome.action.getPopup({}));
   const behaviourOff = await sw.evaluate(async () => (await chrome.sidePanel.getPanelBehavior()).openPanelOnActionClick);
   if (!popup3.isClosed()) await popup3.close();
-  record('W-STAY-OPEN', 'Stay open (real click): the toolbar icon switches to the side panel (no popup); off restores the popup',
-    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && behaviourOn === true && /popup\.html$/.test(popupWhenOff) && behaviourOff === false ? 'PASS' : 'FAIL',
+  record('W-STAY-OPEN', 'Stay open (real click): the toolbar icon switches to the side panel (no popup; opened by the worker, so a click never closes it); off restores the popup',
+    /popup\.html$/.test(popupBefore) && popupWhenOn === '' && stayStored === true && behaviourOn === false && /popup\.html$/.test(popupWhenOff) && behaviourOff === false ? 'PASS' : 'FAIL', // 1.5.4: the worker opens the panel itself (onActionClicked), so Chrome's toggle stays off
     { popupBefore, popupWhenOn, stayStored, behaviourOn, popupWhenOff, behaviourOff });
   record('W-SIDE-PANEL-OPEN', 'The side panel document opened from the click', panelContexts > 0 ? 'PASS' : 'NOT RUN',
     { panelContexts, note: panelContexts > 0 ? '' : 'Headless Chrome has no side panel UI; confirm on a real Chrome window.' });
