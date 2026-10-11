@@ -89,7 +89,7 @@ The modes are engine settings, not preset values: they stay as you set them whic
 ## What I need from you
 
 1. **Reload**: open `chrome://extensions`, find the card "Universal Mini-Player & DJ Bass Booster", click its round arrow (Reload), and check it says **1.5.3**. Then reload your Tidal tab once.
-2. **Try the jumps**: drag the side panel wide until Tidal's timeline disappears, then click +30; and click +30 with less than 30 s left. Tell me "works" or what happened.
+2. **Try the jumps**: drag the side panel wide until Tidal's timeline disappears, then click +30; pause and check that the time shown is the song's; and click +30 with less than 30 s left. Tell me "works" or what happened, and tell me if a jump ever asks you to reload a tab you had just opened.
 3. **Play "Islands" again** with AUDIO EQ on, the iDSD back at 96 kHz if you changed it. Tell me "clean", or roughly how often the clicks come and whether they are steady or random.
 4. When you have time: the round-14 questions and the parked open items (signal readout, mode defaults, the MATCH bar, the 1.5.0 listening and layout questions).
 
@@ -104,6 +104,6 @@ Up to about 50 ms more delay since 1.5.2, about 35 to 60 ms in all by Chrome's f
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.2 is harness-verified on the exact review folder (45/45, silent); your Reload and your listening to the reported track are pending.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.3 is harness-verified on the exact review folder (53/53, silent, fake Tidal page served from this Mac only); your Reload, the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix are pending.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.
