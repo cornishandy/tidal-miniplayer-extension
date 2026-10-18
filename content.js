@@ -361,6 +361,160 @@
     document.querySelectorAll('audio, video').forEach(m => { m.volume = clamped; });
   }
 
+  // Movie mode (1.5.5): is this tab showing a real picture? Audio-only pages, including a <video> whose
+  // stream has no frames, stay on the large device buffer. document.hidden is ignored so a background tab
+  // that is actually showing video still counts.
+  const observedShadowRoots = new WeakSet();
+  let videoMutationObserver = null;
+
+  function watchVideoRoot(root) {
+    if (!videoMutationObserver || !root) return;
+    try {
+      videoMutationObserver.observe(root, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ['style', 'class', 'hidden', 'src']
+      });
+    } catch (_) {}
+  }
+
+  function watchShadowRoot(root) {
+    if (!root || observedShadowRoots.has(root)) return;
+    observedShadowRoots.add(root);
+    watchVideoRoot(root);
+  }
+
+  function collectVideos(root = document, out = []) {
+    if (!root || !root.querySelectorAll) return out;
+    root.querySelectorAll('video').forEach((v) => out.push(v));
+    root.querySelectorAll('*').forEach((el) => {
+      if (el.shadowRoot) {
+        watchShadowRoot(el.shadowRoot);
+        collectVideos(el.shadowRoot, out);
+      }
+    });
+    return out;
+  }
+
+  function hasSourceCandidate(v) {
+    return !!(v.currentSrc || v.src || v.srcObject || (v.querySelector && v.querySelector('source[src]')));
+  }
+
+  function isElementVisiblyRendered(v) {
+    if (!v || !v.isConnected) return false;
+    let cur = v;
+    while (cur && cur.nodeType === 1) {
+      const cs = window.getComputedStyle(cur);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse' || parseFloat(cs.opacity || '1') <= 0.05) {
+        return false;
+      }
+      cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+    }
+    const r = v.getBoundingClientRect();
+    return r.width >= 120 && r.height >= 68;
+  }
+
+  function hiddenInside(v, root) {
+    let cur = v;
+    while (cur && cur.nodeType === 1) {
+      const cs = window.getComputedStyle(cur);
+      if (cs.display === 'none' || cs.visibility === 'hidden' || cs.visibility === 'collapse' || parseFloat(cs.opacity || '1') <= 0.05) return true;
+      if (cur === root) break;
+      cur = cur.parentElement || (cur.getRootNode && cur.getRootNode().host) || null;
+    }
+    return false;
+  }
+
+  function detectVideoState() {
+    let sawLoadingVideo = false;
+    const noteLoading = (v) => {
+      if (v && v.readyState === 0 && hasSourceCandidate(v)) sawLoadingVideo = true;
+    };
+
+    const pip = document.pictureInPictureElement;
+    if (pip && pip.tagName === 'VIDEO') {
+      if (pip.videoWidth > 0 && pip.videoHeight > 0) return { state: 'video', videoWidth: pip.videoWidth, videoHeight: pip.videoHeight };
+      noteLoading(pip);
+    }
+
+    const fs = document.fullscreenElement;
+    if (fs) {
+      const fsVideos = fs.tagName === 'VIDEO' ? [fs] : collectVideos(fs);
+      for (const v of fsVideos) {
+        if (hiddenInside(v, fs)) continue;
+        if (v.videoWidth > 0 && v.videoHeight > 0) return { state: 'video', videoWidth: v.videoWidth, videoHeight: v.videoHeight };
+        noteLoading(v);
+      }
+    }
+
+    const audioPlaying = () => {
+      const list = document.querySelectorAll ? document.querySelectorAll('audio') : [];
+      for (const a of list) if (!a.paused && !a.ended) return true;
+      return false;
+    };
+
+    for (const v of collectVideos(document)) {
+      if (!isElementVisiblyRendered(v)) continue;
+      if (v.videoWidth > 0 && v.videoHeight > 0) {
+        const r = v.getBoundingClientRect();
+        const decorative = v.muted && v.loop && !v.controls && v.duration > 0 && v.duration <= 20;
+        if (decorative && !(r.width >= 320 && r.height >= 180 && !audioPlaying())) continue;
+        return { state: 'video', videoWidth: v.videoWidth, videoHeight: v.videoHeight };
+      }
+      noteLoading(v);
+    }
+
+    if (sawLoadingVideo) return { state: 'unknown', videoWidth: 0, videoHeight: 0 };
+    return { state: 'audio', videoWidth: 0, videoHeight: 0 };
+  }
+
+  let lastPushedVideoState = null;
+  let videoHintTimer = null;
+  function scheduleVideoHintCheck() {
+    clearTimeout(videoHintTimer);
+    videoHintTimer = setTimeout(() => {
+      videoHintTimer = null;
+      let det;
+      try { det = detectVideoState(); } catch (_) { return; }
+      if (!det || det.state === lastPushedVideoState) return;
+      lastPushedVideoState = det.state;
+      try {
+        const p = chrome.runtime.sendMessage({ type: 'VIDEO_STATE_HINT', state: det.state, videoWidth: det.videoWidth, videoHeight: det.videoHeight });
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+      } catch (_) {}
+    }, 250);
+  }
+
+  function mutationTouchesVideo(records) {
+    for (const rec of records || []) {
+      const nodes = [];
+      if (rec.target) nodes.push(rec.target);
+      rec.addedNodes && rec.addedNodes.forEach((n) => nodes.push(n));
+      rec.removedNodes && rec.removedNodes.forEach((n) => nodes.push(n));
+      for (const n of nodes) {
+        if (!n || n.nodeType !== 1) continue;
+        if (n.tagName === 'VIDEO' || (n.querySelector && n.querySelector('video'))) return true;
+      }
+    }
+    return false;
+  }
+
+  for (const type of ['loadedmetadata', 'loadeddata', 'play', 'emptied', 'resize', 'enterpictureinpicture', 'leavepictureinpicture', 'fullscreenchange']) {
+    document.addEventListener(type, scheduleVideoHintCheck, { capture: true, passive: true });
+  }
+  if (typeof MutationObserver === 'function' && document.documentElement) {
+    videoMutationObserver = new MutationObserver((records) => {
+      let hasVideo = false;
+      try { hasVideo = collectVideos().length > 0; } catch (_) {}
+      // Ancestor attribute changes never name the <video>. An open shadow root is a separate tree.
+      // Either one still has to schedule a check when a video is on the page or we have already reported one.
+      if (mutationTouchesVideo(records) || lastPushedVideoState !== null || hasVideo) scheduleVideoHintCheck();
+    });
+    watchVideoRoot(document.documentElement);
+    try { collectVideos(); } catch (_) {}
+  }
+
   // 4. Message dispatcher
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (['TOGGLE_PLAY_PAUSE', 'PREV_TRACK', 'NEXT_TRACK', 'SEEK_AUDIO'].includes(message.type)) transportSeq++;
@@ -388,6 +542,9 @@
       case 'SET_VOLUME':
         setMediaVolume(message.volume);
         sendResponse({ success: true, volume: message.volume });
+        return true;
+      case 'GET_VIDEO_STATE':
+        sendResponse(detectVideoState());
         return true;
     }
   });

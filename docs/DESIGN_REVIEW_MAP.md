@@ -4,11 +4,11 @@ The actual surfaces, controls and workflows, with review coverage. Updated as ba
 
 Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and verified · ✖ removed
 
-## Surfaces (as of 1.5.1)
+## Surfaces (as of 1.5.5)
 
 | Surface | How you reach it | Regions (top → bottom) | Status |
 |---|---|---|---|
-| **The screen** (440 × 592) | Click the extension icon (or the Stay-open window) | Art slice (left) · full cover (top right) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · presets · physics (live spectrum + response) · ten rows in signal order (PITCH, HPF, LOW, MID, HI, AUTO, MATCH, VOL, LIM, CEIL) with band switches, mode menus and live bars · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–4; **confirmed by you 2026-10-03**; rows reordered and four dynamics rows in 1.5.0 (D-03): **your look pending** |
+| **The screen** (440 × 592) | Click the extension icon (or the Stay-open window) | Art slice (left) · full cover (top right) · title, artist, time · ♥ ⏮ −15 s ▶ +30 s ⏭ · AUDIO EQ switch + badge · MOVIE button · presets · physics (live spectrum + response) · ten rows in signal order (PITCH, HPF, LOW, MID, HI, AUTO, MATCH, VOL, LIM, CEIL) with band switches, mode menus and live bars · footer (Stay open, theme dots, Mini bar) | ✔ built per rounds 1–4; **confirmed by you 2026-10-03**; rows reordered and four dynamics rows in 1.5.0 (D-03): **your look pending**; MOVIE button in 1.5.5 (L-01): **your look and a film pending** |
 | Band switches | Tag at the left of each row | Popup and side panel: PITCH · HPF · LOW · MID · HI · AUTO · MATCH · VOL text tags (LIM and CEIL are labels: always on). The side panel's icon buttons of round 6 were replaced by the same words on your request (R-21 revised, 1.5.1) | ✔ R-15, R-21 revised; MATCH added 1.5.0 |
 | Dynamics switches and bars | The AUTO, MATCH, LIM and CEIL rows | Leveler menu (Full band · Slow release · Bass only) · MATCH tag · Limiter menu (Fast · Look-ahead) · Ceiling menu (Clean · Warm); a live 0 to 12 dB bar and figure on each of the four rows; defaults = the 1.4.0 sound | ✔ D-01, D-02 (objective checks W-DYN-*); **your listening pending** |
 | Physics | On the screen | **Live spectrum** (in vs out, real audio) · response curve (settings) · readout | ✔ R-12 → R-18 ("make it real") |
@@ -34,6 +34,7 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 | J-8 | Reload or update the extension while Tidal is open → the screen still works without a page refresh | ✔ H-02 (1.3.4), W-REINJECT-ORPHAN |
 | J-9 | Shift the key of a track (Pitch) without changing its speed | ✔ W-PITCH (objective, 1.4.0); **your listening pending** (P-01) |
 | J-10 | Hear when the leveler, limiter or ceiling is working (the bars), and switch to an alternative stage without losing the original sound | ✔ W-DYN-* (objective, 1.5.0), W-DYN-METERS-UI; **your listening pending** (D-01) |
+| J-11 | Movie mode: a video on the captured tab shortens the buffer by itself (MOVIE · AUTO); a click forces the short buffer on or the large one off; Shift-click returns to automatic. Music with no video stays on the large buffer | ✔ W-MOVIE-MODE, W-MOVIE-CONTRAST (1.5.5); **your ears on a film pending** (L-01) |
 
 ## Batches
 
@@ -50,7 +51,7 @@ Reload to 1.5.0, watch the four bars on a loud track, then try the switches one 
 
 ## Open items, parked 2026-10-10 while the click report is investigated
 
-Kept at your request ("keep all the open items available"). Each has its question batch; nothing below is built.
+Kept at your request ("keep all the open items available"). Each has its question batch. J-01, E-01 and L-01 are built; the rest below are not.
 
 | Item | Raised | What is waiting | Mockup |
 |---|---|---|---|
@@ -60,6 +61,6 @@ Kept at your request ("keep all the open items available"). Each has its questio
 | Listening and layout questions from 1.5.0 | 2026-10-04 | The switches on real music; Pitch on a track; Pitch row at the top or the bottom; the "Leveler" label; whether the diagram makes the point; Alt+M / Alt+E; the 56 px cover in the narrow panel | `docs/diagrams/leveler-explained-2026-10-04.png` |
 | Mini bar from the toolbar (M-01) | 2026-10-11 | Whether the second click, in the side panel, floats the bar; then one click anywhere in the panel (recommended) or a helper window | — |
 | The side panel's empty bottom (R-26) and the artist gauge (R-27) | 2026-10-11 | A (cover on top), B (album and artist cards at the bottom) or C (both); the gauge's lanes; the data source (R-08 reopened: MusicBrainz as an opt-in, recommended) | `docs/mockups/r14-a-cover-top.png`, `r14-b-album-artist.png`, `r14-c-both.png`, `r14-today.png` |
-| Low-delay switch for video (L-01) | 2026-10-11 | Only if lips look late with Pitch at 0 (recommended: not yet) | — |
+| Low-delay switch for video (L-01, built in 1.5.5) | 2026-10-11 | Your check: play a video with the EQ on and Pitch at 0. The MOVIE button should read MOVIE · AUTO and the sound should sit closer to the picture. Click it to force the large buffer (MOVIE · OFF) or the short one (MOVIE · ON). Shift-click returns to automatic. Music with no video should stay on the large buffer (MOVIE) | — |
 | Jumps on a narrow Tidal page; +30 s near the end goes to the next track (J-01, J-02, built in 1.5.3) | 2026-10-11 | Your check on real Tidal: +30 with the panel wide, and +30 in the last 30 s | — |
 | EQ after a restart or a tab reload: one icon click turns it on (E-01, built in 1.5.4) | 2026-10-11 | Your check: after a Chrome restart, turn AUDIO EQ on in the panel; if refused, click OK, then the icon once; the switch should flip to on within a second and the panel stay open | — |

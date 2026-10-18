@@ -10,6 +10,112 @@ const isTidalUrl = (url) => { try { const h = new URL(url).hostname; return h ==
 const reinjectedTabs = new Map(); // tabId -> how many times the page script was re-injected (diagnostics)
 let capturedTabId = null;
 
+// Movie mode (1.5.5, L-01). The service worker is the authority: the offscreen engine only applies a mode it has acknowledged.
+let movieState = {
+  captureSessionId: 0,
+  tabId: null,
+  effective: false,     // what offscreen.js is currently running
+  override: null,       // null = automatic, true = manual ON, false = manual OFF
+  detected: false,      // stable auto-detected video state on capturedTabId
+  audioStreak: 0        // debounce counter for video -> audio transitions
+};
+let movieStateHydrated = false;
+let movieStateHydrating = null;
+let movieOpQueue = Promise.resolve();
+let movieWatchTimer = null;
+let bgCaptureGen = 0; // one token per capture request, taken before the first await
+
+function enqueueMovieOp(fn) {
+  const run = movieOpQueue.then(fn, fn);
+  movieOpQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+async function ensureMovieState() {
+  if (movieStateHydrated) return movieState;
+  if (!movieStateHydrating) {
+    movieStateHydrating = (async () => {
+      try {
+        const data = await chrome.storage.session.get('movieState');
+        if (!movieStateHydrated && data && data.movieState && typeof data.movieState === 'object') {
+          const s = data.movieState;
+          movieState = {
+            captureSessionId: s.captureSessionId || 0,
+            tabId: s.tabId ?? null,
+            effective: !!s.effective,
+            override: s.override === true ? true : s.override === false ? false : null,
+            detected: !!s.detected,
+            audioStreak: s.audioStreak || 0
+          };
+        }
+      } finally {
+        movieStateHydrated = true;
+        movieStateHydrating = null;
+      }
+    })();
+  }
+  await movieStateHydrating;
+  return movieState;
+}
+
+function emptyMovieState() {
+  return { captureSessionId: 0, tabId: null, effective: false, override: null, detected: false, audioStreak: 0 };
+}
+
+// A save started under an older capture generation must not land after Stop or a newer capture.
+// Snapshot first, then write the current state again if the generation changed during the write.
+async function saveMovieState() {
+  const genAtCall = bgCaptureGen;
+  const snap = { ...movieState };
+  await chrome.storage.session.set({ movieState: snap }).catch(() => {});
+  if (genAtCall !== bgCaptureGen) {
+    await chrome.storage.session.set({ movieState: { ...movieState } }).catch(() => {});
+  }
+}
+
+// Hydration runs before capturedTabId is restored, so a live session must not be cleared there.
+// Call only once status is known and capture is idle.
+async function clearEndedCaptureMovieState(status) {
+  if (!status || status.isCapturing || capturedTabId !== null) return;
+  if (!(movieState.captureSessionId > 0)) return;
+  movieState = emptyMovieState();
+  await saveMovieState();
+}
+
+function moviePayload() {
+  return {
+    movieMode: !!movieState.effective,
+    movieModeSource: movieState.override === null ? 'auto' : 'manual',
+    movieOverride: movieState.override,
+    detectedVideo: !!movieState.detected
+  };
+}
+
+function broadcastMovieMode() {
+  const sent = chrome.runtime.sendMessage({ type: 'MOVIE_MODE_CHANGED', ...moviePayload() });
+  if (sent && typeof sent.catch === 'function') sent.catch(() => {});
+}
+
+function startMovieWatchTimer() {
+  if (movieWatchTimer) return;
+  movieWatchTimer = setInterval(() => { pollCapturedTabVideo().catch(() => {}); }, 1500);
+}
+
+function stopMovieWatchTimer() {
+  if (movieWatchTimer) clearInterval(movieWatchTimer);
+  movieWatchTimer = null;
+}
+
+function sendOffscreen(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage({ target: 'offscreen', ...message }, (res) => {
+      const err = chrome.runtime.lastError;
+      if (err) resolve({ success: false, error: err.message, lastError: err.message });
+      else resolve(res == null ? null : res);
+    });
+  });
+}
+
 // "Stay open": when on, the toolbar icon opens the screen in Chrome's side panel (docked beside the
 // page, it stays while you click anything) instead of the auto-closing popup. Chrome without a side
 // panel gets the standalone window instead. The icon click opens the panel through onActionClicked
@@ -229,11 +335,13 @@ async function ensureOffscreenDocument() {
 }
 
 function broadcastAudioState(isCapturing, tabId = null) {
-  chrome.runtime.sendMessage({
+  const sent = chrome.runtime.sendMessage({
     type: 'AUDIO_STATE_CHANGED',
     isCapturing,
-    tabId
-  }).catch(() => {});
+    tabId,
+    ...moviePayload()
+  });
+  if (sent && typeof sent.catch === 'function') sent.catch(() => {});
 
   if (tabId) {
     chrome.tabs.sendMessage(tabId, {
@@ -299,67 +407,308 @@ function explainCaptureError(err, tab, docked = false) {
   return msg;
 }
 
-async function startAudioCapture(tabId) {
+// Stop won after this attempt had already touched session or storage. Leave neither one saying capture is on.
+async function abandonCaptureStartup(tabId, sessionId) {
+  if (capturedTabId === tabId) capturedTabId = null;
+  if (capturedTabId == null || movieState.captureSessionId === sessionId) {
+    movieState = { captureSessionId: 0, tabId: null, effective: false, override: null, detected: false, audioStreak: 0 };
+    await saveMovieState();
+  }
+  stopMovieWatchTimer();
+  await chrome.storage.local.set({ capturedTabId: null, isAudioCapturing: false });
+  return new Error('Capture stopped during startup');
+}
+
+// entryGen is taken synchronously by the caller (or here, before the first await) and checked after every wait.
+async function startAudioCapture(tabId, entryGen = ++bgCaptureGen) {
+  const myBgGen = entryGen;
+  if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled before stream acquisition');
   // CRITICAL: Call getMediaStreamId immediately so the user gesture token from the message is fresh!
   const streamId = await chrome.tabCapture.getMediaStreamId({
     targetTabId: tabId
   });
+  if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled during stream acquisition');
 
-  await ensureOffscreenDocument();
+  return enqueueMovieOp(async () => {
+    if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled while waiting in queue');
+    await ensureMovieState();
+    if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled');
 
-  if (capturedTabId && capturedTabId !== tabId) {
-    await stopAudioCapture();
-  }
+    const stagedOverride = (movieState.captureSessionId === 0 && movieState.override !== null) ? movieState.override : null;
 
-  const stored = await chrome.storage.local.get(['currentParams', 'currentPreset', 'presets', 'dynamics']);
-  const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
-  const currentPreset = stored.currentPreset || "Punchy Bass & Clarity";
-  const params = stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS["Punchy Bass & Clarity"];
-  const dynamics = normaliseDynamics(stored.dynamics);
+    if (capturedTabId && capturedTabId !== tabId) {
+      await stopAudioCapture({ preserveGen: true });
+      if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled during prior-capture cleanup');
+    }
 
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({
-      target: 'offscreen',
+    const sessionId = Date.now() + Math.floor(Math.random() * 1000);
+    await ensureOffscreenDocument();
+    if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled during offscreen setup');
+
+    const stored = await chrome.storage.local.get(['currentParams', 'currentPreset', 'presets', 'dynamics']);
+    if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled during probe');
+    const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
+    const currentPreset = stored.currentPreset || 'Punchy Bass & Clarity';
+    const params = stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS['Punchy Bass & Clarity'];
+    const dynamics = normaliseDynamics(stored.dynamics);
+
+    const vRes = await probeTabVideoState(tabId, 250);
+    if (myBgGen !== bgCaptureGen) throw new Error('Capture cancelled during probe');
+
+    const effectiveOverride = (movieState.captureSessionId === 0 && movieState.override !== null) ? movieState.override : stagedOverride;
+    const initialDetected = vRes?.state === 'video';
+    const initialEffective = effectiveOverride !== null ? effectiveOverride : initialDetected;
+
+    const response = await sendOffscreen({
       type: 'START_AUDIO_CAPTURE',
       streamId,
       params,
-      dynamics
-    }, async (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else if (response?.error) {
-        reject(new Error(response.error));
-      } else {
-        capturedTabId = tabId;
-        await clearPendingEq();
-        await chrome.storage.local.set({ capturedTabId: tabId, isAudioCapturing: true });
-        broadcastAudioState(true, tabId);
-        resolve(response);
-      }
+      dynamics,
+      movieMode: initialEffective
     });
+
+    if (myBgGen !== bgCaptureGen) {
+      if (capturedTabId === null) await sendOffscreen({ type: 'STOP_AUDIO_CAPTURE' });
+      throw new Error('Capture stopped during startup');
+    }
+    if (response?.lastError || response?.success !== true || typeof response?.movieMode !== 'boolean') {
+      throw new Error(response?.lastError || response?.error || 'Audio engine did not acknowledge startup');
+    }
+
+    // Clear the pending switch-on before publishing this session. Stop during any of these
+    // waits must not leave storage, the watcher, or a broadcast saying capture is on.
+    await clearPendingEq();
+    if (myBgGen !== bgCaptureGen) throw await abandonCaptureStartup(tabId, sessionId);
+
+    capturedTabId = tabId;
+    movieState = {
+      captureSessionId: sessionId,
+      tabId,
+      effective: response.movieMode,
+      override: effectiveOverride,
+      detected: initialDetected,
+      audioStreak: 0
+    };
+    await saveMovieState();
+    if (myBgGen !== bgCaptureGen) throw await abandonCaptureStartup(tabId, sessionId);
+    await chrome.storage.local.set({ capturedTabId: tabId, isAudioCapturing: true });
+    if (myBgGen !== bgCaptureGen) throw await abandonCaptureStartup(tabId, sessionId);
+    startMovieWatchTimer();
+    setTimeout(() => { pollCapturedTabVideo().catch(() => {}); }, 400);
+    broadcastAudioState(true, tabId);
+    broadcastMovieMode();
+    return response;
   });
 }
 
-async function stopAudioCapture() {
+async function stopAudioCapture({ preserveGen = false } = {}) {
+  if (!preserveGen) bgCaptureGen++;
+  stopMovieWatchTimer();
   const oldTabId = capturedTabId;
   capturedTabId = null;
+  await ensureMovieState();
+  movieState = { captureSessionId: 0, tabId: null, effective: false, override: null, detected: false, audioStreak: 0 };
+  await saveMovieState();
   await clearPendingEq();
   await chrome.storage.local.set({ capturedTabId: null, isAudioCapturing: false });
 
-  if (!(await isOffscreenOpen())) {
+  const finish = () => {
     broadcastAudioState(false, oldTabId);
+    broadcastMovieMode();
     return { success: true };
+  };
+
+  if (!(await isOffscreenOpen())) return finish();
+  await sendOffscreen({ type: 'STOP_AUDIO_CAPTURE' });
+  return finish();
+}
+
+function probeTabVideoState(tabId, timeoutMs = 600) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value && value.state ? value : { state: 'unknown', videoWidth: 0, videoHeight: 0 });
+    };
+    const timer = setTimeout(() => finish({ state: 'unknown' }), timeoutMs);
+    const ask = (allowInject) => {
+      let callbackRan = false;
+      try {
+        chrome.tabs.sendMessage(tabId, { type: 'GET_VIDEO_STATE' }, (res) => {
+          callbackRan = true;
+          const err = (chrome.runtime.lastError && chrome.runtime.lastError.message) || '';
+          if (settled) return;
+          const missing = err.includes('Receiving end does not exist') || err.includes('Could not establish connection');
+          if (err && allowInject && missing) {
+            Promise.resolve(chrome.scripting.executeScript({
+              target: { tabId },
+              files: PAGE_SCRIPT_FILES,
+              injectImmediately: true
+            })).then(() => {
+              reinjectedTabs.set(tabId, (reinjectedTabs.get(tabId) || 0) + 1);
+              if (!settled) ask(false);
+            }).catch(() => finish({ state: 'unknown' }));
+            return;
+          }
+          if (err || !res || !res.state) finish({ state: 'unknown' });
+          else finish(res);
+        });
+      } catch (_) {
+        if (!callbackRan) finish({ state: 'unknown' });
+      }
+    };
+    ask(true);
+  });
+}
+
+async function pollCapturedTabVideo(opts = {}) {
+  await ensureMovieState();
+  if (!capturedTabId || !movieState.captureSessionId) return;
+  const sessionId = movieState.captureSessionId;
+  const tabId = capturedTabId;
+  const res = await probeTabVideoState(tabId, 700);
+  if (capturedTabId !== tabId || movieState.captureSessionId !== sessionId) return;
+  if (res.state === 'video') {
+    movieState.audioStreak = 0;
+    movieState.detected = true;
+  } else if (res.state === 'audio') {
+    if (movieState.detected) {
+      movieState.audioStreak = (movieState.audioStreak || 0) + 1;
+      if (movieState.audioStreak >= 2) {
+        movieState.detected = false;
+        movieState.audioStreak = 0;
+      }
+    } else {
+      movieState.detected = false;
+      movieState.audioStreak = 0;
+    }
+  }
+  await saveMovieState();
+  if (capturedTabId !== tabId || movieState.captureSessionId !== sessionId) return;
+  if (movieState.override === null && movieState.detected !== movieState.effective) {
+    // Wake recovery is already on this queue, so it applies the switch itself. Every other caller waits its turn.
+    const run = () => applyDetectedMovieMode(sessionId, tabId);
+    if (opts.inline) await run();
+    else await enqueueMovieOp(run);
+  }
+}
+
+async function applyDetectedMovieMode(sessionId, tabId) {
+  if (capturedTabId !== tabId || movieState.captureSessionId !== sessionId || movieState.override !== null) return;
+  const wantMode = !!movieState.detected;
+  if (wantMode === movieState.effective) return;
+  const engineRes = await sendOffscreen({ type: 'SET_ENGINE_MOVIE_MODE', movieMode: wantMode });
+  if (capturedTabId !== tabId || movieState.captureSessionId !== sessionId || movieState.override !== null) return;
+  if (engineRes?.success === true && typeof engineRes.movieMode === 'boolean') {
+    movieState.effective = engineRes.movieMode;
+    await saveMovieState();
+    broadcastMovieMode();
+  }
+}
+
+async function handleSetMovieMode(message) {
+  await ensureMovieState();
+  const status = await getActualCaptureStatus();
+  const sessionId = movieState.captureSessionId;
+  const tabId = status.tabId;
+  let candidateOverride;
+  if (message.resetAuto === true) candidateOverride = null;
+  else if (typeof message.movieMode === 'boolean') candidateOverride = message.movieMode;
+  else {
+    const cur = status.isCapturing ? !!movieState.effective : (movieState.override !== null ? !!movieState.override : false);
+    candidateOverride = !cur;
   }
 
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage({
-      target: 'offscreen',
-      type: 'STOP_AUDIO_CAPTURE'
-    }, () => {
-      if (chrome.runtime.lastError) {}
-      broadcastAudioState(false, oldTabId);
-      resolve({ success: true });
-    });
+  if (!status.isCapturing) {
+    if (capturedTabId !== null || movieState.captureSessionId !== 0) {
+      return { success: false, error: 'Capture session changed', ...moviePayload() };
+    }
+    movieState.override = candidateOverride;
+    movieState.effective = candidateOverride !== null ? candidateOverride : false;
+    await saveMovieState();
+    broadcastMovieMode();
+    return { success: true, ...moviePayload() };
+  }
+
+  if (candidateOverride === null) {
+    const vRes = await probeTabVideoState(tabId, 400);
+    if (capturedTabId !== tabId || movieState.captureSessionId !== sessionId) {
+      return { success: false, error: 'Capture session changed', ...moviePayload() };
+    }
+    if (vRes?.state === 'video') { movieState.detected = true; movieState.audioStreak = 0; }
+    else if (vRes?.state === 'audio') { movieState.detected = false; movieState.audioStreak = 0; }
+  }
+  const targetMode = candidateOverride !== null ? candidateOverride : !!movieState.detected;
+  const engineRes = await sendOffscreen({ type: 'SET_ENGINE_MOVIE_MODE', movieMode: targetMode });
+  if (capturedTabId !== tabId || movieState.captureSessionId !== sessionId) {
+    return { success: false, error: 'Capture session changed', ...moviePayload() };
+  }
+  if (engineRes?.success === true && typeof engineRes.movieMode === 'boolean') {
+    movieState.override = candidateOverride;
+    movieState.effective = engineRes.movieMode;
+    await saveMovieState();
+    broadcastMovieMode();
+    return { success: true, ...moviePayload(), baseLatency: engineRes.baseLatency ?? null };
+  }
+  return { success: false, error: engineRes?.error || 'Could not switch Movie mode', ...moviePayload() };
+}
+
+async function recoverCaptureSessionOnWake() {
+  return enqueueMovieOp(async () => {
+    const wakeGen = bgCaptureGen;
+    await ensureMovieState();
+    if (wakeGen !== bgCaptureGen) return;
+    const status = await getActualCaptureStatus();
+    if (wakeGen !== bgCaptureGen) return;
+    if (!(status.isCapturing && status.tabId)) {
+      await clearEndedCaptureMovieState(status);
+      return;
+    }
+    const engine = await sendOffscreen({ type: 'GET_AUDIO_STATUS' });
+    if (wakeGen !== bgCaptureGen) return;
+    const engineMovieMode = !!engine?.movieMode;
+    if (movieState.tabId !== status.tabId || !movieState.captureSessionId) {
+      movieState = {
+        captureSessionId: Date.now(),
+        tabId: status.tabId,
+        effective: engineMovieMode,
+        override: movieState.tabId === status.tabId ? movieState.override : null,
+        detected: engineMovieMode,
+        audioStreak: 0
+      };
+    } else {
+      movieState.effective = engineMovieMode;
+    }
+    await saveMovieState();
+    if (wakeGen !== bgCaptureGen) {
+      await saveMovieState();
+      return;
+    }
+    if (movieState.override !== null && movieState.effective !== movieState.override) {
+      const sessionId = movieState.captureSessionId;
+      const tabId = status.tabId;
+      const want = movieState.override;
+      // Already on the movie queue. Waiting for another turn here would wait for this function.
+      if (capturedTabId === tabId && movieState.captureSessionId === sessionId && movieState.override === want) {
+        const res = await sendOffscreen({ type: 'SET_ENGINE_MOVIE_MODE', movieMode: !!want });
+        if (wakeGen !== bgCaptureGen) return;
+        if (capturedTabId === tabId && movieState.captureSessionId === sessionId && movieState.override === want
+            && res?.success === true && typeof res.movieMode === 'boolean') {
+          movieState.effective = res.movieMode;
+          await saveMovieState();
+          if (wakeGen !== bgCaptureGen) {
+            await saveMovieState();
+            return;
+          }
+          broadcastMovieMode();
+        }
+      }
+    }
+    if (wakeGen !== bgCaptureGen) return;
+    startMovieWatchTimer();
+    await pollCapturedTabVideo({ inline: true }).catch(() => {});
   });
 }
 
@@ -453,6 +802,11 @@ chrome.tabs.onRemoved.addListener(async (tabId) => {
   }
 });
 
+// A navigation on the captured tab can swap audio for video. The watcher also polls on its own timer.
+chrome.tabs.onUpdated.addListener((tabId) => {
+  if (tabId && tabId === capturedTabId) pollCapturedTabVideo().catch(() => {});
+});
+
 // Stay-open window (single instance). `minibar` asks the window to highlight its Mini bar button.
 async function findFallbackWindow() {
   const url = chrome.runtime.getURL(FALLBACK_WINDOW_URL);
@@ -512,14 +866,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     try {
       switch (message.type) {
         case 'START_CAPTURE_FOR_TAB': {
+          const entryGen = ++bgCaptureGen; // before the first await, so Stop during tab lookup still owns this request
           const targetTab = await findAudioCaptureTab(message.tabId || sender.tab?.id);
+          if (entryGen !== bgCaptureGen) {
+            sendResponse({ success: false, error: 'Capture cancelled before stream acquisition', ...moviePayload() });
+            return;
+          }
           if (!targetTab?.id) {
-            sendResponse({ success: false, error: 'No active media tab found. Open Tidal or any music/video tab.' });
+            sendResponse({ success: false, error: 'No active media tab found. Open Tidal or any music/video tab.', ...moviePayload() });
             return;
           }
           try {
-            const result = await startAudioCapture(targetTab.id); // first, while the click is fresh
-            sendResponse({ success: true, result, capturedTabId, tabTitle: targetTab.title || null });
+            const result = await startAudioCapture(targetTab.id, entryGen); // first, while the click is fresh
+            sendResponse({ success: true, result, capturedTabId, tabTitle: targetTab.title || null, ...moviePayload() });
           } catch (err) {
             // The icon completes a refused switch-on only while it opens the panel (Stay open on); otherwise it
             // opens the popup, and the popup's own advice applies.
@@ -528,24 +887,43 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               pendingEq = { tabId: targetTab.id, at: Date.now() };
               await chrome.storage.session.set({ pendingEq }).catch(() => {});
             }
-            sendResponse({ success: false, error: explainCaptureError(err, targetTab, docked) });
+            await ensureMovieState();
+            sendResponse({ success: false, error: explainCaptureError(err, targetTab, docked), ...moviePayload() });
           }
           break;
         }
 
         case 'CAPTURE_ENDED': {
           // Sent by the offscreen document when the captured stream ends (e.g. the tab was closed).
-          const oldTabId = capturedTabId || (await chrome.storage.local.get('capturedTabId')).capturedTabId || null;
-          capturedTabId = null;
-          await chrome.storage.local.set({ capturedTabId: null, isAudioCapturing: false });
-          broadcastAudioState(false, oldTabId);
-          sendResponse({ success: true });
+          if (!capturedTabId) {
+            capturedTabId = (await chrome.storage.local.get('capturedTabId')).capturedTabId || null;
+          }
+          await stopAudioCapture();
+          sendResponse({ success: true, ...moviePayload() });
           break;
         }
 
         case 'STOP_CAPTURE': {
           const result = await stopAudioCapture();
-          sendResponse({ success: true, result });
+          sendResponse({ success: true, result, ...moviePayload() });
+          break;
+        }
+
+        case 'SET_MOVIE_MODE': {
+          const result = await enqueueMovieOp(() => handleSetMovieMode(message));
+          sendResponse(result);
+          break;
+        }
+
+        case 'VIDEO_STATE_HINT': {
+          const hintTab = sender.tab && sender.tab.id;
+          if (!hintTab) { sendResponse({ ignored: true }); break; }
+          let liveId = capturedTabId;
+          if (!liveId) liveId = (await getActualCaptureStatus()).tabId;
+          if (hintTab !== liveId) { sendResponse({ ignored: true }); break; }
+          startMovieWatchTimer();
+          await pollCapturedTabVideo();
+          sendResponse({ success: true, ...moviePayload() });
           break;
         }
 
@@ -601,10 +979,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         case 'GET_STATE': {
+          await ensureMovieState();
           const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'stayOpen', 'dynamics']);
           const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
           const currentPreset = stored.currentPreset || "Punchy Bass & Clarity";
           const status = await getActualCaptureStatus();
+          await clearEndedCaptureMovieState(status);
           let tabTitle = null;
           if (status.isCapturing && status.tabId) {
             try { tabTitle = (await chrome.tabs.get(status.tabId)).title || null; } catch { tabTitle = null; }
@@ -619,7 +999,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             currentPreset,
             currentParams: stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS["Punchy Bass & Clarity"],
             stayOpen: !!stored.stayOpen,
-            dynamics: normaliseDynamics(stored.dynamics)
+            dynamics: normaliseDynamics(stored.dynamics),
+            ...moviePayload()
           });
           break;
         }
@@ -777,3 +1158,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return true;
 });
+
+// Wake the movie-mode watcher even when every popup and panel is closed. The script runs again each time the worker starts.
+recoverCaptureSessionOnWake().catch(() => {});
