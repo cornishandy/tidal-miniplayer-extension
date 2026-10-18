@@ -136,7 +136,7 @@ function loadOffscreen() {
   vm.runInContext(read('offscreen.js') + `
     globalThis.__movieTest = () => ({
       currentStream, audioCtx, isCapturing, pitchNode, bandLevelerNode, matchNode, lookaheadNode,
-      bassNode, hpfNode, autoBalanceComp, currentMovieMode, captureGen, pitchHoldTimer, pitchPrimed
+      bassNode, hpfNode, autoBalanceComp, currentMovieMode, captureGen, pitchHoldTimer, pitchPrimed, pitchWetGain, pitchDryGain, currentParams
     });
     globalThis.__armHold = () => { pitchHoldTimer = setTimeout(() => { globalThis.__holdFired = true; }, 5000); };
     globalThis.__setDynamics = (d) => { currentDynamics = d; };
@@ -993,4 +993,57 @@ test('content: hiding an ancestor and a change inside an open shadow root both p
     assert.equal(hint && hint.type, 'VIDEO_STATE_HINT');
     assert.equal(hint.state, 'audio');
   }
+});
+
+test("offscreen (1.5.6, L-02): pitchTarget, applyRoutingToGraph, and applyRoutingState lock Pitch off in Movie mode while keeping saved semitones", async () => {
+  const eng = loadOffscreen();
+  const started = await eng.sandbox.startCapture("sid-pitch", { semitones: 6, stageBypass: { pitch: false } }, null, true);
+  assert.equal(started.success, true);
+  assert.equal(started.movieMode, true);
+  assert.equal(started.pitchLockedByMovie, true);
+  assert.equal(started.effectivePitch, 0);
+  assert.equal(started.effectivePitchBypassed, true);
+  assert.equal(started.effectiveSemitones, 0);
+  assert.equal(eng.state().currentParams.semitones, 6);
+  assert.equal(eng.state().currentParams.stageBypass.pitch, false);
+  assert.equal(eng.sandbox.pitchTarget(true), 0);
+  assert.equal(eng.sandbox.pitchTarget(false), 6);
+  assert.equal(eng.state().pitchNode.parameters.get("semitones").value, 0);
+  assert.equal(eng.state().pitchWetGain.gain.value, 0);
+  assert.equal(eng.state().pitchDryGain.gain.value, 1);
+
+  // Even if the pitch worklet posts { primed: true } while Movie mode is active, applyRoutingState passes movieMode: currentMovieMode so wet stays 0.
+  eng.state().pitchNode.port.onmessage({ data: { primed: true } });
+  assert.equal(eng.state().pitchWetGain.gain.value, 0);
+  assert.equal(eng.state().pitchDryGain.gain.value, 1);
+
+  // Live UPDATE_AUDIO_PARAMS while Movie mode is true updates saved semitones (-4) but keeps worklet target at 0 and wetGain at 0.
+  const upd = await eng.call("UPDATE_AUDIO_PARAMS", { params: { semitones: -4, stageBypass: { pitch: false } } });
+  assert.equal(upd.responded.success, true);
+  assert.equal(upd.responded.effectivePitchBypassed, true);
+  assert.equal(upd.responded.effectiveSemitones, 0);
+  assert.equal(eng.state().currentParams.semitones, -4);
+  assert.equal(eng.state().pitchNode.parameters.get("semitones").value, 0);
+  assert.equal(eng.state().pitchWetGain.gain.value, 0);
+  assert.equal(eng.state().pitchDryGain.gain.value, 1);
+
+  // Direct applyRoutingToGraph call with movieMode: true and semitones: 3 forces pitchWetGain: 0, pitchDryGain: 1.
+  const mockWet = { gain: { value: 1 } };
+  const mockDry = { gain: { value: 0 } };
+  eng.sandbox.applyRoutingToGraph({ bypassed: false, pitchBypassed: false, movieMode: true, semitones: 3, pitchWetGain: mockWet, pitchDryGain: mockDry });
+  assert.equal(mockWet.gain.value, 0);
+  assert.equal(mockDry.gain.value, 1);
+
+  // Switching setMovieMode(false) rebuilds the playback graph and restores the saved -4 st shift on the new pitchNode.
+  const exited = await eng.sandbox.setMovieMode(false);
+  assert.equal(exited.success, true);
+  assert.equal(exited.movieMode, false);
+  assert.equal(exited.pitchLockedByMovie, false);
+  assert.equal(exited.effectivePitch, -4);
+  assert.equal(exited.effectivePitchBypassed, false);
+  assert.equal(exited.effectiveSemitones, -4);
+  assert.equal(eng.state().pitchNode.parameters.get("semitones").value, -4);
+  eng.state().pitchNode.port.onmessage({ data: { primed: true } });
+  assert.equal(eng.state().pitchWetGain.gain.value, 1);
+  assert.equal(eng.state().pitchDryGain.gain.value, 0);
 });

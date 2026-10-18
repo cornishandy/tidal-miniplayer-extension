@@ -51,8 +51,9 @@
           <span class="slider-round"></span>
         </label>
         <span id="eq-power-status-badge" class="power-badge off">○ OFF</span>
-        <button type="button" id="btn-movie-mode" class="movie-badge off" aria-pressed="false" aria-label="Movie mode" title="Movie mode (low audio delay for video): switches on automatically for videos. Click to toggle either way; Shift-click for automatic.">MOVIE</button>
+        <button type="button" id="btn-movie-mode" class="movie-badge off" aria-pressed="false" aria-label="Movie mode" title="Movie / low-latency mode: auto-activates on video tabs to use a short audio buffer and lock Pitch off (~140 ms granular window) for tight lip-sync. Click to override; Shift-click for automatic.">MOVIE</button>
       </section>
+      <div id="movie-status-line" class="movie-status-line off" role="status" aria-live="polite">Music buffer · auto low-delay on video</div>
 
       <section class="eq-pane">
         <!-- Presets -->

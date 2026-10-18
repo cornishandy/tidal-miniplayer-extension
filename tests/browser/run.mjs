@@ -1037,30 +1037,59 @@ try {
     const ratio = (a, b) => { const x = L(a), y = L(b); const hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
     const btn = document.getElementById('btn-movie-mode');
     const bar = document.querySelector('.status-bar');
+    const line = document.getElementById('movie-status-line');
+    const pitchRow = document.querySelector('.eq-row[data-band="pitch"]');
+    const pitchSmall = pitchRow ? pitchRow.querySelector('.eq-label small') : null;
+    const valPitch = document.getElementById('val-pitch');
     const themes = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
     const states = [['off', 'MOVIE'], ['on', 'MOVIE · ON'], ['manual-off', 'MOVIE · OFF']];
+    const lineStates = ['off', 'on active', 'manual-off', 'on active alert'];
     const rows = [];
     for (const theme of themes) {
       document.body.className = (document.body.className.replace(/theme-\S+/g, '').trim() + ' ' + theme).trim();
+      const pageBg = parse(getComputedStyle(document.body).backgroundColor) || { r: 18, g: 18, b: 22, a: 1 };
       for (const [cls, text] of states) {
         btn.className = 'movie-badge ' + cls;
         btn.textContent = text;
         const fg = parse(getComputedStyle(btn).color);
         let bg = parse(getComputedStyle(btn).backgroundColor);
         const barBg = parse(getComputedStyle(bar).backgroundColor);
-        const pageBg = parse(getComputedStyle(document.body).backgroundColor) || { r: 18, g: 18, b: 22, a: 1 };
         let surface = barBg && barBg.a < 1 ? over(barBg, pageBg) : (barBg || pageBg);
         if (bg && bg.a < 1) bg = over(bg, surface);
-        rows.push({ theme, cls, ratio: +ratio(fg, bg).toFixed(2) });
+        rows.push({ theme, target: 'badge', cls, ratio: +ratio(fg, bg).toFixed(2) });
+      }
+      if (line) {
+        for (const lcls of lineStates) {
+          line.className = 'movie-status-line ' + lcls;
+          const lfg = parse(getComputedStyle(line).color);
+          let lbg = parse(getComputedStyle(line).backgroundColor);
+          if (lbg && lbg.a < 1) lbg = over(lbg, pageBg);
+          rows.push({ theme, target: 'status-line', cls: lcls, ratio: +ratio(lfg, lbg || pageBg).toFixed(2) });
+        }
+      }
+      if (pitchRow && pitchSmall && valPitch) {
+        pitchRow.classList.add('is-off', 'movie-locked');
+        const rowBgRaw = parse(getComputedStyle(pitchRow).backgroundColor);
+        const rowBg = rowBgRaw && rowBgRaw.a < 1 ? over(rowBgRaw, pageBg) : (rowBgRaw || pageBg);
+        const labelOp = parseFloat(getComputedStyle(pitchRow.querySelector('.eq-label')).opacity || '1');
+        const valOp = parseFloat(getComputedStyle(valPitch).opacity || '1');
+        const sfgRaw = parse(getComputedStyle(pitchSmall).color);
+        const vfgRaw = parse(getComputedStyle(valPitch).color);
+        const sfg = over({ ...sfgRaw, a: (sfgRaw.a ?? 1) * labelOp }, rowBg);
+        const vfg = over({ ...vfgRaw, a: (vfgRaw.a ?? 1) * valOp }, rowBg);
+        rows.push({ theme, target: 'pitch-small-locked', cls: 'movie-locked', ratio: +ratio(sfg, rowBg).toFixed(2) });
+        rows.push({ theme, target: 'val-pitch-locked', cls: 'movie-locked', ratio: +ratio(vfg, rowBg).toFixed(2) });
+        pitchRow.classList.remove('is-off', 'movie-locked');
       }
     }
     document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
     document.body.classList.add('theme-cyan');
     btn.className = 'movie-badge off';
     btn.textContent = 'MOVIE';
+    if (line) line.className = 'movie-status-line off';
     return rows;
   });
-  record('W-MOVIE-CONTRAST', 'Movie badge text is at least 4.5:1 against its button on all five themes, off, on and manual-off',
+  record('W-MOVIE-CONTRAST', 'Movie badge, #movie-status-line (off, on, manual-off, alert), and locked Pitch labels stay at least 4.5:1 on all five themes',
     contrast.every((r) => r.ratio >= 4.5) ? 'PASS' : 'FAIL', contrast);
 
   // ---- W-MOVIE-MODE: audio stays on the large buffer; video switches to the short one; the button can force either ----
@@ -1300,6 +1329,189 @@ try {
       audioLabel, audioOn, audioOnEng, audioOff, audioAuto, stopped: { movieMode: stopped?.movieMode, movieOverride: stopped?.movieOverride },
       bases: { playback: audioEng && audioEng.base, interactive: videoEng && videoEng.base }
     });
+
+  // ---- W-MOVIE-PITCH-LOCK: Movie mode locks Pitch off (0 st, wet=0/dry=1), preserves saved preset pitch without marking Modified, blocks Pitch controls with a height-neutral alert, and restores Pitch when Movie mode turns off (L-02, 1.5.6) ----
+  const pitchLock = await (async () => {
+    const pPage = await context.newPage();
+    watchRequests(pPage);
+    await pPage.goto(MEDIA_URL + '?movie-pitch');
+    await pPage.evaluate(() => document.getElementById('a').play());
+    const pTabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, MEDIA_URL + '?movie-pitch');
+    await sendFrom(popupMovie, { type: 'START_CAPTURE_FOR_TAB', tabId: pTabId });
+    await sleep(900);
+
+    // 1. Check initial AUTO (off) status line geometry & text
+    const autoLine = await popupMovie.evaluate(() => {
+      const el = document.getElementById('movie-status-line');
+      const r = el.getBoundingClientRect();
+      return {
+        text: el.textContent.trim(),
+        cls: el.className,
+        height: Math.round(r.height),
+        singleLine: el.scrollWidth <= el.clientWidth + 1,
+        bodyH: +document.body.getBoundingClientRect().height.toFixed(1),
+        subTop: +document.getElementById('slider-bass').getBoundingClientRect().top.toFixed(1),
+        pitchTop: +document.getElementById('slider-pitch').getBoundingClientRect().top.toFixed(1)
+      };
+    });
+
+    // 2. Save a custom preset "Movie Pitch +4" with semitones: 4.0 while in normal playback mode
+    const pitchPresetParams = { bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 4, autoBalance: false, bypass: false, stageBypass: { hpf: false, bass: false, mid: false, high: false, pitch: false, gain: false } };
+    await sendFrom(popupMovie, { type: 'SAVE_PRESET', name: 'Movie Pitch +4', params: pitchPresetParams });
+    await sendFrom(popupMovie, { type: 'SET_ACTIVE_PRESET', presetName: 'Movie Pitch +4' });
+    await sendFrom(popupMovie, { type: 'UPDATE_AUDIO_PARAMS', params: pitchPresetParams });
+    await sleep(400);
+    await popupMovie.close();
+    popupMovie = adopt(await openPopup());
+    const beforeMovieOn = await popupMovie.evaluate(() => ({
+      preset: document.getElementById('preset-select').value,
+      badge: document.getElementById('preset-status-badge').textContent.trim(),
+      valPitch: document.getElementById('val-pitch').textContent.trim(),
+      subText: document.querySelector('.eq-row[data-band="pitch"] .eq-label small').textContent.trim(),
+      bodyH: +document.body.getBoundingClientRect().height.toFixed(1),
+      subTop: +document.getElementById('slider-bass').getBoundingClientRect().top.toFixed(1),
+      pitchTop: +document.getElementById('slider-pitch').getBoundingClientRect().top.toFixed(1)
+    }));
+
+    // 3. Click MOVIE to force Movie mode ON while "+4.0 st" preset is active
+    await popupMovie.click('#btn-movie-mode');
+    await sleep(750);
+    const engOn = (await evalOffscreen(`({
+      movie: currentMovieMode,
+      target: pitchTarget(),
+      savedSemitones: currentParams.semitones,
+      wet: pitchWetGain ? pitchWetGain.gain.value : null,
+      dry: pitchDryGain ? pitchDryGain.gain.value : null,
+      nodeSt: pitchNode ? pitchNode.parameters.get('semitones').value : null
+    })`)).value;
+
+    const uiOnAlert = await popupMovie.evaluate(() => {
+      const el = document.getElementById('movie-status-line');
+      const tag = document.querySelector('.band-tag[data-band="pitch"]');
+      const val = document.getElementById('val-pitch');
+      const vals = [...document.querySelectorAll('.eq-val')];
+      const valBoxOverflowCount = vals.filter((v) => v.scrollWidth > v.clientWidth + 1).length;
+      return {
+        lineText: el.textContent.trim(),
+        lineCls: el.className,
+        lineH: Math.round(el.getBoundingClientRect().height),
+        singleLine: el.scrollWidth <= el.clientWidth + 1,
+        tagCls: tag.className,
+        tagPressed: tag.getAttribute('aria-pressed'),
+        tagDisabled: tag.getAttribute('aria-disabled'),
+        subText: document.querySelector('.eq-row[data-band="pitch"] .eq-label small').textContent.trim(),
+        valText: val.textContent.trim(),
+        valBoxOverflowCount,
+        badge: document.getElementById('preset-status-badge').textContent.trim(),
+        sliderVal: parseFloat(document.getElementById('slider-pitch').value),
+        bodyH: +document.body.getBoundingClientRect().height.toFixed(1),
+        subTop: +document.getElementById('slider-bass').getBoundingClientRect().top.toFixed(1),
+        pitchTop: +document.getElementById('slider-pitch').getBoundingClientRect().top.toFixed(1)
+      };
+    });
+
+    // Wait for alert to dismiss (4.5s) and verify steady-state status line
+    await sleep(4700);
+    const uiOnSteady = await popupMovie.evaluate(() => {
+      const el = document.getElementById('movie-status-line');
+      return {
+        lineText: el.textContent.trim(),
+        lineCls: el.className,
+        singleLine: el.scrollWidth <= el.clientWidth + 1,
+        bodyH: +document.body.getBoundingClientRect().height.toFixed(1),
+        subTop: +document.getElementById('slider-bass').getBoundingClientRect().top.toFixed(1),
+        pitchTop: +document.getElementById('slider-pitch').getBoundingClientRect().top.toFixed(1)
+      };
+    });
+
+    // 4. Attempt to click PITCH tag, click Pitch nudge +, and press ArrowRight on #slider-pitch while Movie mode is ON
+    await popupMovie.click('.band-tag[data-band="pitch"]', { force: true });
+    await sleep(100);
+    const afterTagClick = await popupMovie.evaluate(() => ({
+      lineText: document.getElementById('movie-status-line').textContent.trim(),
+      lineCls: document.getElementById('movie-status-line').className,
+      sliderVal: parseFloat(document.getElementById('slider-pitch').value),
+      badge: document.getElementById('preset-status-badge').textContent.trim()
+    }));
+    await popupMovie.click('.eq-nudge-btn[data-target="slider-pitch"][data-action="up"]', { force: true });
+    await popupMovie.focus('#slider-pitch');
+    await popupMovie.keyboard.press('ArrowRight');
+    await sleep(150);
+    const afterBlockedInputs = await popupMovie.evaluate(() => ({
+      lineText: document.getElementById('movie-status-line').textContent.trim(),
+      sliderVal: parseFloat(document.getElementById('slider-pitch').value),
+      valText: document.getElementById('val-pitch').textContent.trim(),
+      badge: document.getElementById('preset-status-badge').textContent.trim(),
+      bodyH: +document.body.getBoundingClientRect().height.toFixed(1)
+    }));
+
+    // 5. Nudge Bass (+) and click Update on the custom preset while in Movie mode; verify saved semitones: 4 is preserved in storage
+    await popupMovie.click('.eq-nudge-btn[data-target="slider-bass"][data-action="up"]');
+    await sleep(200);
+    await popupMovie.click('#btn-update-preset');
+    await sleep(250);
+    const savedPresetInStorage = await popupMovie.evaluate(() => new Promise((r) => {
+      chrome.storage.local.get(['presets'], (res) => r(res.presets?.['Movie Pitch +4'] || null));
+    }));
+
+    // 6. Click MOVIE to switch to MOVIE · OFF and verify Pitch (+4.0 st) immediately restores in UI and engine
+    await popupMovie.click('#btn-movie-mode');
+    await sleep(750);
+    const uiOff = await popupMovie.evaluate(() => ({
+      btnText: document.getElementById('btn-movie-mode').textContent.trim(),
+      lineText: document.getElementById('movie-status-line').textContent.trim(),
+      lineCls: document.getElementById('movie-status-line').className,
+      tagPressed: document.querySelector('.band-tag[data-band="pitch"]').getAttribute('aria-pressed'),
+      tagDisabled: document.querySelector('.band-tag[data-band="pitch"]').getAttribute('aria-disabled'),
+      subText: document.querySelector('.eq-row[data-band="pitch"] .eq-label small').textContent.trim(),
+      valText: document.getElementById('val-pitch').textContent.trim()
+    }));
+    const engOff = (await evalOffscreen(`({
+      movie: currentMovieMode,
+      target: pitchTarget(),
+      savedSemitones: currentParams.semitones
+    })`)).value;
+
+    // Clean up custom preset and restore Flat (Bypass) + stop capture
+    await sendFrom(popupMovie, { type: 'DELETE_PRESET', name: 'Movie Pitch +4' });
+    await sendFrom(popupMovie, { type: 'SET_ACTIVE_PRESET', presetName: 'Flat (Bypass)' });
+    await sendFrom(popupMovie, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: true, stageBypass: { hpf: false, bass: false, mid: false, high: false, pitch: false, gain: false } } });
+    await sleep(250);
+    await sendFrom(popupMovie, { type: 'STOP_CAPTURE' });
+    await sleep(300);
+    await pPage.close();
+
+    return {
+      autoLine,
+      beforeMovieOn,
+      engOn,
+      uiOnAlert,
+      uiOnSteady,
+      afterTagClick,
+      afterBlockedInputs,
+      savedPresetInStorage,
+      uiOff,
+      engOff
+    };
+  })();
+  const pitchLockOk = pitchLock.autoLine.height === 16 && pitchLock.autoLine.singleLine && pitchLock.autoLine.text === 'Music buffer · auto low-delay on video'
+    && pitchLock.beforeMovieOn.valPitch === '+4.0 st' && pitchLock.beforeMovieOn.badge === '● Saved'
+    && pitchLock.engOn?.movie === true && pitchLock.engOn?.target === 0 && pitchLock.engOn?.savedSemitones === 4 && pitchLock.engOn?.wet === 0 && pitchLock.engOn?.dry === 1 && pitchLock.engOn?.nodeSt === 0
+    && pitchLock.uiOnAlert.lineH === 16 && pitchLock.uiOnAlert.singleLine && pitchLock.uiOnAlert.lineCls.includes('alert') && pitchLock.uiOnAlert.lineText.includes('disabled in Movie mode')
+    && pitchLock.uiOnAlert.tagCls.includes('off') && pitchLock.uiOnAlert.tagCls.includes('movie-locked') && pitchLock.uiOnAlert.tagPressed === 'false' && pitchLock.uiOnAlert.tagDisabled === 'true'
+    && pitchLock.uiOnAlert.subText === 'off in Movie' && pitchLock.uiOnAlert.valText === 'OFF' && pitchLock.uiOnAlert.valBoxOverflowCount === 0 && pitchLock.uiOnAlert.badge === '● Saved'
+    && pitchLock.uiOnAlert.bodyH < 600 && pitchLock.uiOnAlert.bodyH === pitchLock.beforeMovieOn.bodyH
+    && pitchLock.uiOnAlert.subTop === pitchLock.beforeMovieOn.subTop && pitchLock.uiOnAlert.pitchTop === pitchLock.beforeMovieOn.pitchTop
+    && pitchLock.uiOnSteady.lineText === 'Pitch off (+4.0 st saved) · short video buffer' && pitchLock.uiOnSteady.singleLine
+    && pitchLock.uiOnSteady.bodyH === pitchLock.beforeMovieOn.bodyH && pitchLock.uiOnSteady.subTop === pitchLock.beforeMovieOn.subTop && pitchLock.uiOnSteady.pitchTop === pitchLock.beforeMovieOn.pitchTop
+    && pitchLock.afterTagClick.lineCls.includes('alert') && pitchLock.afterTagClick.sliderVal === 4 && pitchLock.afterTagClick.badge === '● Saved'
+    && pitchLock.afterBlockedInputs.sliderVal === 4 && pitchLock.afterBlockedInputs.valText === 'OFF' && pitchLock.afterBlockedInputs.badge === '● Saved' && pitchLock.afterBlockedInputs.bodyH === pitchLock.beforeMovieOn.bodyH
+    && pitchLock.savedPresetInStorage?.semitones === 4 && pitchLock.savedPresetInStorage?.bass === 0.5 && pitchLock.savedPresetInStorage?.stageBypass?.pitch === false
+    && pitchLock.uiOff.btnText === 'MOVIE · OFF' && pitchLock.uiOff.lineText === 'Movie off (manual) · music buffer · Pitch on'
+    && pitchLock.uiOff.tagPressed === 'true' && pitchLock.uiOff.tagDisabled === null && pitchLock.uiOff.subText === 'key, same speed' && pitchLock.uiOff.valText === '+4.0 st'
+    && pitchLock.engOff?.movie === false && pitchLock.engOff?.target === 4 && pitchLock.engOff?.savedSemitones === 4;
+  record('W-MOVIE-PITCH-LOCK', 'Movie mode locks Pitch off (0 st, wet=0/dry=1), keeps saved preset semitones without marking Modified, blocks Pitch controls with a height-neutral 16 px status-line alert (0.0 px body/slider shift), and restores Pitch when Movie mode turns off',
+    pitchLockOk ? 'PASS' : 'FAIL', pitchLock);
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();
