@@ -5,6 +5,38 @@ let currentStream = null;
 let sourceNode = null;
 let isCapturing = false;
 
+// Movie mode (1.5.5, L-01): 'interactive' shortens the device buffer for video. Audio-only stays on 'playback'.
+let currentMovieMode = false;
+let captureGen = 0; // bumped synchronously at the public entry of start, stop and each real rebuild, before the engine queue, so a queued start cannot run after Stop
+let engineQueue = Promise.resolve();
+
+function enqueueEngine(fn) {
+  const run = engineQueue.then(fn, fn);
+  engineQueue = run.then(() => {}, () => {});
+  return run;
+}
+
+// The literal 'playback' call stays in this function: tests/unit/clicks.test.mjs matches it.
+function makeAudioContext(movieMode) {
+  const ctx = movieMode
+    ? new AudioContext({ latencyHint: 'interactive' })
+    : new AudioContext({ latencyHint: 'playback' });
+  // Chrome does not echo the constructor option. Remember it on this context so a later read
+  // can tell the short video buffer from the large music buffer. A real getter is left alone.
+  if (ctx.latencyHint == null) {
+    try { ctx.latencyHint = movieMode ? 'interactive' : 'playback'; } catch (_) {}
+  }
+  return ctx;
+}
+
+function latencyFields(extra) {
+  return Object.assign({
+    movieMode: currentMovieMode,
+    latencyHint: currentMovieMode ? 'interactive' : 'playback',
+    baseLatency: audioCtx ? audioCtx.baseLatency : null
+  }, extra || {});
+}
+
 // Audio DSP Nodes
 let dspPathGain = null;
 let directPassThroughGain = null;
@@ -146,13 +178,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   switch (message.type) {
     case 'START_AUDIO_CAPTURE':
     case 'START_CAPTURE':
-      startCapture(message.streamId, message.params, message.dynamics)
+      // Popup talks to the service worker. An untargeted start must not be answered here,
+      // or this document wins the race and the worker never commits Movie mode.
+      if (message.target !== 'offscreen') return false;
+      startCapture(message.streamId, message.params, message.dynamics, message.movieMode)
         .then(res => sendResponse(res))
-        .catch(err => sendResponse({ success: false, error: err.message }));
+        .catch(err => sendResponse(latencyFields({ success: false, error: err.message })));
+      return true;
+
+    case 'SET_ENGINE_MOVIE_MODE':
+      if (message.target !== 'offscreen') return false;
+      setMovieMode(message.movieMode)
+        .then(res => sendResponse(res))
+        .catch(err => sendResponse(latencyFields({ success: false, error: err.message })));
       return true;
 
     case 'STOP_AUDIO_CAPTURE':
     case 'STOP_CAPTURE':
+      // Same race as start: the popup's STOP_CAPTURE has no target, and the worker is the
+      // one that returns movieMode / movieOverride. The worker then sends a targeted stop.
+      if (message.target !== 'offscreen') return false;
       stopCapture();
       sendResponse({ success: true });
       return true;
@@ -169,7 +214,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return true;
 
     case 'GET_AUDIO_STATUS':
-      sendResponse({ isCapturing, currentParams, pitchAvailable: !!pitchNode, pitchError, dynamics: currentDynamics, dynAvailable: !dynError, dynError });
+      sendResponse(latencyFields({ isCapturing, currentParams, pitchAvailable: !!pitchNode, pitchError, dynamics: currentDynamics, dynAvailable: !dynError, dynError }));
       return true;
 
     case 'GET_AUDIO_FRAME':
@@ -223,14 +268,27 @@ function dynamicsFrame() {
   return { modes: dyn, available: !dynError, error: dynError, leveler: r1(leveler), match: r1(match), limiter: r1(limiter), ceiling: r1(ceiling), peakIn: Math.round(peak * 1000) / 1000 };
 }
 
-async function startCapture(streamId, initialParams = {}, initialDynamics = null) {
-  try {
-    if (isCapturing) stopCapture();
+function startCapture(streamId, initialParams = {}, initialDynamics = null, movieMode) {
+  // Take the generation before queueing. Stop during the wait then makes this attempt stale,
+  // instead of the body minting a fresh generation and starting capture after Stop.
+  if (isCapturing) cleanupCaptureState();
+  const myGen = ++captureGen;
+  return enqueueEngine(() => startCaptureBody(streamId, initialParams, initialDynamics, movieMode, myGen));
+}
 
-    Object.assign(currentParams, initialParams);
+async function startCaptureBody(streamId, initialParams = {}, initialDynamics = null, movieMode, myGen) {
+  let stream = null;
+  try {
+    if (myGen !== captureGen) {
+      return latencyFields({ success: false, stale: true, error: 'Capture stopped while queued' });
+    }
+
+    Object.assign(currentParams, initialParams || {});
     if (initialDynamics) currentDynamics = normaliseDynamics(initialDynamics);
 
-    const stream = await navigator.mediaDevices.getUserMedia({
+    const wantMovie = typeof movieMode === 'boolean' ? !!movieMode : !!currentMovieMode;
+
+    stream = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: 'tab',
@@ -239,6 +297,11 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
       },
       video: false
     });
+    // Stop, or a newer start, won while the stream id was turning into a stream. Do not keep it.
+    if (myGen !== captureGen) {
+      stream.getTracks().forEach((t) => t.stop());
+      return latencyFields({ success: false, stale: true, error: 'Capture stopped or superseded during startup' });
+    }
     currentStream = stream;
 
     // The track ends when the captured tab closes or Chrome revokes capture: release everything
@@ -251,52 +314,93 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
       });
     });
 
-    // 'playback' (1.5.2): Chrome hands the device 2048 frames at a time instead of 256 (21 ms at 96 kHz instead of 2.7 ms),
-    // so a slow moment on the audio thread no longer becomes a dropout. The samples are the same; about 30 ms more delay.
-    audioCtx = new AudioContext({ latencyHint: 'playback' });
-    if (audioCtx.state === 'suspended') {
-      await audioCtx.resume();
+    const g = await buildAudioGraph(stream, wantMovie, myGen);
+    if (!g || g.stale || myGen !== captureGen) {
+      if (g && g.abortCtx) g.abortCtx();
+      if (currentStream === stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        currentStream = null;
+      }
+      return latencyFields({ success: false, stale: true, error: 'Capture stopped or superseded during startup' });
+    }
+    if (g.error || !g.audioCtx) {
+      if (currentStream === stream) {
+        stream.getTracks().forEach((t) => t.stop());
+        currentStream = null;
+      }
+      return latencyFields({ success: false, error: g.error || 'Could not build audio graph' });
     }
 
-    sourceNode = audioCtx.createMediaStreamSource(currentStream);
+    installGraph(g);
+    applyRoutingState({ immediate: true });
+    directPassThroughGain.connect(audioCtx.destination);
+    outputSum.connect(audioCtx.destination);
+    isCapturing = true;
+    currentMovieMode = !!wantMovie;
+    return latencyFields({ success: true, isCapturing: true });
+  } catch (err) {
+    if (stream && currentStream === stream) {
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
+      currentStream = null;
+    }
+    if (isCapturing || currentStream) stopCapture();
+    return latencyFields({ success: false, error: err.message });
+  }
+}
+
+// Builds a complete DSP graph on a fresh context without touching the live globals or the destination.
+// Routing gains are set on this local bundle before it is installed, so the first samples are not both paths at once.
+async function buildAudioGraph(stream, movieMode, gen) {
+  const ctx = makeAudioContext(!!movieMode);
+  const abortCtx = () => { try { ctx.close().catch(() => {}); } catch (_) {} };
+  const stale = () => gen !== captureGen || currentStream !== stream;
+  try {
+    if (ctx.state === 'suspended') await ctx.resume();
+    if (stale()) { abortCtx(); return { stale: true }; }
+
+    const sourceNodeLocal = ctx.createMediaStreamSource(stream);
 
     // Pitch stage (key shift). The module is loaded per context; if that fails the EQ runs without it.
-    pitchNode = null;
-    pitchError = null;
+    let builtPitch = null;
+    let pitchErrorLocal = null;
     try {
-      await audioCtx.audioWorklet.addModule(chrome.runtime.getURL(PITCH_WORKLET));
-      pitchNode = new AudioWorkletNode(audioCtx, 'pitch-shifter', {
+      await ctx.audioWorklet.addModule(chrome.runtime.getURL(PITCH_WORKLET));
+      if (stale()) { abortCtx(); return { stale: true }; }
+      builtPitch = new AudioWorkletNode(ctx, 'pitch-shifter', {
         numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit'
       });
-      pitchNode.parameters.get('semitones').value = pitchTarget();
-      pitchPrimed = false;
-      const node = pitchNode;
+      const node = builtPitch;
       node.port.onmessage = (e) => {
-        if (pitchNode !== node || typeof e.data?.primed !== 'boolean' || !audioCtx) return;
-        if (!e.data.primed && pitchPrimed && pitchTarget() !== 0) pitchHoldUntil = audioCtx.currentTime + 0.5; // ran dry
+        if (pitchNode !== node || audioCtx !== ctx || typeof e.data?.primed !== 'boolean') return;
+        if (!e.data.primed && pitchPrimed && pitchTarget() !== 0) pitchHoldUntil = audioCtx.currentTime + 0.5;
         pitchPrimed = e.data.primed;
         if (pitchPrimed) reopenAfterHold(node);
         applyRoutingState();
       };
     } catch (err) {
-      pitchError = err.message;
+      pitchErrorLocal = err.message;
     }
-    pitchDryGain = audioCtx.createGain();
-    pitchWetGain = audioCtx.createGain();
+    if (stale()) { abortCtx(); return { stale: true }; }
 
     // The alternative dynamics stages (D-01) come from one worklet module; without it the 1.4.0 stages stand alone.
-    dynError = null;
+    let dynErrorLocal = null;
     let dynReady = false;
     try {
-      await audioCtx.audioWorklet.addModule(chrome.runtime.getURL(DYN_WORKLET));
+      await ctx.audioWorklet.addModule(chrome.runtime.getURL(DYN_WORKLET));
       dynReady = true;
     } catch (err) {
-      dynError = err.message;
+      dynErrorLocal = err.message;
     }
+    if (stale()) { abortCtx(); return { stale: true }; }
+
     const makeDyn = (name, numberOfInputs) => {
       try {
-        const node = new AudioWorkletNode(audioCtx, name, { numberOfInputs, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
+        const node = new AudioWorkletNode(ctx, name, { numberOfInputs, numberOfOutputs: 1, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit' });
         node.port.onmessage = (e) => {
+          if (audioCtx !== ctx) return;
+          if (name === 'band-leveler' && bandLevelerNode !== node) return;
+          if (name === 'lookahead-limiter' && lookaheadNode !== node) return;
+          if (name === 'loudness-match' && matchNode !== node) return;
           const d = e.data || {};
           if (name === 'band-leveler' && typeof d.red === 'number') dynMeters.band = d.red;
           if (name === 'lookahead-limiter' && typeof d.red === 'number') dynMeters.lookahead = d.red;
@@ -304,136 +408,160 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
         };
         return node;
       } catch (err) {
-        dynError = dynError || err.message;
+        dynErrorLocal = dynErrorLocal || err.message;
         return null;
       }
     };
 
-    // 1. Dual-Path Gain Nodes (True Bypass vs DSP Chain)
-    directPassThroughGain = audioCtx.createGain();
-    dspPathGain = audioCtx.createGain();
+    // Nodes are configured from the params and dynamics as they stand now, after the worklet loads.
+    const pitchDryGain = ctx.createGain();
+    const pitchWetGain = ctx.createGain();
 
-    // 2. High-Pass Filter (Anti-Distortion Sub-Bass Barrier)
-    hpfNode = audioCtx.createBiquadFilter();
+    const directPassThroughGain = ctx.createGain();
+    const dspPathGain = ctx.createGain();
+
+    const hpfNode = ctx.createBiquadFilter();
     hpfNode.type = 'highpass';
+    // After every await (including the dynamics worklet). A pitch change that arrived while that
+    // module was loading has to be the value this graph is installed with.
+    if (builtPitch) builtPitch.parameters.get('semitones').value = pitchTarget();
     const off = bypassState();
     hpfNode.frequency.value = off.hpf ? 20 : currentParams.hpf;
     hpfNode.Q.value = 0.707; // Butterworth response
 
-    // 3. Low-Shelf & Peaking EQ
-    bassNode = audioCtx.createBiquadFilter();
+    const bassNode = ctx.createBiquadFilter();
     bassNode.type = 'lowshelf';
     bassNode.frequency.value = 120;
     bassNode.gain.value = off.bass ? 0 : currentParams.bass;
 
-    midNode = audioCtx.createBiquadFilter();
+    const midNode = ctx.createBiquadFilter();
     midNode.type = 'peaking';
     midNode.frequency.value = 1000;
     midNode.Q.value = 0.8;
     midNode.gain.value = off.mid ? 0 : currentParams.mid;
 
-    // 4. High-Shelf Filter (Silky 5000Hz highs)
-    highNode = audioCtx.createBiquadFilter();
+    const highNode = ctx.createBiquadFilter();
     highNode.type = 'highshelf';
     highNode.frequency.value = 5000;
     highNode.gain.value = off.high ? 0 : currentParams.high;
 
-    // 5. Auto-Balance Compressor (Gentle, musical leveler)
-    autoBalanceComp = audioCtx.createDynamicsCompressor();
+    const autoBalanceComp = ctx.createDynamicsCompressor();
     autoBalanceComp.threshold.value = -18;
     autoBalanceComp.knee.value = 20;
     autoBalanceComp.ratio.value = 3.5;
     autoBalanceComp.attack.value = 0.01;
     autoBalanceComp.release.value = 0.2;
 
-    autoBalanceBypassGain = audioCtx.createGain();
-    autoBalanceWetGain = audioCtx.createGain();
+    const autoBalanceBypassGain = ctx.createGain();
+    const autoBalanceWetGain = ctx.createGain();
 
-    // 5b. AUTO "Bass only": a leveler that acts below 150 Hz only (worklet). All leveler paths sum into levelerOut.
-    levelerOut = audioCtx.createGain();
-    bandLevelerGain = audioCtx.createGain();
-    bandLevelerNode = dynReady ? makeDyn('band-leveler', 1) : null;
+    const levelerOut = ctx.createGain();
+    const bandLevelerGain = ctx.createGain();
+    const builtBand = dynReady ? makeDyn('band-leveler', 1) : null;
 
-    // 5c. MATCH: loudness match (worklet, two inputs: the processed signal and the untouched one), routed around by default.
-    matchDryGain = audioCtx.createGain();
-    matchWetGain = audioCtx.createGain();
-    matchNode = dynReady ? makeDyn('loudness-match', 2) : null;
+    const matchDryGain = ctx.createGain();
+    const matchWetGain = ctx.createGain();
+    const builtMatch = dynReady ? makeDyn('loudness-match', 2) : null;
 
-    // 6. Master Volume / Gain
-    volumeGain = audioCtx.createGain();
+    const volumeGain = ctx.createGain();
     volumeGain.gain.value = off.gain ? 1.0 : currentParams.gain;
 
-    // 7. Master Brickwall Safety Limiter (Prevents DAC clipping & distortion)
-    masterLimiter = audioCtx.createDynamicsCompressor();
+    const masterLimiter = ctx.createDynamicsCompressor();
     masterLimiter.threshold.value = -0.3; // -0.3 dBFS safety margin
     masterLimiter.knee.value = 0.0;
     masterLimiter.ratio.value = 20.0;
     masterLimiter.attack.value = 0.001;
     masterLimiter.release.value = 0.05;
 
-    // 7b. LIM "Look-ahead": a limiter that sees 5 ms ahead (worklet). Either limiter feeds limiterOut.
-    limiterFastGain = audioCtx.createGain();
-    lookaheadGain = audioCtx.createGain();
-    limiterOut = audioCtx.createGain();
-    lookaheadNode = dynReady ? makeDyn('lookahead-limiter', 1) : null;
+    const limiterFastGain = ctx.createGain();
+    const lookaheadGain = ctx.createGain();
+    const limiterOut = ctx.createGain();
+    const builtLookahead = dynReady ? makeDyn('lookahead-limiter', 1) : null;
 
-    outputCeiling = audioCtx.createWaveShaper();
+    const outputCeiling = ctx.createWaveShaper();
     outputCeiling.curve = makeCeilingCurve();
     outputCeiling.oversample = 'none';
 
-    // 7c. CEIL "Warm": a soft clip in place of the clean ceiling. Either ceiling feeds outputSum, then the destination.
-    ceilingCleanGain = audioCtx.createGain();
-    ceilingWarmGain = audioCtx.createGain();
-    warmPreGain = audioCtx.createGain();
+    const ceilingCleanGain = ctx.createGain();
+    const ceilingWarmGain = ctx.createGain();
+    const warmPreGain = ctx.createGain();
     warmPreGain.gain.value = 0.5;
-    warmShaper = audioCtx.createWaveShaper();
+    const warmShaper = ctx.createWaveShaper();
     warmShaper.curve = makeWarmCurve();
     warmShaper.oversample = '4x';
-    outputSum = audioCtx.createGain();
-    ceilingTap = audioCtx.createAnalyser(); // reads what reaches the ceiling (the meter), no audio output of its own
+    const outputSum = ctx.createGain();
+    const ceilingTap = ctx.createAnalyser();
     ceilingTap.fftSize = 4096;
     ceilingTap.smoothingTimeConstant = 0;
 
-    // 8. Display taps (no audio output of their own)
-    inputAnalyser = audioCtx.createAnalyser();
+    const inputAnalyser = ctx.createAnalyser();
     inputAnalyser.fftSize = 8192;
     inputAnalyser.smoothingTimeConstant = 0.75;
-    outputAnalyser = audioCtx.createAnalyser();
+    const outputAnalyser = ctx.createAnalyser();
     outputAnalyser.fftSize = 8192;
     outputAnalyser.smoothingTimeConstant = 0.75;
 
-    // === Signal Routing Architecture ===
-    // Source -> Split into:
-    //   Path A: Direct Passthrough (for true bypass)
-    //   Path B: DSP Chain -> Pitch (dry, or the shifter when a shift is set) -> HPF -> Bass -> Mid -> High -> Split into:
-    //             -> AutoBalance Wet (Comp, 1.4.0)   -> levelerOut
-    //             -> AutoBalance Dry (Bypass)         -> levelerOut
-    //             -> Bass-only leveler (D-01)         -> levelerOut
-    //          -> levelerOut -> [around or through Loudness match] -> Master Volume
-    //          -> [Master Limiter (1.4.0) or Look-ahead limiter] -> limiterOut
-    //          -> [Output Ceiling (1.4.0) or Warm soft clip] -> outputSum -> Destination
-    // Every bracket is a pair of gains; the defaults open the 1.4.0 path only.
+    const g = {
+      audioCtx: ctx,
+      sourceNode: sourceNodeLocal,
+      pitchNode: builtPitch,
+      pitchError: pitchErrorLocal,
+      pitchPrimed: false,
+      pitchHoldUntil: 0,
+      pitchDryGain,
+      pitchWetGain,
+      dynError: dynErrorLocal,
+      directPassThroughGain,
+      dspPathGain,
+      hpfNode,
+      bassNode,
+      midNode,
+      highNode,
+      autoBalanceComp,
+      autoBalanceBypassGain,
+      autoBalanceWetGain,
+      volumeGain,
+      masterLimiter,
+      outputCeiling,
+      levelerOut,
+      bandLevelerGain,
+      bandLevelerNode: builtBand,
+      matchDryGain,
+      matchWetGain,
+      matchNode: builtMatch,
+      limiterFastGain,
+      lookaheadGain,
+      limiterOut,
+      lookaheadNode: builtLookahead,
+      ceilingCleanGain,
+      ceilingWarmGain,
+      warmPreGain,
+      warmShaper,
+      outputSum,
+      ceilingTap,
+      inputAnalyser,
+      outputAnalyser,
+      movieMode: !!movieMode,
+      abortCtx
+    };
 
-    // Set routing gains before anything is connected so the first samples are not the
-    // bypass and DSP paths summed together (both GainNodes default to 1.0).
-    applyRoutingState({ immediate: true });
+    // Local routing only. The global applyRoutingState() runs after these nodes are installed.
+    applyRoutingToGraph(g, { immediate: true });
+    if (stale()) { abortCtx(); return { stale: true }; }
 
-    sourceNode.connect(directPassThroughGain);
-    directPassThroughGain.connect(audioCtx.destination);
-
-    sourceNode.connect(dspPathGain);
+    sourceNodeLocal.connect(directPassThroughGain);
+    sourceNodeLocal.connect(dspPathGain);
     dspPathGain.connect(pitchDryGain);
     pitchDryGain.connect(hpfNode);
-    if (pitchNode) {
-      dspPathGain.connect(pitchNode);
-      pitchNode.connect(pitchWetGain);
+    if (builtPitch) {
+      dspPathGain.connect(builtPitch);
+      builtPitch.connect(pitchWetGain);
       pitchWetGain.connect(hpfNode);
     }
     hpfNode.connect(bassNode);
     bassNode.connect(midNode);
     midNode.connect(highNode);
 
-    // Leveler: the compressor (wet), its bypass (dry) and the bass-only leveler sum into levelerOut; one gain is open.
     highNode.connect(autoBalanceComp);
     autoBalanceComp.connect(autoBalanceWetGain);
     autoBalanceWetGain.connect(levelerOut);
@@ -441,34 +569,31 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
     highNode.connect(autoBalanceBypassGain);
     autoBalanceBypassGain.connect(levelerOut);
 
-    if (bandLevelerNode) {
-      highNode.connect(bandLevelerNode);
-      bandLevelerNode.connect(bandLevelerGain);
+    if (builtBand) {
+      highNode.connect(builtBand);
+      builtBand.connect(bandLevelerGain);
       bandLevelerGain.connect(levelerOut);
     }
 
-    // Loudness match: around it (dry) or through it (wet). Its second input hears the signal as it enters the HPF.
     levelerOut.connect(matchDryGain);
     matchDryGain.connect(volumeGain);
-    if (matchNode) {
-      levelerOut.connect(matchNode, 0, 0);
-      pitchDryGain.connect(matchNode, 0, 1);
-      if (pitchNode) pitchWetGain.connect(matchNode, 0, 1);
-      matchNode.connect(matchWetGain);
+    if (builtMatch) {
+      levelerOut.connect(builtMatch, 0, 0);
+      pitchDryGain.connect(builtMatch, 0, 1);
+      if (builtPitch) pitchWetGain.connect(builtMatch, 0, 1);
+      builtMatch.connect(matchWetGain);
       matchWetGain.connect(volumeGain);
     }
 
-    // Limiter: the fast one (1.4.0) or the look-ahead one, into limiterOut.
     volumeGain.connect(masterLimiter);
     masterLimiter.connect(limiterFastGain);
     limiterFastGain.connect(limiterOut);
-    if (lookaheadNode) {
-      volumeGain.connect(lookaheadNode);
-      lookaheadNode.connect(lookaheadGain);
+    if (builtLookahead) {
+      volumeGain.connect(builtLookahead);
+      builtLookahead.connect(lookaheadGain);
       lookaheadGain.connect(limiterOut);
     }
 
-    // Ceiling: the clean curve (1.4.0) or the warm soft clip, into outputSum and out.
     limiterOut.connect(outputCeiling);
     outputCeiling.connect(ceilingCleanGain);
     ceilingCleanGain.connect(outputSum);
@@ -476,22 +601,143 @@ async function startCapture(streamId, initialParams = {}, initialDynamics = null
     warmPreGain.connect(warmShaper);
     warmShaper.connect(ceilingWarmGain);
     ceilingWarmGain.connect(outputSum);
-    outputSum.connect(audioCtx.destination);
     limiterOut.connect(ceilingTap);
 
-    sourceNode.connect(inputAnalyser);
+    sourceNodeLocal.connect(inputAnalyser);
     outputSum.connect(outputAnalyser);
-
-    isCapturing = true;
-
-    return { success: true };
+    return g;
   } catch (err) {
-    stopCapture();
-    return { success: false, error: err.message };
+    abortCtx();
+    if (stale()) return { stale: true };
+    return { error: err.message || String(err) };
   }
 }
 
-function stopCapture() {
+function installGraph(g) {
+  audioCtx = g.audioCtx;
+  sourceNode = g.sourceNode;
+  pitchNode = g.pitchNode;
+  pitchError = g.pitchError;
+  pitchPrimed = g.pitchPrimed;
+  pitchHoldUntil = g.pitchHoldUntil;
+  pitchDryGain = g.pitchDryGain;
+  pitchWetGain = g.pitchWetGain;
+  dynError = g.dynError;
+  directPassThroughGain = g.directPassThroughGain;
+  dspPathGain = g.dspPathGain;
+  hpfNode = g.hpfNode;
+  bassNode = g.bassNode;
+  midNode = g.midNode;
+  highNode = g.highNode;
+  autoBalanceComp = g.autoBalanceComp;
+  autoBalanceBypassGain = g.autoBalanceBypassGain;
+  autoBalanceWetGain = g.autoBalanceWetGain;
+  volumeGain = g.volumeGain;
+  masterLimiter = g.masterLimiter;
+  outputCeiling = g.outputCeiling;
+  levelerOut = g.levelerOut;
+  bandLevelerGain = g.bandLevelerGain;
+  bandLevelerNode = g.bandLevelerNode;
+  matchDryGain = g.matchDryGain;
+  matchWetGain = g.matchWetGain;
+  matchNode = g.matchNode;
+  limiterFastGain = g.limiterFastGain;
+  lookaheadGain = g.lookaheadGain;
+  limiterOut = g.limiterOut;
+  lookaheadNode = g.lookaheadNode;
+  ceilingCleanGain = g.ceilingCleanGain;
+  ceilingWarmGain = g.ceilingWarmGain;
+  warmPreGain = g.warmPreGain;
+  warmShaper = g.warmShaper;
+  outputSum = g.outputSum;
+  ceilingTap = g.ceilingTap;
+  inputAnalyser = g.inputAnalyser;
+  outputAnalyser = g.outputAnalyser;
+  currentMovieMode = !!g.movieMode;
+}
+
+function setMovieMode(requestedMode) {
+  const want = !!requestedMode;
+  let myGen = null;
+  if (isCapturing && currentStream && currentStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+    const same = want === currentMovieMode && audioCtx && audioCtx.state === 'running';
+    if (!same) myGen = ++captureGen;
+  }
+  return enqueueEngine(() => setMovieModeBody(requestedMode, myGen));
+}
+
+async function setMovieModeBody(requestedMode, myGen) {
+  if (myGen !== null && myGen !== captureGen) {
+    return latencyFields({ success: false, stale: true, error: 'Capture stopped while queued' });
+  }
+  const want = !!requestedMode;
+  if (!isCapturing || !currentStream) {
+    currentMovieMode = want;
+    return latencyFields({ success: true, isCapturing: false, baseLatency: null });
+  }
+  if (!currentStream.getAudioTracks().some((t) => t.readyState === 'live')) {
+    return latencyFields({ success: false, error: 'Capture stream is not active' });
+  }
+  if (want === currentMovieMode && audioCtx && audioCtx.state === 'running') {
+    return latencyFields({ success: true, isCapturing: true });
+  }
+
+  const gen = myGen !== null ? myGen : ++captureGen;
+  const stream = currentStream;
+  let g;
+  try {
+    g = await buildAudioGraph(stream, want, gen);
+  } catch (err) {
+    return latencyFields({ success: false, error: err.message });
+  }
+  if (!g || g.stale || gen !== captureGen || currentStream !== stream) {
+    if (g && g.abortCtx) g.abortCtx();
+    return latencyFields({ success: false, stale: true });
+  }
+  if (g.error || !g.audioCtx) {
+    return latencyFields({ success: false, error: g.error || 'Could not build audio graph' });
+  }
+  if (g.audioCtx.state !== 'running') {
+    try { await g.audioCtx.resume(); }
+    catch (err) {
+      if (g.abortCtx) g.abortCtx();
+      return latencyFields({ success: false, error: err.message });
+    }
+    if (gen !== captureGen || currentStream !== stream) {
+      if (g.abortCtx) g.abortCtx();
+      return latencyFields({ success: false, stale: true });
+    }
+  }
+
+  const oldCtx = audioCtx;
+  const oldSource = sourceNode;
+  const oldPitch = pitchNode;
+  const oldBand = bandLevelerNode;
+  const oldMatch = matchNode;
+  const oldLa = lookaheadNode;
+  for (const n of [oldPitch, oldBand, oldMatch, oldLa]) if (n && n.port) n.port.onmessage = null;
+  clearTimeout(pitchHoldTimer);
+  pitchHoldTimer = null;
+  pitchPrimed = false;
+  pitchHoldUntil = 0;
+  dynMeters.band = dynMeters.trim = dynMeters.lookahead = 0;
+
+  installGraph(g);
+  currentMovieMode = want;
+  applyRoutingState({ immediate: true });
+  outputSum.connect(audioCtx.destination);
+  directPassThroughGain.connect(audioCtx.destination);
+  try { if (oldSource) oldSource.disconnect(); } catch (_) {}
+  if (oldCtx && oldCtx !== audioCtx) oldCtx.close().catch(() => {});
+  return latencyFields({ success: true, isCapturing: true });
+}
+
+function cleanupCaptureState() {
+  for (const n of [pitchNode, bandLevelerNode, matchNode, lookaheadNode]) {
+    if (n && n.port) n.port.onmessage = null;
+  }
+  clearTimeout(pitchHoldTimer);
+  pitchHoldTimer = null;
   if (currentStream) {
     currentStream.getTracks().forEach(track => track.stop());
     currentStream = null;
@@ -505,7 +751,6 @@ function stopCapture() {
   pitchNode = null;
   pitchPrimed = false;
   pitchHoldUntil = 0;
-  clearTimeout(pitchHoldTimer);
   pitchDryGain = null;
   pitchWetGain = null;
   inputAnalyser = null;
@@ -517,6 +762,12 @@ function stopCapture() {
   ceilingTap = null;
   dynMeters.band = dynMeters.trim = dynMeters.lookahead = 0;
 }
+
+function stopCapture() {
+  captureGen++;
+  cleanupCaptureState();
+}
+
 
 function updateDynamics(d) {
   currentDynamics = normaliseDynamics({ ...currentDynamics, ...(d || {}) });
@@ -546,6 +797,22 @@ function updateParams(newParams) {
 
 function applyRoutingState({ immediate = false } = {}) {
   if (!audioCtx || audioCtx.state === 'closed') return;
+  applyRoutingToGraph({
+    audioCtx, pitchNode, pitchPrimed, pitchHoldUntil,
+    dspPathGain, directPassThroughGain, autoBalanceWetGain, autoBalanceBypassGain, bandLevelerGain, autoBalanceComp,
+    matchWetGain, matchDryGain, lookaheadGain, limiterFastGain, ceilingWarmGain, ceilingCleanGain, pitchWetGain, pitchDryGain,
+    bandLevelerNode, matchNode, lookaheadNode
+  }, { immediate });
+}
+
+// Gain routing for one graph bundle. `g` carries its own nodes, its own primed flag and its own context, so a graph
+// that is still being built can be set before it replaces the live one. The live path calls this through applyRoutingState.
+function applyRoutingToGraph(g, { immediate = false } = {}) {
+  const audioCtx = g.audioCtx;
+  const pitchNode = g.pitchNode;
+  const pitchPrimed = g.pitchPrimed;
+  const pitchHoldUntil = g.pitchHoldUntil;
+  if (!audioCtx || audioCtx.state === 'closed') return;
   const now = audioCtx.currentTime;
   const rampTime = 0.02;
   const set = (node, value) => {
@@ -556,35 +823,41 @@ function applyRoutingState({ immediate = false } = {}) {
 
   const isBypass = currentParams.bypass === true;
   const isCompBypassed = bypassState().comp;
-  const dyn = effectiveDynamics();
+  const d = currentDynamics;
+  const dyn = {
+    leveler: d.leveler === 'bass' && !g.bandLevelerNode ? 'full' : d.leveler,
+    match: d.match === true && !!g.matchNode,
+    limiter: d.limiter === 'lookahead' && !g.lookaheadNode ? 'fast' : d.limiter,
+    ceiling: d.ceiling
+  };
 
-  set(dspPathGain, isBypass ? 0.0 : 1.0);
-  set(directPassThroughGain, isBypass ? 1.0 : 0.0);
+  set(g.dspPathGain, isBypass ? 0.0 : 1.0);
+  set(g.directPassThroughGain, isBypass ? 1.0 : 0.0);
 
   // AUTO: off = the dry path; on = the 1.4.0 compressor ("Full band", or "Slow release" = the same with a 0.6 s
   // release instead of 0.2 s) or the bass-only leveler.
   const useBand = !isCompBypassed && dyn.leveler === 'bass';
-  set(autoBalanceWetGain, !isCompBypassed && !useBand ? 1.0 : 0.0);
-  set(autoBalanceBypassGain, isCompBypassed ? 1.0 : 0.0);
-  set(bandLevelerGain, useBand ? 1.0 : 0.0);
-  if (autoBalanceComp) {
+  set(g.autoBalanceWetGain, !isCompBypassed && !useBand ? 1.0 : 0.0);
+  set(g.autoBalanceBypassGain, isCompBypassed ? 1.0 : 0.0);
+  set(g.bandLevelerGain, useBand ? 1.0 : 0.0);
+  if (g.autoBalanceComp) {
     const release = dyn.leveler === 'slow' ? 0.6 : 0.2;
-    if (autoBalanceComp.release.value !== release) autoBalanceComp.release.value = release;
+    if (g.autoBalanceComp.release.value !== release) g.autoBalanceComp.release.value = release;
   }
 
   // MATCH, LIM, CEIL: each a pair of gains, the 1.4.0 stage open by default.
-  set(matchWetGain, dyn.match ? 1.0 : 0.0);
-  set(matchDryGain, dyn.match ? 0.0 : 1.0);
-  set(lookaheadGain, dyn.limiter === 'lookahead' ? 1.0 : 0.0);
-  set(limiterFastGain, dyn.limiter === 'lookahead' ? 0.0 : 1.0);
-  set(ceilingWarmGain, dyn.ceiling === 'warm' ? 1.0 : 0.0);
-  set(ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
+  set(g.matchWetGain, dyn.match ? 1.0 : 0.0);
+  set(g.matchDryGain, dyn.match ? 0.0 : 1.0);
+  set(g.lookaheadGain, dyn.limiter === 'lookahead' ? 1.0 : 0.0);
+  set(g.limiterFastGain, dyn.limiter === 'lookahead' ? 0.0 : 1.0);
+  set(g.ceilingWarmGain, dyn.ceiling === 'warm' ? 1.0 : 0.0);
+  set(g.ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
 
   // The shifter is in the path only while a shift is set and it is producing audio (it adds about 0.14 s of delay);
   // 0 st is a true bypass, and the shifter is parked then.
   const shifting = !!pitchNode && pitchTarget() !== 0 && pitchPrimed && audioCtx.currentTime >= pitchHoldUntil;
-  set(pitchWetGain, shifting ? 1.0 : 0.0);
-  set(pitchDryGain, shifting ? 0.0 : 1.0);
+  set(g.pitchWetGain, shifting ? 1.0 : 0.0);
+  set(g.pitchDryGain, shifting ? 0.0 : 1.0);
 }
 
 // Re-route once the audio clock has passed the hold. A timer runs on the computer's clock and the audio clock lags it by

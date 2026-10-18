@@ -174,6 +174,68 @@ async function openPopup(path = 'popup.html') {
 function sendFrom(page, msg) {
   return page.evaluate((m) => new Promise((r) => chrome.runtime.sendMessage(m, (res) => r(res ?? { lastError: chrome.runtime.lastError?.message }))), msg);
 }
+
+// All four Movie labels, with a long badge tooltip, at the page's current width.
+async function movieStatusMatrix(page) {
+  return page.evaluate(() => {
+    const labels = [['off', 'MOVIE'], ['on', 'MOVIE · AUTO'], ['on', 'MOVIE · ON'], ['manual-off', 'MOVIE · OFF']];
+    const btn = document.getElementById('btn-movie-mode');
+    const title = document.querySelector('.power-title');
+    const sw = document.querySelector('.power-switch');
+    const badge = document.getElementById('eq-power-status-badge');
+    const bar = document.querySelector('.status-bar');
+    const saved = {
+      badgeText: badge.textContent, badgeTitle: badge.title, badgeCls: badge.className,
+      btnCls: btn.className, btnText: btn.textContent
+    };
+    badge.className = 'power-badge on';
+    badge.textContent = '● ON · Synthetic Tone with a very long tab title';
+    badge.title = 'Processing the tab "Synthetic Tone with a very long tab title that must stay on one status row"';
+    const overlap = (a, b) => a.width > 0 && b.width > 0 && a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+    const rows = labels.map(([cls, text]) => {
+      btn.className = 'movie-badge ' + cls;
+      btn.textContent = text;
+      const br = btn.getBoundingClientRect();
+      const tr = title.getBoundingClientRect();
+      const sr = sw.getBoundingClientRect();
+      const gr = badge.getBoundingClientRect();
+      const barR = bar.getBoundingClientRect();
+      return {
+        text, cls,
+        bodyH: +document.body.getBoundingClientRect().height.toFixed(1),
+        barH: +barR.height.toFixed(2),
+        barSame: true,
+        sameLine: Math.abs(br.top - tr.top) < 14 && Math.abs(sr.top - tr.top) < 14 && Math.abs(gr.top - tr.top) < 14,
+        noWrap: getComputedStyle(btn).whiteSpace === 'nowrap' && getComputedStyle(title).whiteSpace === 'nowrap' && getComputedStyle(badge).whiteSpace === 'nowrap' && getComputedStyle(bar).flexWrap === 'nowrap',
+        btnFits: btn.scrollWidth <= btn.clientWidth + 1,
+        titleFits: title.scrollWidth <= title.clientWidth + 1,
+        barFits: bar.scrollWidth <= bar.clientWidth + 1,
+        pageFits: document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        noOverlap: !overlap(br, gr) && !overlap(br, tr) && !overlap(br, sr) && !overlap(gr, sr) && !overlap(tr, sr),
+        inside: br.right <= barR.right + 1 && gr.right <= barR.right + 1 && tr.left >= barR.left - 1,
+        btnNowrap: getComputedStyle(btn).whiteSpace === 'nowrap' && getComputedStyle(btn).flexShrink === '0',
+        titleNowrap: getComputedStyle(title).whiteSpace === 'nowrap',
+        badgeMin: getComputedStyle(badge).minWidth
+      };
+    });
+    const h0 = rows.length ? rows[0].barH : 0;
+    for (const row of rows) row.barSame = Math.abs(row.barH - h0) < 0.6;
+    badge.textContent = saved.badgeText;
+    badge.title = saved.badgeTitle;
+    badge.className = saved.badgeCls;
+    btn.className = saved.btnCls;
+    btn.textContent = saved.btnText;
+    return rows;
+  });
+}
+
+function movieMatrixOk(rows, { bodyMax = null, page = false } = {}) {
+  return Array.isArray(rows) && rows.length === 4 && rows.every((m) =>
+    m.barSame && m.sameLine && m.noWrap && m.btnFits && m.titleFits && m.barFits && m.noOverlap && m.inside
+    && m.btnNowrap && m.titleNowrap && m.badgeMin === '0px'
+    && (bodyMax == null || m.bodyH < bodyMax)
+    && (!page || m.pageFits));
+}
 const storedParams = (page) => page.evaluate(() => new Promise((r) => chrome.storage.local.get('currentParams', (d) => r(d.currentParams || null))));
 
 try {
@@ -194,6 +256,12 @@ try {
 
   // ---- W-POPUP-RENDER ----
   const { page: popup, errors: popupErrors, dialogs } = await openPopup();
+  // Later popup pages (reopens, the closed-UI check, the orphan tab) must count in W-NO-PAGE-ERRORS too.
+  const adopt = (opened) => {
+    for (const err of opened.errors) popupErrors.push(err);
+    opened.page.on('pageerror', (err) => popupErrors.push(String(err)));
+    return opened.page;
+  };
   const presetCount = await popup.locator('#preset-select option').count();
   const shotDefault = await shot(popup, 'popup-default.png');
   record('W-POPUP-RENDER', 'Popup renders, state loads, presets populate', popupErrors.length === 0 && presetCount >= 8 ? 'PASS' : 'FAIL',
@@ -223,10 +291,46 @@ try {
     const slack = c.getBoundingClientRect().height - (last.bottom - first.top);
     const foot = document.querySelector('.foot').getBoundingClientRect();
     const bodyH = document.body.getBoundingClientRect().height;
-    return { slack: +slack.toFixed(1), belowRows: +(foot.top - last.bottom).toFixed(1), bodyH: +bodyH.toFixed(1), bodyW: document.body.getBoundingClientRect().width };
+    const btn = document.getElementById('btn-movie-mode');
+    const title = document.querySelector('.power-title');
+    const sw = document.querySelector('.power-switch');
+    const bar = document.querySelector('.status-bar');
+    const states = [['off', 'MOVIE'], ['on', 'MOVIE · AUTO'], ['manual-off', 'MOVIE · OFF'], ['on', 'MOVIE · ON']];
+    const movie = states.map(([cls, text]) => {
+      btn.className = 'movie-badge ' + cls;
+      btn.textContent = text;
+      const br = btn.getBoundingClientRect();
+      const tr = title.getBoundingClientRect();
+      const sr = sw.getBoundingClientRect();
+      return {
+        text, cls,
+        bodyH: +document.body.getBoundingClientRect().height.toFixed(1),
+        sameLine: Math.abs(br.top - tr.top) < 14 && Math.abs(sr.top - tr.top) < 14,
+        noShrink: btn.scrollWidth <= btn.clientWidth + 1 && title.scrollWidth <= title.clientWidth + 1,
+        inside: br.right <= bar.getBoundingClientRect().right + 1
+      };
+    });
+    btn.className = 'movie-badge off';
+    btn.textContent = 'MOVIE';
+    return { slack: +slack.toFixed(1), belowRows: +(foot.top - last.bottom).toFixed(1), bodyH: +bodyH.toFixed(1), bodyW: document.body.getBoundingClientRect().width, movie };
   });
-  record('W-NO-DEAD-SPACE', 'No empty band above or below the EQ sliders; popup height follows content',
-    space.slack < 4 && space.belowRows < 20 && space.bodyH < 600 && space.bodyW === 440 ? 'PASS' : 'FAIL', space);
+  const movieFits = space.movie && space.movie.every((m) => m.bodyH < 600 && m.sameLine && m.noShrink && m.inside);
+  // Four Movie labels and a long badge title at every width. The badge may ellipsize; the bar, title and button may not clip.
+  const popupWidths = [300, 360, 400, 440, 480];
+  const savedViewport = popup.viewportSize() || { width: 1280, height: 720 };
+  const popupMovieMatrix = {};
+  for (const width of popupWidths) {
+    await popup.setViewportSize({ width, height: Math.max(savedViewport.height || 720, 720) });
+    await popup.evaluate((w) => { document.body.style.width = w + 'px'; }, width);
+    await sleep(80);
+    popupMovieMatrix[width] = await movieStatusMatrix(popup);
+  }
+  await popup.evaluate(() => { document.body.style.width = ''; });
+  await popup.setViewportSize(savedViewport);
+  const popupMatrixOk = popupWidths.every((w) => movieMatrixOk(popupMovieMatrix[w], { bodyMax: w === 440 ? 600 : null, page: w === 440 }));
+  record('W-NO-DEAD-SPACE', 'No empty band above or below the EQ sliders; popup height follows content; all four Movie labels stay on one line at 300–480 px, with a long badge title, and the popup stays under 600 px at 440',
+    space.slack < 4 && space.belowRows < 20 && space.bodyH < 600 && space.bodyW === 440 && movieFits && popupMatrixOk ? 'PASS' : 'FAIL',
+    { ...space, popupMovieMatrix });
 
   // ---- W-TRACK-INFO: metadata scraped from the footer only ----
   await sleep(1500);
@@ -384,7 +488,7 @@ try {
   await sleep(400);
   const midAfter = await popup.evaluate(() => document.getElementById('slider-mid').value);
   const storedMid = (await storedParams(popup))?.stageBypass;
-  const { page: popup2 } = await openPopup();
+  const popup2 = adopt(await openPopup());
   const reopened = await popup2.evaluate(() => ({
     tagOff: document.querySelector('.band-tag[data-band="mid"]').classList.contains('off'),
     rowDimmed: document.querySelector('.eq-row[data-band="mid"]').classList.contains('is-off'),
@@ -718,7 +822,7 @@ try {
     await sleep(500);
     const storedDyn = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics || null))));
     const engineDyn = await dynState();
-    const { page: popupD } = await openPopup();
+    const popupD = adopt(await openPopup());
     const reopenedDyn = await popupD.evaluate(() => ({ leveler: document.getElementById('mode-leveler').value, matchPressed: document.querySelector('.band-tag[data-band="match"]').getAttribute('aria-pressed'), rowOff: document.querySelector('.eq-row[data-band="match"]').classList.contains('is-off') }));
     await popupD.close();
     await popup.selectOption('#mode-leveler', 'full');
@@ -832,7 +936,7 @@ try {
 
   // ---- W-STAY-OPEN: a real click on the switch hands the screen to Chrome's side panel and makes the icon open it; off restores the popup ----
   const popupBefore = await sw.evaluate(() => chrome.action.getPopup({}));
-  const { page: popup3 } = await openPopup();
+  const popup3 = adopt(await openPopup());
   await popup3.click('label.opt'); // the "Stay open" switch
   await sleep(1500);
   const popupWhenOn = await sw.evaluate(() => chrome.action.getPopup({}));
@@ -882,8 +986,9 @@ try {
         menuFits: document.getElementById('mode-leveler').getBoundingClientRect().right <= document.querySelector('.eq-row[data-band="comp"] .dyn-label').getBoundingClientRect().right + 1
       };
     });
+    const movieRows = await movieStatusMatrix(panelPage);
     await panelPage.screenshot({ path: join(outDir, `panel-${width}.png`) });
-    return m;
+    return { ...m, movieRows };
   };
   const w300 = await layoutAt(300);
   const w360 = await layoutAt(360);
@@ -905,16 +1010,296 @@ try {
   await panelPage.click('.band-tag[data-band="mid"]'); // back on
   await sleep(200);
   const w400 = await layoutAt(400);
+  const w440 = await layoutAt(440);
   const w480 = await layoutAt(480);
   await panelPage.close();
-  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown && m.coverRightOfTitle && m.coverEdgeGap <= 1 && m.meterW >= 100 && m.menuFits;
+  const movieRowOk = (m) => movieMatrixOk(m.movieRows, { page: true });
+  const fits = (m) => m.panelClass && m.scrollW <= m.clientW && !m.stripShown && m.coverShown && m.coverRightOfTitle && m.coverEdgeGap <= 1 && m.meterW >= 100 && m.menuFits && movieRowOk(m);
   const stackedOk = (m, minSlider) => fits(m) && m.stacked && m.coverW === 56 && m.titleWraps && m.transportW >= m.npInner - 2 && m.sliderW >= minSlider;
   const normalOk = (m, minSlider) => fits(m) && !m.stacked && m.coverW === 76 && !m.titleWraps && m.sliderW >= minSlider;
-  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400 and 480 px; no horizontal overflow; sliders usable; band tags are the popup\'s words, fit, and toggle with a strike-through; no errors',
-    stackedOk(w300, 130) && stackedOk(w360, 150) && normalOk(w400, 150) && normalOk(w480, 250) && panelErrors.length === 0
+  record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400, 440 and 480 px; all four Movie labels stay on one line at each width with a long badge title; no horizontal overflow; sliders usable; band tags are the popup\'s words, fit, and toggle with a strike-through; no errors',
+    stackedOk(w300, 130) && stackedOk(w360, 150) && normalOk(w400, 150) && normalOk(w440, 200) && normalOk(w480, 250) && panelErrors.length === 0
       && bandBtn.text === 'MID' && !bandBtn.hasIcon && bandBtn.size === 40 && bandBtn.allFit && bandBtn.words.join(' ') === 'PITCH HPF LOW MID HI AUTO MATCH VOL LIM CEIL'
       && bandOff.off && bandOff.struck && bandOff.rowDim ? 'PASS' : 'FAIL',
-    { w300, w360, w400, w480, bandBtn, bandOff, panelErrors, screenshots: [300, 360, 400, 480].map((w) => `results/${label}/panel-${w}.png`) });
+    { w300, w360, w400, w440, w480, bandBtn, bandOff, panelErrors, screenshots: [300, 360, 400, 440, 480].map((w) => `results/${label}/panel-${w}.png`) });
+
+  // ---- W-MOVIE-CONTRAST: the Movie badge text stays at least 4.5:1 on every theme, in every state ----
+  const contrast = await popup.evaluate(() => {
+    const parse = (c) => {
+      const m = /rgba?\(([^)]+)\)/.exec(c || '');
+      if (!m) return null;
+      const p = m[1].split(',').map((s) => parseFloat(s));
+      return { r: p[0], g: p[1], b: p[2], a: p.length > 3 ? p[3] : 1 };
+    };
+    const over = (fg, bg) => ({ r: fg.r * fg.a + bg.r * (1 - fg.a), g: fg.g * fg.a + bg.g * (1 - fg.a), b: fg.b * fg.a + bg.b * (1 - fg.a) });
+    const lin = (v) => { const x = v / 255; return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; };
+    const L = (c) => 0.2126 * lin(c.r) + 0.7152 * lin(c.g) + 0.0722 * lin(c.b);
+    const ratio = (a, b) => { const x = L(a), y = L(b); const hi = Math.max(x, y), lo = Math.min(x, y); return (hi + 0.05) / (lo + 0.05); };
+    const btn = document.getElementById('btn-movie-mode');
+    const bar = document.querySelector('.status-bar');
+    const themes = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
+    const states = [['off', 'MOVIE'], ['on', 'MOVIE · ON'], ['manual-off', 'MOVIE · OFF']];
+    const rows = [];
+    for (const theme of themes) {
+      document.body.className = (document.body.className.replace(/theme-\S+/g, '').trim() + ' ' + theme).trim();
+      for (const [cls, text] of states) {
+        btn.className = 'movie-badge ' + cls;
+        btn.textContent = text;
+        const fg = parse(getComputedStyle(btn).color);
+        let bg = parse(getComputedStyle(btn).backgroundColor);
+        const barBg = parse(getComputedStyle(bar).backgroundColor);
+        const pageBg = parse(getComputedStyle(document.body).backgroundColor) || { r: 18, g: 18, b: 22, a: 1 };
+        let surface = barBg && barBg.a < 1 ? over(barBg, pageBg) : (barBg || pageBg);
+        if (bg && bg.a < 1) bg = over(bg, surface);
+        rows.push({ theme, cls, ratio: +ratio(fg, bg).toFixed(2) });
+      }
+    }
+    document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
+    document.body.classList.add('theme-cyan');
+    btn.className = 'movie-badge off';
+    btn.textContent = 'MOVIE';
+    return rows;
+  });
+  record('W-MOVIE-CONTRAST', 'Movie badge text is at least 4.5:1 against its button on all five themes, off, on and manual-off',
+    contrast.every((r) => r.ratio >= 4.5) ? 'PASS' : 'FAIL', contrast);
+
+  // ---- W-MOVIE-MODE: audio stays on the large buffer; video switches to the short one; the button can force either ----
+  const movieBadge = () => popup.evaluate(() => {
+    const b = document.getElementById('btn-movie-mode');
+    return { text: b.textContent.trim(), cls: b.className, pressed: b.getAttribute('aria-pressed') };
+  });
+  const movieEngine = async () => (await evalOffscreen(`({
+    movie: currentMovieMode,
+    hint: audioCtx && audioCtx.latencyHint,
+    base: audioCtx ? audioCtx.baseLatency : null,
+    ctx: audioCtx ? audioCtx.state : null,
+    stream: currentStream ? currentStream.id : null,
+    tracks: currentStream ? currentStream.getAudioTracks().map((t) => t.id) : [],
+    bass: bassNode ? bassNode.gain.value : null,
+    hpf: hpfNode ? hpfNode.frequency.value : null,
+    gain: volumeGain ? volumeGain.gain.value : null,
+    release: autoBalanceComp ? autoBalanceComp.release.value : null,
+    old: (typeof __oldMovieCtx !== 'undefined' && __oldMovieCtx) ? __oldMovieCtx.state : null
+  })`)).value;
+  const audioPage = await context.newPage();
+  watchRequests(audioPage);
+  await audioPage.goto(MEDIA_URL + '?movie-a');
+  await audioPage.evaluate(() => document.getElementById('a').play());
+  const videoPage = await context.newPage();
+  watchRequests(videoPage);
+  await videoPage.goto(`http://127.0.0.1:${PORT}/video.html`);
+  const videoReady = await videoPage.waitForFunction(() => { const v = document.getElementById('v'); return v && v.videoWidth > 0 && v.videoHeight > 0; }, null, { timeout: 8000 }).then(() => true).catch((e) => String(e));
+  const audioId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, MEDIA_URL + '?movie-a');
+  const videoId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u }))[0]?.id, `http://127.0.0.1:${PORT}/video.html`);
+  const audioStart = await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: audioId });
+  await sleep(900);
+  const audioBadge = await movieBadge();
+  const audioEng = await movieEngine();
+  await sleep(2200); // an unrelated video tab must not flip the captured audio tab
+  const audioIgnored = await movieEngine();
+  const audioBadgeStill = await movieBadge();
+  await sendFrom(popup, { type: 'STOP_CAPTURE' });
+  await sleep(400);
+  const videoStart = await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: videoId });
+  await sleep(900);
+  const videoBadge = await movieBadge();
+  const videoEng = await movieEngine();
+  const uiContexts = () => sw.evaluate(async () => {
+    const list = await chrome.runtime.getContexts({ contextTypes: ['POPUP', 'SIDE_PANEL', 'TAB'] });
+    return list.map((c) => c.documentUrl || c.contextType);
+  });
+  const closeDebugTarget = async (path) => {
+    const list = await (await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/list`)).json();
+    const t = list.find((x) => x.url === `chrome-extension://${EXT_ID}/${path}`);
+    if (!t) return false;
+    await fetch(`http://127.0.0.1:${DEBUG_PORT}/json/close/${t.id}`).catch(() => {});
+    return true;
+  };
+  const closeExtensionUi = async () => {
+    if (!popup.isClosed()) await popup.close();
+    for (const pg of context.pages()) {
+      const url = pg.url();
+      if (!pg.isClosed() && (url.includes('undocked=true') || url.includes('popup.html'))) await pg.close().catch(() => {});
+    }
+    await evalExtensionDoc('popup.html?panel=1', 'window.close()');
+    await evalExtensionDoc('popup.html?undocked=true', 'window.close()');
+    await evalExtensionDoc('popup.html', 'window.close()');
+    for (const path of ['popup.html?panel=1', 'popup.html?undocked=true', 'popup.html']) await closeDebugTarget(path);
+    let left = await uiContexts();
+    for (let i = 0; i < 15 && left.length; i++) {
+      await sleep(200);
+      for (const path of ['popup.html?panel=1', 'popup.html?undocked=true', 'popup.html']) await closeDebugTarget(path);
+      left = await uiContexts();
+    }
+    return left;
+  };
+  const workerMovie = () => sw.evaluate(() => ({
+    tab: capturedTabId,
+    timer: !!movieWatchTimer,
+    override: movieState.override,
+    effective: !!movieState.effective,
+    detected: !!movieState.detected,
+    source: movieState.override === null ? 'auto' : 'manual'
+  }));
+  const restartWorker = () => sw.evaluate(async () => {
+    capturedTabId = null;
+    movieState = { captureSessionId: 0, tabId: null, effective: false, override: null, detected: false, audioStreak: 0 };
+    movieStateHydrated = false;
+    movieStateHydrating = null;
+    stopMovieWatchTimer();
+    await recoverCaptureSessionOnWake();
+    return {
+      tab: capturedTabId,
+      timer: !!movieWatchTimer,
+      override: movieState.override,
+      effective: !!movieState.effective,
+      detected: !!movieState.detected,
+      source: movieState.override === null ? 'auto' : 'manual'
+    };
+  });
+  // Every extension screen is closed: popup, side panel, and any Stay-open window.
+  const closedUrls = await closeExtensionUi();
+  const closedUi = await movieEngine();
+  const uiClosed = await uiContexts();
+  // Audio-only (video hidden) then a visible picture, both with no UI open.
+  await videoPage.evaluate(() => { document.getElementById('v').style.display = 'none'; });
+  await sleep(4000);
+  const closedToPlayback = await movieEngine();
+  const closedToPlaybackState = await workerMovie();
+  const uiDuringPlayback = await uiContexts();
+  await videoPage.evaluate(() => { document.getElementById('v').style.display = ''; });
+  await sleep(2200);
+  const closedToInteractive = await movieEngine();
+  const closedToInteractiveState = await workerMovie();
+  const uiDuringInteractive = await uiContexts();
+  // Worker restart while the screen is still closed, then hide the video again.
+  const wakeState = await restartWorker();
+  await sleep(700);
+  const afterWake = await movieEngine();
+  const uiAfterWake = await uiContexts();
+  await videoPage.evaluate(() => { document.getElementById('v').style.display = 'none'; });
+  await sleep(4000);
+  const wakeToPlayback = await movieEngine();
+  const wakeToPlaybackState = await workerMovie();
+  const uiAfterWakeHide = await uiContexts();
+  await videoPage.evaluate(() => { document.getElementById('v').style.display = ''; });
+  await sleep(2200);
+  const restoredEng = await movieEngine();
+  const restoredState = await workerMovie();
+  let popupMovie = adopt(await openPopup());
+  await sleep(600);
+  const movieReopened = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await sendFrom(popupMovie, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 9, hpf: 80, gain: 1.2, semitones: 0 } });
+  await sendFrom(popupMovie, { type: 'SET_DYNAMICS', dynamics: { leveler: 'slow', match: false, limiter: 'fast', ceiling: 'clean' } });
+  await sleep(500);
+  await evalOffscreen('globalThis.__oldMovieCtx = audioCtx; 1');
+  const beforeSwitch = await movieEngine();
+  await popupMovie.click('#btn-movie-mode');
+  await sleep(800);
+  const manualOff = await popupMovie.evaluate(() => { const b = document.getElementById('btn-movie-mode'); return { text: b.textContent.trim(), cls: b.className }; });
+  const offEng = await movieEngine();
+  // MOVIE · OFF survives a reopen and a worker restart (the visible video must not take over).
+  await popupMovie.close();
+  popupMovie = adopt(await openPopup());
+  const offReopened = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await popupMovie.close();
+  const offWake = await restartWorker();
+  await sleep(800);
+  const offWakeEng = await movieEngine();
+  popupMovie = adopt(await openPopup());
+  const offAfterWake = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await popupMovie.click('#btn-movie-mode');
+  await sleep(800);
+  const manualOn = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  const onEng = await movieEngine();
+  await popupMovie.close();
+  popupMovie = adopt(await openPopup());
+  const onReopened = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await popupMovie.close();
+  const onWake = await restartWorker();
+  await sleep(800);
+  const onWakeEng = await movieEngine();
+  popupMovie = adopt(await openPopup());
+  const onAfterWake = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await videoPage.evaluate(() => { document.getElementById('v').style.display = 'none'; });
+  await sleep(3600);
+  const hiddenBadge = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  const hiddenEng = await movieEngine();
+  await videoPage.evaluate(() => { document.getElementById('v').style.display = ''; });
+  await sleep(500);
+  await popupMovie.click('#btn-movie-mode', { modifiers: ['Shift'] });
+  await sleep(800);
+  const backAuto = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  const autoEng = await movieEngine();
+  const frame = await sendFrom(popupMovie, { target: 'offscreen', type: 'GET_AUDIO_FRAME' });
+  await sendFrom(popupMovie, { type: 'STOP_CAPTURE' });
+  await sleep(400);
+  const cleared = await sendFrom(popupMovie, { type: 'GET_STATE' });
+  const audioAgain = await sendFrom(popupMovie, { type: 'START_CAPTURE_FOR_TAB', tabId: audioId });
+  await sleep(900);
+  const audioLabel = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await popupMovie.click('#btn-movie-mode');
+  await sleep(700);
+  const audioOn = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  const audioOnEng = await movieEngine();
+  await popupMovie.click('#btn-movie-mode');
+  await sleep(700);
+  const audioOff = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  await popupMovie.click('#btn-movie-mode', { modifiers: ['Shift'] });
+  await sleep(700);
+  const audioAuto = await popupMovie.evaluate(() => document.getElementById('btn-movie-mode').textContent.trim());
+  const stopped = await sendFrom(popupMovie, { type: 'STOP_CAPTURE' });
+  await audioPage.close();
+  await videoPage.close();
+  const sameStream = beforeSwitch && offEng && onEng && beforeSwitch.stream && beforeSwitch.stream === offEng.stream && offEng.stream === onEng.stream && autoEng.stream === onEng.stream;
+  const sameTracks = beforeSwitch && offEng && JSON.stringify(beforeSwitch.tracks) === JSON.stringify(offEng.tracks) && JSON.stringify(offEng.tracks) === JSON.stringify(onEng.tracks);
+  // AudioParam values are 32-bit, so 1.2 and 0.6 do not compare equal to the numbers we sent.
+  const near = (a, b) => typeof a === 'number' && Math.abs(a - b) < 1e-3;
+  const preserved = offEng && offEng.bass === 9 && offEng.hpf === 80 && near(offEng.gain, 1.2) && near(offEng.release, 0.6) && near(onEng.release, 0.6);
+  const movieOk = audioStart?.success === true && audioBadge.text === 'MOVIE' && audioBadge.cls.includes('off') && audioEng?.movie === false && audioEng?.hint === 'playback'
+    && audioIgnored?.hint === 'playback' && audioIgnored?.movie === false && audioBadgeStill.text === 'MOVIE'
+    && videoStart?.success === true && videoReady === true && videoBadge.text === 'MOVIE · AUTO' && videoBadge.cls.includes('on') && videoEng?.movie === true && videoEng?.hint === 'interactive'
+    && closedUi?.hint === 'interactive' && closedUi?.movie === true
+    && closedUrls.length === 0 && uiClosed.length === 0
+    && closedToPlayback?.movie === false && closedToPlayback?.hint === 'playback'
+    && closedToPlaybackState.source === 'auto' && closedToPlaybackState.effective === false && uiDuringPlayback.length === 0
+    && closedToInteractive?.movie === true && closedToInteractive?.hint === 'interactive'
+    && closedToInteractiveState.source === 'auto' && closedToInteractiveState.effective === true && uiDuringInteractive.length === 0
+    && afterWake?.hint === 'interactive' && afterWake?.movie === true
+    && wakeState.tab === videoId && wakeState.timer === true && wakeState.override === null && wakeState.effective === true
+    && uiAfterWake.length === 0
+    && wakeToPlayback?.movie === false && wakeToPlayback?.hint === 'playback'
+    && wakeToPlaybackState.source === 'auto' && wakeToPlaybackState.effective === false && uiAfterWakeHide.length === 0
+    && restoredEng?.movie === true && restoredEng?.hint === 'interactive' && restoredState.source === 'auto'
+    && movieReopened === 'MOVIE · AUTO'
+    && manualOff.text === 'MOVIE · OFF' && manualOff.cls.includes('manual-off') && offEng?.movie === false && offEng?.hint === 'playback' && offEng?.old === 'closed'
+    && offReopened === 'MOVIE · OFF' && offAfterWake === 'MOVIE · OFF'
+    && offWake.override === false && offWake.effective === false && offWakeEng?.movie === false && offWakeEng?.hint === 'playback'
+    && manualOn === 'MOVIE · ON' && onEng?.movie === true && onEng?.hint === 'interactive'
+    && onReopened === 'MOVIE · ON' && onAfterWake === 'MOVIE · ON'
+    && onWake.override === true && onWake.effective === true && onWakeEng?.movie === true && onWakeEng?.hint === 'interactive'
+    && hiddenBadge === 'MOVIE · ON' && hiddenEng?.movie === true
+    && backAuto === 'MOVIE · AUTO' && autoEng?.movie === true && autoEng?.hint === 'interactive'
+    && sameStream && sameTracks && preserved
+    && frame?.isCapturing === true && Array.isArray(frame.input) && frame.input.length === 72 && Array.isArray(frame.output)
+    && cleared.movieOverride === null && cleared.movieMode === false
+    && audioAgain?.success === true && audioLabel === 'MOVIE' && audioOn === 'MOVIE · ON' && audioOnEng?.hint === 'interactive'
+    && audioOff === 'MOVIE · OFF' && audioAuto === 'MOVIE' && stopped?.movieOverride === null && stopped?.movieMode === false;
+  record('W-MOVIE-MODE', 'Audio capture stays on playback; with every screen closed, hiding and showing the video switches playback and interactive by itself, including after a worker restart; MOVIE · ON and MOVIE · OFF survive a reopen and a restart; the button keeps the stream and the EQ; Shift-click returns to automatic; stopping clears the choice',
+    movieOk ? 'PASS' : 'FAIL', {
+      videoReady, audioId, videoId, audioStart, audioBadge, audioEng, audioIgnored, audioBadgeStill,
+      videoStart, videoBadge, videoEng, closedUi, closedUrls, uiClosed,
+      closedToPlayback, closedToPlaybackState, uiDuringPlayback,
+      closedToInteractive, closedToInteractiveState, uiDuringInteractive,
+      afterWake, wakeState, uiAfterWake, wakeToPlayback, wakeToPlaybackState, uiAfterWakeHide,
+      restoredEng, restoredState, movieReopened,
+      beforeSwitch, manualOff, offEng, offReopened, offWake, offWakeEng, offAfterWake,
+      manualOn, onEng, onReopened, onWake, onWakeEng, onAfterWake, hiddenBadge, hiddenEng, backAuto, autoEng,
+      frame: frame && { isCapturing: frame.isCapturing, in: frame.input && frame.input.length, out: frame.output && frame.output.length },
+      cleared: { movieMode: cleared.movieMode, movieOverride: cleared.movieOverride },
+      audioLabel, audioOn, audioOnEng, audioOff, audioAuto, stopped: { movieMode: stopped?.movieMode, movieOverride: stopped?.movieOverride },
+      bases: { playback: audioEng && audioEng.base, interactive: videoEng && videoEng.base }
+    });
 
   // ---- W-FALLBACK-WINDOW: the Stay-open window page ----
   const fbPage = await context.newPage();
@@ -949,9 +1334,9 @@ try {
   await fbPage.close();
 
   // ---- W-FALLBACK-SINGLE: repeated "open window" requests reuse one window ----
-  await sendFrom(popup, { type: 'OPEN_WINDOW' });
+  await sendFrom(popupMovie, { type: 'OPEN_WINDOW' });
   await sleep(800);
-  await sendFrom(popup, { type: 'OPEN_WINDOW' });
+  await sendFrom(popupMovie, { type: 'OPEN_WINDOW' });
   await sleep(800);
   const fbCount = await sw.evaluate(async (u) => (await chrome.runtime.getContexts({ contextTypes: ['TAB'] }))
     .filter((c) => c.documentUrl && c.documentUrl.startsWith(chrome.runtime.getURL(u))).length, fbUrl);
@@ -963,7 +1348,7 @@ try {
   record('W-NO-REMOTE-REQUESTS', 'Popup, windows and page script make no requests beyond the local fixture server (no Tidal API, no telemetry)',
     remote.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remote.slice(0, 10), note: 'On real Tidal the popup also loads the cover image from Tidal\'s image server.' });
 
-  await shot(popup, 'popup-final.png');
+  await shot(popupMovie, 'popup-final.png');
   record('W-NO-PAGE-ERRORS', 'No uncaught errors in popup / fake Tidal page during run',
     popupErrors.length === 0 && tidalErrors.length === 0 ? 'PASS' : 'FAIL', { popupErrors, tidalErrors });
 
@@ -972,6 +1357,7 @@ try {
   // (A real chrome.runtime.reload() cannot be used here: in this headless setup the extension does not come back.)
   await tidal.close();
   if (!popup.isClosed()) await popup.close(); // nothing may poll the tab before the screen under test opens
+  if (!popupMovie.isClosed()) await popupMovie.close();
   const panelClosed = await evalExtensionDoc('popup.html?panel=1', 'window.close()'); // the side panel from W-STAY-OPEN polls too
   await sleep(500);
   const orphan = await context.newPage();
@@ -981,7 +1367,9 @@ try {
   const orphanTabId = await sw.evaluate(async (u) => (await chrome.tabs.query({ url: u + '*' }))[0]?.id, TIDAL_URL.split('?')[0]);
   const probe = (id) => sw.evaluate(async (tabId) => { try { const r = await chrome.tabs.sendMessage(tabId, { type: 'GET_TRACK_INFO' }); return r?.title || 'answered'; } catch (e) { return e.message; } }, id);
   const before = await probe(orphanTabId);
-  const { page: popupR, errors: popupRErrors } = await openPopup();
+  const openedR = await openPopup();
+  const popupRErrors = openedR.errors;
+  const popupR = adopt(openedR);
   await sleep(2500);
   const titleAfter = await popupR.locator('#player-title').textContent().catch(() => null);
   const after = await probe(orphanTabId);
@@ -1005,8 +1393,9 @@ try {
     await sleep(600);
     await pg.click('#footer-play'); // the page's own play(): the bridge notes the element
     await sleep(700);
-    const { page: pp, errors: ppErrors } = await openPopup();
-    try { return await run(pg, pp, errs, ppErrors); } finally { await pp.close(); await pg.close(); }
+    const opened = await openPopup();
+    const ppErrors = opened.errors;
+    try { return await run(pg, adopt(opened), errs, ppErrors); } finally { await opened.page.close(); await pg.close(); }
   };
   const settle = async (pg, t) => { await pg.evaluate((x) => { window.audioEl.currentTime = x; }, t); await sleep(2300); };
 

@@ -39,6 +39,7 @@ const playerBtnNext = document.getElementById('player-btn-next');
 // DOM: EQ power, presets, footer
 const toggleEqPower = document.getElementById('toggle-eq-power');
 const eqPowerStatusBadge = document.getElementById('eq-power-status-badge');
+const btnMovieMode = document.getElementById('btn-movie-mode');
 const presetSelect = document.getElementById('preset-select');
 const presetStatusBadge = document.getElementById('preset-status-badge');
 const btnUpdatePreset = document.getElementById('btn-update-preset');
@@ -236,6 +237,7 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   dynamics = normaliseDyn(response.dynamics);
 
   updateEqPowerUI(isCapturingActive, response.capturedTabTitle);
+  updateMovieModeUI(response);
   populatePresets(currentPresetName);
   applyParamsToUI(currentParams);
   applyDynamicsToUI();
@@ -271,10 +273,12 @@ function refreshTrackInfo() {
     }
   });
   chrome.runtime.sendMessage({ type: 'GET_STATE' }, (res) => {
-    if (res && typeof res.isCapturing === 'boolean' && res.isCapturing !== isCapturingActive) {
+    if (!res) return;
+    if (typeof res.isCapturing === 'boolean' && res.isCapturing !== isCapturingActive) {
       updateEqPowerUI(res.isCapturing, res.capturedTabTitle);
       physics.updateState(currentParams, res.isCapturing);
     }
+    if ('movieMode' in res) updateMovieModeUI(res);
   });
 }
 
@@ -409,6 +413,16 @@ playerBtnFwd30.onclick = () => handleJump(30);
 playerBtnFav.onclick = handleFav;
 
 // ---------- EQ power ----------
+function updateMovieModeUI(res) {
+  if (!btnMovieMode || !res) return;
+  const on = !!res.movieMode;
+  const manualOff = res.movieOverride === false;
+  const auto = res.movieOverride == null;
+  btnMovieMode.className = 'movie-badge ' + (manualOff ? 'manual-off' : (on ? 'on' : 'off'));
+  btnMovieMode.setAttribute('aria-pressed', on ? 'true' : 'false');
+  btnMovieMode.textContent = manualOff ? 'MOVIE · OFF' : (auto ? (on ? 'MOVIE · AUTO' : 'MOVIE') : (on ? 'MOVIE · ON' : 'MOVIE · OFF'));
+}
+
 function updateEqPowerUI(active, tabTitle) {
   isCapturingActive = !!active;
   toggleEqPower.checked = isCapturingActive;
@@ -432,18 +446,32 @@ function handleToggleEqPower() {
     chrome.runtime.sendMessage({ type: 'START_CAPTURE_FOR_TAB' }, (res) => {
       if (res?.success) {
         updateEqPowerUI(true, res.tabTitle);
+        updateMovieModeUI(res);
         physics.updateState(currentParams, true);
       } else {
         updateEqPowerUI(false);
+        if (res && 'movieMode' in res) updateMovieModeUI(res);
         alert(res?.error || 'Could not attach to the audio tab. Make sure Tidal or a music tab is open.');
       }
     });
   } else {
-    chrome.runtime.sendMessage({ type: 'STOP_CAPTURE' }, () => {
+    chrome.runtime.sendMessage({ type: 'STOP_CAPTURE' }, (res) => {
       updateEqPowerUI(false);
+      if (res && 'movieMode' in res) updateMovieModeUI(res);
+      else updateMovieModeUI({ movieMode: false, movieOverride: null });
       physics.updateState(currentParams, false);
     });
   }
+}
+
+if (btnMovieMode) {
+  btnMovieMode.onclick = (e) => {
+    const msg = e.shiftKey ? { type: 'SET_MOVIE_MODE', resetAuto: true } : { type: 'SET_MOVIE_MODE', toggle: true };
+    chrome.runtime.sendMessage(msg, (res) => {
+      if (chrome.runtime.lastError) return;
+      if (res && 'movieMode' in res) updateMovieModeUI(res);
+    });
+  };
 }
 
 toggleEqPower.onchange = () => handleToggleEqPower();
@@ -836,6 +864,9 @@ document.querySelectorAll('.eq-nudge-btn').forEach(btn => {
 
 // Hint from the background when the window was opened for the mini bar and already existed.
 chrome.runtime.onMessage.addListener((message) => {
+  if (message && (message.type === 'MOVIE_MODE_CHANGED' || message.type === 'AUDIO_STATE_CHANGED') && 'movieMode' in message) {
+    updateMovieModeUI(message);
+  }
   if (message?.type === 'MINIBAR_HINT' && isLongLived) {
     btnMinibar.classList.remove('pulse');
     void btnMinibar.offsetWidth;
