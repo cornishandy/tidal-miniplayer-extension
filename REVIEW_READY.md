@@ -1,4 +1,4 @@
-# Review Ready: 2026-10-18 (1.5.5: Movie mode; 1.5.4: the EQ after a restart)
+# Review Ready: 2026-10-18 (1.5.6: Movie mode Pitch lock & status line; 1.5.5: Movie mode)
 
 ## Identity
 
@@ -14,20 +14,28 @@
 | | |
 |---|---|
 | **Load path (UNPACKED_BUILD_ROOT)** | `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked` (permanent: the extension's ID and its saved settings come from this path; never moved or renamed) |
-| Version | **1.5.5** |
+| Version | **1.5.6** |
 | Expected extension ID | `gponppchadgoilnlbogcdldbmpdoaeno` (this run: Chrome loaded `chrome-extension://gponppchadgoilnlbogcdldbmpdoaeno/background.js` from this folder) |
-| Runtime source commit | `e1f8be48c0df03a7a7bb3956cdf8f663ae1d18e9` (`e1f8be4`; see `BUILD_INFO.json` in the load path; `sourceDirty: false`) |
-| Build fingerprint | `90f0d65b3aa40e3c8e242cb2c60fcb2d891df9382b34b8222701b3e2f0258680` (SHA-256 over all shipped files) |
+| Runtime source commit | `17e9e0fbf96d6c34e5d0d8256ed2b1e89ca60641` (`17e9e0f`; see `BUILD_INFO.json` in the load path; `sourceDirty: false`) |
+| Build fingerprint | `1fbd3dfd418194030852d1394bf5b7bf65df2947dc17f9e29c84270ee12ee9fe` (SHA-256 over all shipped files) |
 | Rebuild | `node tools/build.mjs build/review-unpacked`, then **Reload** in `chrome://extensions` |
 
-The runtime files in this build are source commit `e1f8be4`. The commit after it changes docs only.
+The runtime files in this build are source commit `17e9e0f`. The commit after it changes docs only.
+
+## What changed in 1.5.6 (Movie mode Pitch lock & status line, L-02)
+
+Automatic Pitch lock while Movie mode is active, plus a permanent 16 px status line under the **AUDIO EQ** bar that explains the active buffer and Pitch state without adding height or shifting sliders.
+
+- **Movie mode locks Pitch off (`0 st`) so saved preset shifts never add video delay.** While Movie mode is active (**MOVIE · AUTO** on a video tab or **MOVIE · ON**), the WSOLA pitch shifter (~85–140 ms granular window) is bypassed and parked at `0 st` (`pitchWetGain = 0`, `pitchDryGain = 1`), and the **PITCH** row shows a dashed locked state (`OFF`, subtitle `off in Movie`).
+- **Your preset's saved semitones are untouched.** The saved `pitch` value and `stageBypass.pitch` remain intact in `currentParams` and storage, never marking a preset `(Modified)`. As soon as Movie mode turns off (**MOVIE · OFF** or returning to an audio-only tab in automatic mode), the saved Pitch shift resumes automatically.
+- **Height-neutral 16 px status line (`#movie-status-line`).** Sits directly under the **AUDIO EQ** bar (`590.2 px` total popup height at `440 px` wide, under Chrome's `600 px` cap) and explains the buffer and Pitch state (`Music buffer · auto low-delay on video`, `Pitch off (+4.0 st saved) · short video buffer`, `Pitch off for sync · short video buffer`, or `Movie off (manual) · music buffer · Pitch on`). Clicking a locked Pitch control shows a 4.5 s explanation in the same line with `0.0 px` height or slider shift.
 
 ## What changed in 1.5.5 (Movie mode, L-01)
 
 Automatic low-delay Movie mode for video tabs, plus a **MOVIE** button in the **AUDIO EQ** bar so you can force either buffer.
 
 - **A video turns the short buffer on by itself.** Music with no video keeps the large buffer from 1.5.2 (21.3 ms at 96 kHz in this run). When the captured tab is showing a real picture, the EQ rebuilds on the short buffer (2.7 ms at 96 kHz in this run) and keeps the same stream, the same settings and every stage. The button then reads **MOVIE · AUTO**.
-- **Click the MOVIE button to force either way.** One click forces the short buffer (**MOVIE · ON**) or the large one (**MOVIE · OFF**). **Shift-click** returns to automatic. The choice lasts until you stop the EQ. Leave Pitch at 0 for video: a shift still adds its own delay.
+- **Click the MOVIE button to force either way.** One click forces the short buffer (**MOVIE · ON**) or the large one (**MOVIE · OFF**). **Shift-click** returns to automatic. The choice lasts until you stop the EQ. Leave Pitch at 0 for video: a shift still adds its own delay (locked off automatically in 1.5.6).
 - The short buffer is the one that could click when the Mac is briefly busy, which is why music stays on the large buffer unless a video is showing or you force Movie mode.
 
 ## What changed in 1.5.4 (your report: the EQ message after the 1.5.3 Reload and a Chrome restart)
@@ -81,6 +89,7 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Your decisions (recorded in [docs/DESIGN_DECISIONS.md](docs/DESIGN_DECISIONS.md), "Click report" and "Review round 14")
 
+- **Movie mode Pitch lock & status line** (2026-10-18): built and installed as 1.5.6 (L-02). Movie mode locks Pitch off (`0 st`) while preserving saved preset semitones, with a height-neutral 16 px status line under the AUDIO EQ bar.
 - **Movie mode** (2026-10-18): built and installed as 1.5.5 (L-01). A video tab uses the short buffer by itself. The MOVIE button in the AUDIO EQ bar forces either buffer; Shift-click returns to automatic.
 - **The EQ message after the Reload** (2026-10-11): fixed and installed as 1.5.4 (E-01).
 - **Fix the jumps to your preference** (2026-10-11): built and installed as 1.5.3 (J-01, J-02), after a plan check, three code reviews and two final checks.
@@ -90,12 +99,13 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## Installation and state
 
-- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.5. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
+- **Everyday install**: `build/review-unpacked`, loaded by you on 2026-10-03; click **Reload** for 1.5.6. Nothing in your Chrome profile was touched by me. Your presets and settings are kept (the folder and the ID are unchanged).
 - No key generated, no Web Store action.
 
 ## Tests
 
-- **Executed (1.5.5)**: 61 installed-browser and objective-audio checks, plus 37 unit checks, all PASS on this exact build (`tests/results/review-v1.5.5/results.json`), silent and host-isolated. New: W-MOVIE-MODE (playback base 21.3 ms, interactive base 2.7 ms at 96 kHz) and W-MOVIE-CONTRAST (lowest 12.18:1, amber, off).
+- **Executed (1.5.6)**: 62 installed-browser and objective-audio checks, plus 38 unit checks, all PASS on this exact build (`tests/results/review-v1.5.6/results.json`), silent and host-isolated. New: W-MOVIE-PITCH-LOCK (Pitch locked off in Movie mode, saved preset semitones preserved without `Modified`, 0.0 px height/slider shift on status-line alert, restored when Movie mode turns off) and expanded W-MOVIE-CONTRAST (`#movie-status-line` in all states and `.movie-locked` Pitch labels >= 4.5:1 across all five themes).
+- **Executed (1.5.5)**: 61 installed-browser and objective-audio checks, plus 37 unit checks, all PASS on the 1.5.5 build (`tests/results/review-v1.5.5/results.json`), silent and host-isolated. New: W-MOVIE-MODE (playback base 21.3 ms, interactive base 2.7 ms at 96 kHz) and W-MOVIE-CONTRAST (lowest 12.18:1, amber, off).
 - **Executed (1.5.4)**: 59 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on the 1.5.4 build (`tests/results/review-v1.5.4/`), silent. New: W-EQ-AFTER-ICON (Chrome's refusal simulated; a real toolbar click cannot be run headless).
 - **Executed (1.5.3)**: 58 installed-browser and objective-audio checks, plus 18 unit checks, all PASS on the 1.5.3 build (`tests/results/review-v1.5.3/`), with the test browser silent and the fake Tidal page served as tidal.com from this Mac only. New: W-JUMP-NARROW, W-JUMP-NARROW-ELEMENT, W-JUMP-END, W-JUMP-END-QUEUE-END, W-JUMP-END-NO-NEXT, W-NEXT-THEN-JUMP, W-JUMP-NOOP-HANDLER, W-JUMP-END-NOOP-NEXT, W-JUMP-DEADBAR, W-JUMP-USER-WINS, W-BRIDGE-PAUSE-TIME, W-BRIDGE-SCOPE, W-NO-REMOTE-REQUESTS-LATE. A test-isolation slip of 1.5.2 in the dropout diagnostic was found and fixed (H-05).
 - **Executed (1.5.2)**: 45 installed-browser and objective-audio checks, plus 16 unit checks, all PASS (`tests/results/review-v1.5.2/`). New: W-CLICK-PATH (21 ms buffer, pitch stage at rest), W-PITCH-RECOVER (after a −12 to +12 jump Pitch comes back by itself), unit proofs that the limiter and the shifted sound are bit-identical to 1.5.1 and that the 6-hour freeze cannot happen.
@@ -104,23 +114,23 @@ The modes are engine settings, not preset values: they stay as you set them whic
 
 ## What I need from you
 
-1. **Reload for 1.5.5** (the folder does not move, so your presets stay):
+1. **Reload for 1.5.6** (the folder does not move, so your presets stay):
    1. Open `chrome://extensions`.
    2. Find the card "Universal Mini-Player & DJ Bass Booster".
    3. Click its round arrow (Reload). Do not remove the extension, and do not load another folder.
-   4. Check the card says **1.5.5**, and that the ID is still `gponppchadgoilnlbogcdldbmpdoaeno`.
+   4. Check the card says **1.5.6**, and that the ID is still `gponppchadgoilnlbogcdldbmpdoaeno`.
    5. On a video tab, turn **AUDIO EQ** on. If Chrome refuses, click OK, then click the extension icon once (the 1.5.4 behaviour): the switch turns on and the panel stays open.
    6. The **MOVIE** button in that bar should read **MOVIE · AUTO**, and the sound should sit closer to the picture than it did on 1.5.4.
    7. On a video, the first click forces the large buffer (**MOVIE · OFF**). Click again to force the short buffer (**MOVIE · ON**). **Shift-click** returns to automatic (**MOVIE · AUTO**).
    8. On a music tab with no video, leave it automatic. The button should read **MOVIE** (not AUTO), and the large buffer stays.
-   9. Tell me "works", or what the button said and whether the picture and the sound lined up. Leave Pitch at 0 while you check a film.
+   9. In 1.5.6 (L-02), Movie mode automatically locks **PITCH** off (`OFF`, `off in Movie`) so a preset with a saved pitch shift cannot add ~140 ms of granular delay during a video, while keeping the preset's saved semitones untouched for when Movie mode turns off. The 16 px status line directly under the AUDIO EQ bar explains the active buffer and Pitch state (and shows a brief alert if you click a locked Pitch control). Tell me "works", or what the button and status line said and whether the picture and sound lined up.
 2. **Try the jumps**: drag the side panel wide until Tidal's timeline disappears, then click +30; pause and check that the time shown is the song's; and click +30 with less than 30 s left. Tell me "works" or what happened, and tell me if a jump ever asks you to reload a tab you had just opened.
 3. **Play "Islands" again** with AUDIO EQ on, the iDSD back at 96 kHz if you changed it. Tell me "clean", or roughly how often the clicks come and whether they are steady or random.
 4. When you have time: the round-14 questions and the parked open items (signal readout, mode defaults, the MATCH bar, the 1.5.0 listening and layout questions).
 
 ## Remaining known issues
 
-Music with no video still has the 1.5.2 delay (about 35 to 60 ms by Chrome's figures; the device buffer was 21.3 ms at 96 kHz in this run). A video tab switches to the short buffer by itself (2.7 ms base at 96 kHz in this run). That short buffer is the one that could click when the Mac is busy, so music stays on the large one unless you force Movie mode. A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. The 1.5.3 page helper is visible to Tidal's scripts: if Tidal starts showing a captcha, it is the first suspect. Pitch adds about 0.14 s of delay only while a shift is set, including during a film, so leave Pitch at 0 for video. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
+Music with no video still has the 1.5.2 delay (about 35 to 60 ms by Chrome's figures; the device buffer was 21.3 ms at 96 kHz in this run). A video tab switches to the short buffer by itself (2.7 ms base at 96 kHz in this run) and locks Pitch off (`0 st`) while keeping any saved preset pitch for music. That short buffer is the one that could click when the Mac is busy, so music stays on the large one unless you force Movie mode. A jump across the whole Pitch range at once can click for a moment (K-04, waits for your OK). No year shown (your decision, R-08). Heart depends on Tidal's markup. The 1.5.3 page helper is visible to Tidal's scripts: if Tidal starts showing a captcha, it is the first suspect. Look-ahead adds 5 ms of delay only while selected. MATCH follows the music over a few seconds.
 
 ## Docs
 
@@ -129,6 +139,6 @@ Music with no video still has the 1.5.2 delay (about 35 to 60 ms by Chrome's fig
 ## Status
 
 - **SOURCE SYNC**: reported in chat after the merge is verified (not self-referenced here).
-- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.5 is harness-verified on the exact review folder (61/61, silent and host-isolated, fake Tidal page served from this Mac only; unit 37/37); your Reload and your ears on a film (L-01) are pending, as are the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix.
+- **EXTENSION**: VERIFIED by you on 1.3.3 (real Tidal, side panel, mini bar). 1.5.6 is harness-verified on the exact review folder (62/62, silent and host-isolated, fake Tidal page served from this Mac only; unit 38/38); your Reload and your ears on a film (L-01, L-02) are pending, as are the jumps on real Tidal and your listening to "Islands" on 1.5.2's fix.
 - **EVERYDAY INSTALL**: this build's folder, loaded by you; Reload pending.
 - **STORE/DEPLOYMENT**: NOT PUBLISHED.
