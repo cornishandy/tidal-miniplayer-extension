@@ -74,14 +74,14 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 
 ```bash
 cd tests && npm install --ignore-scripts   # one-time: playwright-core only (no install scripts)
-npm test                                    # unit: the static checks, the 1.5.2 click proofs, and movie mode (31)
+npm test                                    # unit: the static checks, the 1.5.2 click proofs, and movie mode (37)
 node ../tools/build.mjs /tmp/tme-build && node browser/run.mjs /tmp/tme-build --label local
 node browser/glitch-check.mjs /tmp/tme-build --seconds 60 --loop-seconds 90   # dropouts and gaps (diagnostic)
 ```
 
 The test browser has no audio output at all (`--disable-audio-output`), so nothing is heard while tests run.
 
-The browser harness uses Playwright's *Chrome for Testing* with a **fresh temporary profile**. It blocks every hostname except its own localhost fixture server, **mutes audio output**, and plays only generated sine tones and a fake Tidal page. It never touches your Chrome profile or Tidal. Tab capture is authorised with `--allowlisted-extension-id`, which stands in for the toolbar click that automation can't perform. The audio graph runs at the rate of the Mac's default output device (recorded with each run); the level readings are taken at exact frequencies, so they do not depend on it. Results go to `tests/results/<label>/` (gitignored). Chrome caps a toolbar popup at 600 px tall; the harness fails if the screen grows past that.
+The browser harness uses Playwright's *Chrome for Testing* with a **fresh temporary profile**. It blocks every hostname except its own localhost fixture server, **mutes audio output**, and plays only generated sine tones and a fake Tidal page. It never touches your Chrome profile or Tidal. Tab capture is authorised with `--allowlisted-extension-id`, which stands in for the toolbar click that automation can't perform. The audio graph runs at the rate of the Mac's default output device (recorded with each run); the level readings are taken at exact frequencies, so they do not depend on it. Results go to `tests/results/<label>/` (gitignored). The 1.5.5 review run is `tests/results/review-v1.5.5/results.json`: 61/61 on `build/review-unpacked` (commit `e1f8be48c0df03a7a7bb3956cdf8f663ae1d18e9`, fingerprint `90f0d65b3aa40e3c8e242cb2c60fcb2d891df9382b34b8222701b3e2f0258680`, `sourceDirty: false`), silent and host-isolated, plus unit 37/37. Chrome caps a toolbar popup at 600 px tall; the harness fails if the screen grows past that.
 
 **Safe manual listening test**: keep system and headphone volume where they already are. Use a quiet YouTube or Tidal track, start from the *Flat (Bypass)* preset, then raise Bass gradually.
 

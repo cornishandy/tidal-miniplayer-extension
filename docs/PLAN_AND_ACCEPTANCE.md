@@ -10,9 +10,9 @@ A mocked or automated check does **not** prove how real music sounds or that rea
 
 ## Acceptance matrix
 
-Current review build: **v1.5.1**, runtime commit `f0a5adc`, fingerprint `c6004b1723af49e5…`, 2026-10-04 (1.5.0 was `553e23b`, 1.4.0 `4b4975a`, 1.3.6 `ea7832f`, 1.3.5 `41ab5ca`, 1.3.4 `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`; earlier results stand where a check is unchanged). Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
+Current review build: **v1.5.5**, runtime commit `e1f8be48c0df03a7a7bb3956cdf8f663ae1d18e9` (`e1f8be4`), fingerprint `90f0d65b3aa40e3c8e242cb2c60fcb2d891df9382b34b8222701b3e2f0258680`, `sourceDirty: false`, 2026-10-18. Evidence: `tests/results/review-v1.5.5/results.json` (61/61 on `build/review-unpacked`, silent and host-isolated) and unit 37/37. Earlier review builds: 1.5.4 `cab3906` / `0c852570af9e8f8b…`, 1.5.2 `7317469`, 1.5.1 `f0a5adc` / `c6004b1723af49e5…`, 1.5.0 `553e23b`, 1.4.0 `4b4975a`, 1.3.6 `ea7832f`, 1.3.5 `41ab5ca`, 1.3.4 `075e241`, 1.3.3 `f018f0c`, 1.3.2 `18bc5d1`, 1.3.1 `ca30d42`, 1.3.0 `dccf108`. Earlier results stand where a check is unchanged. Earlier columns are kept where the check still exists; checks for removed surfaces are marked RETIRED.
 
-| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x / 1.4.0 / 1.5.x (latest 1.5.2)** |
+| ID | Workflow / requirement | Level | 1.2.1 | **1.3.x / 1.4.0 / 1.5.x (latest 1.5.5)** |
 |---|---|---|---|---|
 | W-LOAD | Unpacked build loads; worker starts | installed-browser | PASS | PASS |
 | W-POPUP-RENDER | Screen renders; 8 factory presets load | installed-browser | PASS | PASS |
@@ -90,6 +90,7 @@ Current review build: **v1.5.1**, runtime commit `f0a5adc`, fingerprint `c6004b1
 
 ## Done
 
+- **2026-10-18 Movie mode**: 1.5.5 (`e1f8be48c0df03a7a7bb3956cdf8f663ae1d18e9`, fingerprint `90f0d65b3aa40e3c8e242cb2c60fcb2d891df9382b34b8222701b3e2f0258680`): a video tab uses the short buffer by itself; the MOVIE button in the AUDIO EQ bar forces either way; Shift-click returns to automatic (L-01). Music with no video keeps the 1.5.2 buffer. Harness 61/61 on the exact review folder (`tests/results/review-v1.5.5/results.json`, silent and host-isolated), unit 37/37.
 - **2026-10-10 click report**: 1.5.2 (`7317469`): 21 ms device buffer, pitch stage at rest at 0 st, 6-hour freeze fixed (K-01); drift and the media-element route ruled out (K-02, K-03); silent harness. Harness 45/45, unit 16/16; stall series in docs/evidence.
 - **2026-10-04 round 12**: 1.5.1 (`f0a5adc`): the side panel's band tags are the popup's words again (R-21 revised, your request); the harness reads levels at exact frequencies so the Mac's output device rate no longer matters (H-03). Harness 43/43 on the exact review folder, unit 13/13.
 - **2026-10-04 round 11**: 1.5.0 (`553e23b`): the alternatives as switches (Leveler Full band / Slow release / Bass only, MATCH, Limiter Fast / Look-ahead, Ceiling Clean / Warm; D-01), live bars on the four dynamics rows (D-02), rows in signal order with LIM and CEIL added (D-03), the leveler diagram (D-04), the audio-processing freeze rule (A-03) with its baseline check; the EQ's target tab kept (C-01). Harness 43/43 on the exact review folder, unit 13/13.
@@ -124,10 +125,11 @@ Your listening to the switches (D-01, S-DYN-LISTEN) and to the pitch shift (P-01
 - The 1.5.0 alternatives are objectively right on tones and routed around by default; on music they need your ears (S-DYN-LISTEN). MATCH follows the music over a few seconds, so a section change can be heard as a slow level settle. Look-ahead adds 5 ms of delay while selected. The audio processing is frozen otherwise (A-03): W-DYN-BASELINE must stay green.
 - The pitch shifter (WSOLA) is objectively right on tones; on music it will warble slightly on long notes and can double drum hits at large shifts, and it adds about 0.14 s of delay while a shift is set. Needs your listening (S-PITCH-LISTEN).
 - 1.5.2: up to about 50 ms more delay, about 35 to 60 ms in all by Chrome's figures (the larger device buffer; corrected 2026-10-11 from "about 30 ms"); a video tab's sound lags its picture by that much more. Switching Pitch on now plays about 0.15 s unshifted first. A jump across the whole Pitch range at once can still run the shifter dry for a moment (a click; it was so in 1.4.0 too); fixing that changes how Pitch glides and waits for your OK.
+- 1.5.5: while a video is showing, the device buffer is the short one (2.7 ms base at 96 kHz in `tests/results/review-v1.5.5/results.json`). That is the buffer that clicked on a busy Mac before 1.5.2, so it is used only for video, or when Movie mode is forced on. Music with no video stays on the large buffer (21.3 ms base in the same run). Pitch still adds its own delay while a shift is set.
 - 1.5.3: the page helper (`page-bridge.js`) wraps three of Tidal's browser calls inside Tidal's page (passed through unchanged, visible to Tidal's scripts); if Tidal starts showing a captcha or misbehaves, it is the first suspect. Tidal tabs opened before 1.5.3 was installed need one reload for the narrow-page jumps.
 - The popup polls the media tab every second while open. That's cheap, but continuous.
 - Content scripts run on every http(s) page (existing behaviour; permission scope unchanged).
 
 ## Next bounded milestone
 
-"Islands" again on 1.5.2 (your click report); your listening to the switches and to the pitch shift; then whatever that turns up (per-preset modes, a true-peak ceiling, or tuning of a mode you like are the candidates; none without your OK).
+Your ears on a film with Movie mode (L-01: MOVIE · AUTO, then a click each way and a Shift-click back); "Islands" again on 1.5.2 (your click report); your listening to the switches and to the pitch shift; then whatever that turns up (per-preset modes, a true-peak ceiling, or tuning of a mode you like are the candidates; none without your OK).
