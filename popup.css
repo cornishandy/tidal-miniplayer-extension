@@ -322,6 +322,43 @@ button {
   border-color: var(--accent, #00e5ff);
 }
 
+/* Fixed 16 px status/alert line directly under .status-bar (1.5.6, L-02). Never changes height. */
+.movie-status-line {
+  display: block;
+  height: 16px;
+  min-height: 16px;
+  max-height: 16px;
+  line-height: 15px;
+  padding: 0 12px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: none;
+  background: #14141a;
+  color: #c8c8d4;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+
+.movie-status-line.on,
+.movie-status-line.active {
+  background: #0d0d12;
+  color: #ffffff;
+}
+
+.movie-status-line.manual-off {
+  background: #14141a;
+  color: #e0e0ea;
+}
+
+.movie-status-line.alert {
+  background: #191308;
+  color: #ffd54f;
+  font-weight: 600;
+}
+
 .power-badge.on {
   background: var(--accent-glow, rgba(0, 229, 255, 0.18));
   color: var(--accent, #00e5ff);
@@ -384,8 +421,8 @@ input:checked + .slider-round:before {
 .eq-pane {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding: 6px 12px 4px;
+  gap: 4px;
+  padding: 4px 12px 3px;
 }
 
 .preset-section {
@@ -519,18 +556,18 @@ input:checked + .slider-round:before {
 }
 
 .phys-canvas.live {
-  height: 50px;
+  height: 48px;
 }
 
 .phys-canvas.bode {
-  height: 46px;
+  height: 44px;
 }
 
 /* Sliders */
 .controls-area {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
 }
 
 .eq-row {
@@ -564,6 +601,13 @@ input:checked + .slider-round:before {
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(255, 255, 255, 0.1);
   text-decoration: line-through;
+}
+
+.band-tag.movie-locked {
+  color: #b8b8c6;
+  border-color: rgba(255, 255, 255, 0.28);
+  border-style: dashed;
+  cursor: not-allowed;
 }
 
 .band-tag:hover {
@@ -669,6 +713,31 @@ input:checked + .slider-round:before {
 .eq-row.is-off .eq-label,
 .eq-row.is-off .eq-val {
   opacity: 0.45;
+}
+
+.eq-row.movie-locked .eq-slider,
+.eq-row.movie-locked input[type="range"],
+.eq-row.movie-locked .eq-nudge-btn,
+.eq-row.movie-locked .nudge,
+.eq-row.movie-locked .eq-val {
+  cursor: not-allowed;
+}
+
+.eq-row.movie-locked .eq-slider,
+.eq-row.movie-locked input[type="range"],
+.eq-row.movie-locked .eq-nudge-btn,
+.eq-row.movie-locked .nudge {
+  opacity: 0.45;
+}
+
+.eq-row.movie-locked .eq-label,
+.eq-row.movie-locked .eq-val {
+  color: var(--text-main, #ffffff);
+  opacity: 0.78;
+}
+
+.eq-row.movie-locked .eq-label small {
+  color: var(--text-main, #ffffff);
 }
 
 .eq-nudge-btn {

@@ -8,6 +8,11 @@ let isCapturingActive = false;
 let currentTrackInfo = null;
 let activePresetBaseline = null;
 let stayOpen = false;
+let currentMovieMode = false;
+let currentMovieOverride = null;
+let currentMovieModeOverride = null;
+let movieAlertText = '';
+let movieAlertTimer = null;
 // Dynamics modes (1.5.0, D-01): engine settings, not preset fields. The defaults are the 1.4.0 chain.
 const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
 let dynamics = { ...DYN_DEFAULT };
@@ -40,6 +45,7 @@ const playerBtnNext = document.getElementById('player-btn-next');
 const toggleEqPower = document.getElementById('toggle-eq-power');
 const eqPowerStatusBadge = document.getElementById('eq-power-status-badge');
 const btnMovieMode = document.getElementById('btn-movie-mode');
+const movieStatusLine = document.getElementById('movie-status-line');
 const presetSelect = document.getElementById('preset-select');
 const presetStatusBadge = document.getElementById('preset-status-badge');
 const btnUpdatePreset = document.getElementById('btn-update-preset');
@@ -64,6 +70,10 @@ const valMid = document.getElementById('val-mid');
 const valHigh = document.getElementById('val-high');
 const valGain = document.getElementById('val-gain');
 const valPitch = document.getElementById('val-pitch');
+const pitchRow = document.querySelector('.eq-row[data-band="pitch"]');
+const pitchTag = document.querySelector('.band-tag[data-band="pitch"]');
+const pitchSub = pitchRow ? pitchRow.querySelector('.eq-label small') : null;
+const pitchNudges = [...document.querySelectorAll('.eq-nudge-btn[data-target="slider-pitch"]')];
 
 // DOM: dynamics modes and meters (AUTO, MATCH, LIM, CEIL)
 const modeLeveler = document.getElementById('mode-leveler');
@@ -237,10 +247,10 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   dynamics = normaliseDyn(response.dynamics);
 
   updateEqPowerUI(isCapturingActive, response.capturedTabTitle);
-  updateMovieModeUI(response);
   populatePresets(currentPresetName);
   applyParamsToUI(currentParams);
   applyDynamicsToUI();
+  updateMovieModeUI(response, { checkSavedPitch: true });
 
   activePresetBaseline = presets[currentPresetName] ? normaliseBypass({ ...presets[currentPresetName] }) : null;
   checkPresetModificationState();
@@ -412,15 +422,120 @@ playerBtnBack15.onclick = () => handleJump(-15);
 playerBtnFwd30.onclick = () => handleJump(30);
 playerBtnFav.onclick = handleFav;
 
-// ---------- EQ power ----------
-function updateMovieModeUI(res) {
-  if (!btnMovieMode || !res) return;
-  const on = !!res.movieMode;
-  const manualOff = res.movieOverride === false;
-  const auto = res.movieOverride == null;
-  btnMovieMode.className = 'movie-badge ' + (manualOff ? 'manual-off' : (on ? 'on' : 'off'));
-  btnMovieMode.setAttribute('aria-pressed', on ? 'true' : 'false');
-  btnMovieMode.textContent = manualOff ? 'MOVIE · OFF' : (auto ? (on ? 'MOVIE · AUTO' : 'MOVIE') : (on ? 'MOVIE · ON' : 'MOVIE · OFF'));
+// ---------- EQ power & Movie mode (1.5.5 L-01, 1.5.6 L-02) ----------
+function flashMovieAlert(text, ms = 4500) {
+  if (!movieStatusLine) return;
+  clearTimeout(movieAlertTimer);
+  movieAlertText = text || '';
+  syncMoviePresentation();
+  if (movieAlertText && ms > 0) {
+    movieAlertTimer = setTimeout(() => {
+      movieAlertText = '';
+      syncMoviePresentation();
+    }, ms);
+  }
+}
+
+function showMoviePitchAlert(customMsg, ms = 4500) {
+  if (customMsg) {
+    flashMovieAlert(customMsg, ms);
+    return;
+  }
+  const savedSt = parseFloat(sliderPitch.value) || 0;
+  const detail = Math.abs(savedSt) >= 0.05 ? ` (${fmt.pitch(savedSt)} saved)` : '';
+  flashMovieAlert(`Pitch${detail} is disabled in Movie mode (~140 ms delay) — click MOVIE to allow`, ms);
+}
+
+function notifyPitchLocked() {
+  showMoviePitchAlert();
+}
+
+function syncMoviePresentation() {
+  if (btnMovieMode) {
+    const on = !!currentMovieMode;
+    const manualOff = currentMovieOverride === false;
+    const auto = currentMovieOverride == null;
+    btnMovieMode.className = 'movie-badge ' + (manualOff ? 'manual-off' : (on ? 'on' : 'off'));
+    btnMovieMode.setAttribute('aria-pressed', on ? 'true' : 'false');
+    btnMovieMode.textContent = manualOff ? 'MOVIE · OFF' : (auto ? (on ? 'MOVIE · AUTO' : 'MOVIE') : (on ? 'MOVIE · ON' : 'MOVIE · OFF'));
+  }
+
+  const savedSt = sliderPitch ? (parseFloat(sliderPitch.value) || 0) : 0;
+  const hasSavedShift = Math.abs(savedSt) >= 0.05 && !bandOff.pitch;
+
+  if (pitchRow && pitchTag && sliderPitch && valPitch) {
+    if (currentMovieMode) {
+      pitchRow.classList.add('is-off', 'movie-locked');
+      pitchTag.classList.add('off', 'movie-locked');
+      pitchTag.setAttribute('aria-pressed', 'false');
+      pitchTag.setAttribute('aria-disabled', 'true');
+      pitchTag.title = 'Pitch is disabled in Movie mode (~140 ms granular window). Saved preset pitch is preserved and resumes when Movie mode turns off.';
+      if (pitchSub) pitchSub.textContent = 'off in Movie';
+      valPitch.textContent = 'OFF';
+      valPitch.title = hasSavedShift
+        ? `Saved: ${fmt.pitch(savedSt)} (disabled in Movie mode)`
+        : 'Disabled in Movie mode (~140 ms granular window)';
+      sliderPitch.setAttribute('aria-disabled', 'true');
+      pitchNudges.forEach((b) => b.setAttribute('aria-disabled', 'true'));
+    } else {
+      pitchRow.classList.remove('movie-locked');
+      pitchTag.classList.remove('movie-locked');
+      pitchTag.removeAttribute('aria-disabled');
+      sliderPitch.removeAttribute('aria-disabled');
+      pitchNudges.forEach((b) => b.removeAttribute('aria-disabled'));
+      if (pitchSub) pitchSub.textContent = 'key, same speed';
+      valPitch.textContent = fmt.pitch(savedSt);
+      valPitch.title = 'Double-click: neutral / restore';
+      const off = !!bandOff.pitch;
+      pitchTag.classList.toggle('off', off);
+      pitchTag.setAttribute('aria-pressed', String(!off));
+      pitchRow.classList.toggle('is-off', off);
+      pitchTag.title = off
+        ? 'Pitch is off (the value is kept). Click to switch it back on.'
+        : 'Pitch is on. Click to switch it off without losing the value.';
+    }
+  }
+
+  if (movieStatusLine) {
+    if (movieAlertText) {
+      movieStatusLine.className = 'movie-status-line on active alert';
+      movieStatusLine.textContent = movieAlertText;
+    } else if (currentMovieMode) {
+      movieStatusLine.className = 'movie-status-line on active';
+      movieStatusLine.textContent = hasSavedShift
+        ? `Pitch off (${fmt.pitch(savedSt)} saved) · short video buffer`
+        : 'Pitch off for sync · short video buffer';
+    } else if (currentMovieOverride === false) {
+      movieStatusLine.className = 'movie-status-line manual-off off';
+      movieStatusLine.textContent = 'Movie off (manual) · music buffer · Pitch on';
+    } else {
+      movieStatusLine.className = 'movie-status-line off';
+      movieStatusLine.textContent = 'Music buffer · auto low-delay on video';
+    }
+  }
+}
+
+const renderMovieModeUI = syncMoviePresentation;
+
+function updateMovieModeUI(res, { checkSavedPitch = false } = {}) {
+  if (!res) return;
+  const wasMovie = currentMovieMode;
+  currentMovieMode = !!res.movieMode;
+  if ('movieOverride' in res) {
+    currentMovieOverride = res.movieOverride ?? null;
+    currentMovieModeOverride = currentMovieOverride;
+  }
+  if (!currentMovieMode && movieAlertText) {
+    clearTimeout(movieAlertTimer);
+    movieAlertText = '';
+  }
+  syncMoviePresentation();
+  if (currentMovieMode && (!wasMovie || checkSavedPitch)) {
+    const savedSt = sliderPitch ? (parseFloat(sliderPitch.value) || 0) : 0;
+    if (Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
+      flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
+    }
+  }
 }
 
 function updateEqPowerUI(active, tabTitle) {
@@ -652,6 +767,10 @@ presetSelect.onchange = () => {
     activePresetBaseline = { ...p };
     applyParamsToUI(p);
     sendAudioParamUpdate();
+    const savedSt = parseFloat(sliderPitch.value) || 0;
+    if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
+      flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
+    }
   }
 };
 
@@ -738,6 +857,23 @@ const fmt = {
   gain: (v) => `${Math.round(parseFloat(v) * 100)}%`,
   pitch: (v) => { const st = parseFloat(v); return `${st > 0 ? '+' : ''}${st.toFixed(1)} st`; }
 };
+const formatPitch = (v) => fmt.pitch(v);
+
+function computeActivePipelineStages() {
+  const byp = currentParams.bypass === true;
+  const sb = bandOff || {};
+  return {
+    pitchOn: !byp && !sb.pitch && !currentMovieMode && Math.abs(currentParams.semitones || 0) >= 0.05,
+    hpfOn: !byp && !sb.hpf,
+    bassOn: !byp && !sb.bass,
+    midOn: !byp && !sb.mid,
+    highOn: !byp && !sb.high,
+    compOn: !byp && !sb.comp,
+    matchOn: !byp && !!dynamics.match,
+    gainOn: !byp && !sb.gain,
+    movieMode: !!currentMovieMode
+  };
+}
 
 function renderBandTags() {
   document.querySelectorAll('.band-tag').forEach((tag) => {
@@ -758,6 +894,7 @@ function renderBandTags() {
       ? `${names[band]} is off (the value is kept). Click to switch it back on.`
       : `${names[band]} is on. Click to switch it off without losing the value.`;
   });
+  syncMoviePresentation();
 }
 
 function applyParamsToUI(p) {
@@ -776,6 +913,8 @@ function applyParamsToUI(p) {
   };
   renderBandTags();
 }
+const renderSliders = applyParamsToUI;
+const renderStageBypass = () => renderBandTags();
 
 function getParamsFromUI() {
   const sel = presets[presetSelect.value];
@@ -802,6 +941,10 @@ function sendAudioParamUpdate() {
 document.querySelectorAll('button.band-tag').forEach((tag) => {
   tag.onclick = () => {
     const band = tag.dataset.band;
+    if (band === 'pitch' && currentMovieMode) {
+      notifyPitchLocked();
+      return;
+    }
     if (band === 'match') { // an engine setting, not a preset value
       dynamics.match = !dynamics.match;
       sendDynamicsUpdate();
@@ -818,6 +961,10 @@ function setupValueToggle(valEl, sliderEl, neutralVal, formatFn, onChange) {
   let prevVal = parseFloat(sliderEl.value);
   valEl.ondblclick = (e) => {
     e.preventDefault();
+    if (sliderEl === sliderPitch && currentMovieMode) {
+      notifyPitchLocked();
+      return;
+    }
     const cur = parseFloat(sliderEl.value);
     if (Math.abs(cur - neutralVal) < 0.001) {
       sliderEl.value = (prevVal !== undefined && Math.abs(prevVal - neutralVal) >= 0.001) ? prevVal : parseFloat(sliderEl.defaultValue || neutralVal);
@@ -838,18 +985,58 @@ setupValueToggle(valHigh, sliderHigh, 0, fmt.high);
 setupValueToggle(valGain, sliderGain, 1.0, fmt.gain);
 setupValueToggle(valPitch, sliderPitch, 0, fmt.pitch);
 
+if (valPitch) {
+  valPitch.addEventListener('click', (e) => {
+    if (!currentMovieMode) return;
+    e.preventDefault();
+    notifyPitchLocked();
+  });
+}
+
+if (sliderPitch) {
+  const guardPitchPointer = (e) => {
+    if (!currentMovieMode) return;
+    e.preventDefault();
+    notifyPitchLocked();
+  };
+  sliderPitch.addEventListener('pointerdown', guardPitchPointer);
+  sliderPitch.addEventListener('mousedown', guardPitchPointer);
+  sliderPitch.addEventListener('click', guardPitchPointer);
+  sliderPitch.addEventListener('keydown', (e) => {
+    if (!currentMovieMode) return;
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(e.key)) {
+      e.preventDefault();
+      notifyPitchLocked();
+    }
+  });
+}
+
 sliderBass.oninput = (e) => { valBass.textContent = fmt.bass(e.target.value); sendAudioParamUpdate(); };
 sliderHpf.oninput = (e) => { valHpf.textContent = fmt.hpf(e.target.value); sendAudioParamUpdate(); };
 sliderMid.oninput = (e) => { valMid.textContent = fmt.mid(e.target.value); sendAudioParamUpdate(); };
 sliderHigh.oninput = (e) => { valHigh.textContent = fmt.high(e.target.value); sendAudioParamUpdate(); };
 sliderGain.oninput = (e) => { valGain.textContent = fmt.gain(e.target.value); sendAudioParamUpdate(); };
-sliderPitch.oninput = (e) => { valPitch.textContent = fmt.pitch(e.target.value); sendAudioParamUpdate(); };
+sliderPitch.oninput = (e) => {
+  if (currentMovieMode) {
+    sliderPitch.value = typeof currentParams.semitones === 'number' ? currentParams.semitones : 0;
+    syncMoviePresentation();
+    notifyPitchLocked();
+    return;
+  }
+  valPitch.textContent = fmt.pitch(e.target.value);
+  sendAudioParamUpdate();
+};
 
 // − / + nudges; Shift-click = 5× finer
 document.querySelectorAll('.eq-nudge-btn').forEach(btn => {
   btn.onclick = (e) => {
     e.preventDefault();
-    const slider = document.getElementById(btn.getAttribute('data-target'));
+    const targetId = btn.getAttribute('data-target');
+    if (targetId === 'slider-pitch' && currentMovieMode) {
+      notifyPitchLocked();
+      return;
+    }
+    const slider = document.getElementById(targetId);
     if (!slider) return;
     let step = parseFloat(btn.getAttribute('data-step') || '0.5');
     if (e.shiftKey) step = step / 5;

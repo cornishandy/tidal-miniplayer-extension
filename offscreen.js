@@ -5,7 +5,7 @@ let currentStream = null;
 let sourceNode = null;
 let isCapturing = false;
 
-// Movie mode (1.5.5, L-01): 'interactive' shortens the device buffer for video. Audio-only stays on 'playback'.
+// Movie mode (1.5.5, L-01; 1.5.6, L-02): 'interactive' shortens the device buffer for video and locks Pitch off. Audio-only stays on 'playback'.
 let currentMovieMode = false;
 let captureGen = 0; // bumped synchronously at the public entry of start, stop and each real rebuild, before the engine queue, so a queued start cannot run after Stop
 let engineQueue = Promise.resolve();
@@ -33,7 +33,11 @@ function latencyFields(extra) {
   return Object.assign({
     movieMode: currentMovieMode,
     latencyHint: currentMovieMode ? 'interactive' : 'playback',
-    baseLatency: audioCtx ? audioCtx.baseLatency : null
+    baseLatency: audioCtx ? audioCtx.baseLatency : null,
+    pitchLockedByMovie: !!currentMovieMode,
+    effectivePitch: pitchTarget(currentMovieMode),
+    effectivePitchBypassed: Boolean(currentMovieMode || bypassState().pitch),
+    effectiveSemitones: currentMovieMode ? 0 : currentParams.semitones
   }, extra || {});
 }
 
@@ -205,7 +209,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     case 'UPDATE_AUDIO_PARAMS':
     case 'UPDATE_PARAMS':
       updateParams(message.params);
-      sendResponse({ success: true, currentParams });
+      sendResponse(latencyFields({ success: true, currentParams }));
       return true;
 
     case 'SET_DYNAMICS':
@@ -372,7 +376,7 @@ async function buildAudioGraph(stream, movieMode, gen) {
       const node = builtPitch;
       node.port.onmessage = (e) => {
         if (pitchNode !== node || audioCtx !== ctx || typeof e.data?.primed !== 'boolean') return;
-        if (!e.data.primed && pitchPrimed && pitchTarget() !== 0) pitchHoldUntil = audioCtx.currentTime + 0.5;
+        if (!e.data.primed && pitchPrimed && pitchTarget(currentMovieMode) !== 0) pitchHoldUntil = audioCtx.currentTime + 0.5;
         pitchPrimed = e.data.primed;
         if (pitchPrimed) reopenAfterHold(node);
         applyRoutingState();
@@ -423,8 +427,8 @@ async function buildAudioGraph(stream, movieMode, gen) {
     const hpfNode = ctx.createBiquadFilter();
     hpfNode.type = 'highpass';
     // After every await (including the dynamics worklet). A pitch change that arrived while that
-    // module was loading has to be the value this graph is installed with.
-    if (builtPitch) builtPitch.parameters.get('semitones').value = pitchTarget();
+    // module was loading has to be the value this graph is installed with; Movie mode forces 0.
+    if (builtPitch) builtPitch.parameters.get('semitones').value = pitchTarget(!!movieMode);
     const off = bypassState();
     hpfNode.frequency.value = off.hpf ? 20 : currentParams.hpf;
     hpfNode.Q.value = 0.707; // Butterworth response
@@ -801,25 +805,34 @@ function applyRoutingState({ immediate = false } = {}) {
     audioCtx, pitchNode, pitchPrimed, pitchHoldUntil,
     dspPathGain, directPassThroughGain, autoBalanceWetGain, autoBalanceBypassGain, bandLevelerGain, autoBalanceComp,
     matchWetGain, matchDryGain, lookaheadGain, limiterFastGain, ceilingWarmGain, ceilingCleanGain, pitchWetGain, pitchDryGain,
-    bandLevelerNode, matchNode, lookaheadNode
+    bandLevelerNode, matchNode, lookaheadNode,
+    movieMode: currentMovieMode
   }, { immediate });
 }
 
 // Gain routing for one graph bundle. `g` carries its own nodes, its own primed flag and its own context, so a graph
 // that is still being built can be set before it replaces the live one. The live path calls this through applyRoutingState.
 function applyRoutingToGraph(g, { immediate = false } = {}) {
+  if (!g) return;
   const audioCtx = g.audioCtx;
   const pitchNode = g.pitchNode;
   const pitchPrimed = g.pitchPrimed;
   const pitchHoldUntil = g.pitchHoldUntil;
-  if (!audioCtx || audioCtx.state === 'closed') return;
-  const now = audioCtx.currentTime;
+  const now = audioCtx ? audioCtx.currentTime : 0;
   const rampTime = 0.02;
   const set = (node, value) => {
     if (!node) return;
-    if (immediate) node.gain.value = value;
-    else node.gain.setTargetAtTime(value, now, rampTime);
+    const param = node.gain || node;
+    if (immediate || !audioCtx || typeof param.setTargetAtTime !== 'function') param.value = value;
+    else param.setTargetAtTime(value, now, rampTime);
   };
+  if (!audioCtx && ('semitones' in g || 'pitchBypassed' in g || 'bypassed' in g)) {
+    const active = !g.bypassed && !g.pitchBypassed && !g.movieMode && Math.abs(g.semitones || 0) >= 0.001;
+    set(g.pitchWetGain, active ? 1.0 : 0.0);
+    set(g.pitchDryGain, active ? 0.0 : 1.0);
+    return;
+  }
+  if (!audioCtx || audioCtx.state === 'closed') return;
 
   const isBypass = currentParams.bypass === true;
   const isCompBypassed = bypassState().comp;
@@ -854,10 +867,11 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   set(g.ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
 
   // The shifter is in the path only while a shift is set and it is producing audio (it adds about 0.14 s of delay);
-  // 0 st is a true bypass, and the shifter is parked then.
+  // 0 st is a true bypass, and the shifter is parked then. Movie mode (1.5.6, L-02) locks Pitch off for video sync.
   const shifting = !!pitchNode && pitchTarget() !== 0 && pitchPrimed && audioCtx.currentTime >= pitchHoldUntil;
-  set(g.pitchWetGain, shifting ? 1.0 : 0.0);
-  set(g.pitchDryGain, shifting ? 0.0 : 1.0);
+  const pitchOpen = !g.movieMode && shifting && pitchTarget(!!g.movieMode) !== 0;
+  set(g.pitchWetGain, pitchOpen ? 1.0 : 0.0);
+  set(g.pitchDryGain, pitchOpen ? 0.0 : 1.0);
 }
 
 // Re-route once the audio clock has passed the hold. A timer runs on the computer's clock and the audio clock lags it by
@@ -870,8 +884,9 @@ function reopenAfterHold(node) {
   pitchHoldTimer = setTimeout(() => reopenAfterHold(node), wait * 1000 + 20);
 }
 
-// The shift the worklet is given: below 0.05 st it is exactly 0, which parks it.
-function pitchTarget() {
+// The shift the worklet is given: below 0.05 st it is exactly 0, which parks it. Movie mode forces 0 without changing currentParams.
+function pitchTarget(forMovieMode = currentMovieMode) {
+  if (forMovieMode) return 0;
   const st = pitchSetting();
   return Math.abs(st) >= 0.05 ? st : 0;
 }
@@ -880,7 +895,7 @@ function pitchTarget() {
 // is over (250 ms), so the shifter parks.
 function schedulePitch(now, rampTime) {
   const p = pitchNode.parameters.get('semitones');
-  const st = pitchTarget();
+  const st = pitchTarget(currentMovieMode);
   p.cancelScheduledValues(now);
   p.setValueAtTime(p.value, now);
   p.setTargetAtTime(st, now, rampTime);
