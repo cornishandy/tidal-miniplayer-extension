@@ -46,7 +46,7 @@ test('fallback window is the working undocked popup, not the broken miniplayer p
 });
 
 test('no network code: the shipped scripts never contact Tidal or any server', () => {
-  for (const f of ['background.js', 'content.js', 'page-bridge.js', 'popup.js', 'offscreen.js', 'physics-view.js', 'pitch-shifter.worklet.js', 'dynamics.worklet.js']) {
+  for (const f of ['background.js', 'content.js', 'page-bridge.js', 'movie-sound-link.js', 'popup.js', 'offscreen.js', 'physics-view.js', 'pitch-shifter.worklet.js', 'dynamics.worklet.js']) {
     const src = readFileSync(join(root, f), 'utf8');
     assert.doesNotMatch(src, /\bfetch\s*\(|XMLHttpRequest|tidal\.com\/v1|api\.tidal\.com/, `${f} contains network code`);
   }
@@ -58,7 +58,7 @@ test('retired surfaces stay out: no Playlists, Lab, header icons, floating butto
   assert.doesNotMatch(popup, /tab-btn-playlists|tab-btn-lab|lab-btn-create|btn-size-toggle|btn-micro-toggle|btn-always-on-top|btn-undock|toggle-floating-btn|btn-open-router/);
   assert.doesNotMatch(content, /FETCH_USER_PLAYLISTS|CREATE_PLAYLIST_WITH_TRACKS|getTidalSession|injectFloatingButton|documentPictureInPicture/);
   for (const f of ['tidal-bridge.js', 'miniplayer.html', 'miniplayer.js', 'router-visualizer.js']) assert.ok(!existsSync(join(root, f)), `${f} should be gone`);
-  assert.deepEqual(manifest.content_scripts.map((c) => c.js).flat(), ['content.js', 'page-bridge.js']);
+  assert.deepEqual(manifest.content_scripts.map((c) => c.js).flat(), ['content.js', 'page-bridge.js', 'movie-sound-link.js']);
   assert.equal(manifest.web_accessible_resources, undefined, 'nothing needs to be web-accessible any more');
 });
 
@@ -165,4 +165,18 @@ test('every test browser stays isolated and silent: host blocking, no proxy and 
     for (const flag of ['--host-resolver-rules=MAP', '--no-proxy-server', '--disable-audio-output', '--mute-audio']) assert.ok(src.includes(flag), `${f} lacks ${flag}`);
   }
   assert.ok(code('tools/diagramshot.mjs').includes('--no-proxy-server'));
+});
+
+test('the Movie Sound link (1.5.7) runs only on the Movie Sound page, in the isolated world, and only reads storage', () => {
+  const entry = manifest.content_scripts.find((c) => c.js.includes('movie-sound-link.js'));
+  assert.deepEqual(entry.matches, ['http://127.0.0.1:8791/*'], 'the Movie Sound page only');
+  assert.deepEqual(entry.js, ['movie-sound-link.js'], 'nothing else rides along');
+  assert.equal(entry.world, undefined, 'isolated world: the page never sees chrome.*');
+  assert.equal(entry.all_frames, undefined, 'top frame only');
+  assert.equal(entry.run_at, 'document_start', 'listening before the page asks');
+  const src = readFileSync(join(root, 'movie-sound-link.js'), 'utf8');
+  assert.match(src, /location\.origin !== ORIGIN \|\| window\.top !== window/, 'checks its own origin and frame too');
+  assert.doesNotMatch(src, /storage\.\w+\.(set|remove|clear)\s*\(/, 'never writes storage');
+  assert.doesNotMatch(src, /tabCapture|getUserMedia|AudioContext|runtime\.sendMessage|isAudioCapturing'/, 'never touches capture, audio or the background');
+  assert.doesNotMatch(src, /postMessage\([^)]*['"]\*['"]/, 'never posts to any origin');
 });

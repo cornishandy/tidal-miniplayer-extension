@@ -34,6 +34,7 @@ Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and 
 | J-8 | Reload or update the extension while Tidal is open → the screen still works without a page refresh | ✔ H-02 (1.3.4), W-REINJECT-ORPHAN |
 | J-9 | Shift the key of a track (Pitch) without changing its speed | ✔ W-PITCH (objective, 1.4.0); **your listening pending** (P-01) |
 | J-10 | Hear when the leveler, limiter or ceiling is working (the bars), and switch to an alternative stage without losing the original sound | ✔ W-DYN-* (objective, 1.5.0), W-DYN-METERS-UI; **your listening pending** (D-01) |
+| J-12 | Movie Sound follows this EQ live: the Movie Sound page (127.0.0.1:8791) gets the saved preset, sliders and dynamics as they change (1.5.7, M-01) | ✔ unit `movie-sound-link`, browser `movie-sound-link.mjs`; **your film with Movie Sound pending** |
 | J-11 | Movie mode: a video on the captured tab shortens the buffer by itself (MOVIE · AUTO) and locks Pitch off (~140 ms granular window) while preserving saved preset pitch; a 16 px status line explains the buffer/Pitch state and alerts on locked Pitch interactions without shifting layout; a click forces Movie mode on or off; Shift-click returns to automatic | ✔ W-MOVIE-MODE, W-MOVIE-PITCH-LOCK, W-MOVIE-CONTRAST (1.5.5–1.5.6); **your ears on a film pending** (L-01, L-02) |
 
 ## Batches

@@ -17,6 +17,7 @@ const RUNTIME = [
   'background.js',
   'content.js',
   'page-bridge.js',
+  'movie-sound-link.js',
   'offscreen.html',
   'offscreen.js',
   'pitch-shifter.worklet.js',
