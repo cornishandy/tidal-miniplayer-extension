@@ -990,6 +990,13 @@ try {
       await popup.selectOption('#preset-select', 'Harness Preset');
       await sleep(350);
       const back = await readModes(popup);
+      const curve = await popup.evaluate(() => {
+        const readout = document.getElementById('physics-readout').textContent || '';
+        const bass = parseFloat(document.getElementById('slider-bass').value);
+        const match = /Low (off|[+-]?\d+(?:\.\d+)?)/.exec(readout);
+        const shown = match && match[1] !== 'off' ? parseFloat(match[1]) : null;
+        return { readout, bass, shown };
+      });
       const storedBack = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics))));
       const engineBack = await dynState();
       await setModes(popup, OTHER);
@@ -1037,6 +1044,37 @@ try {
       const surfacesAgree = sameDyn(back, WANTED) && agreePanel.label === 'EQ + switches' && agreeWin.label === 'EQ + switches'
         && agreePanel.labelTitle === back.labelTitle && agreeWin.labelTitle === back.labelTitle
         && sameDyn(agreePanel, WANTED) && sameDyn(agreeWin, WANTED);
+      const curveMatches = curve.shown != null && Math.abs(curve.shown - curve.bass) < 0.05
+        && savedPreset && Math.abs(curve.bass - savedPreset.bass) < 0.05;
+      // Popup and side panel already open: a pick and an update on the popup must move the panel's
+      // switches, label and preset cache without the panel being reopened.
+      const followPanel = adopt(await openPopup('popup.html?panel=1'));
+      await followPanel.setViewportSize({ width: 360, height: 900 });
+      await sleep(400);
+      await followPanel.selectOption('#preset-select', 'Harness Preset');
+      await sleep(300);
+      const SLOW = { ...WANTED, leveler: 'slow' };
+      await setModes(popup, SLOW);
+      await popup.click('#btn-update-preset');
+      await sleep(500);
+      const followUpdated = await readModes(followPanel);
+      await popup.selectOption('#preset-select', 'Flat (Bypass)');
+      await sleep(400);
+      const followFlat = await readModes(followPanel);
+      await popup.selectOption('#preset-select', 'Harness Preset');
+      await sleep(400);
+      const followBack = await readModes(followPanel);
+      const followCache = await followPanel.evaluate(() => new Promise((r) => {
+        chrome.storage.local.get(['presets', 'currentPreset'], (d) => r({
+          preset: d.currentPreset,
+          saved: d.presets?.['Harness Preset']?.dynamics || null
+        }));
+      }));
+      await followPanel.close();
+      const followOk = sameDyn(followUpdated, SLOW) && followUpdated.label === 'EQ + switches' && followUpdated.preset === 'Harness Preset'
+        && followFlat.preset === 'Flat (Bypass)' && followFlat.label === 'EQ only' && sameDyn(followFlat, SLOW)
+        && followBack.preset === 'Harness Preset' && followBack.label === 'EQ + switches' && sameDyn(followBack, SLOW)
+        && followCache.preset === 'Harness Preset' && sameDyn(followCache.saved, SLOW);
       switchOk = sameDyn(savedPreset?.dynamics, WANTED)
         && sameDyn(hydrated, OTHER) && hydrated.label === 'EQ + switches'
         && onFactory.label === 'EQ only' && /Save a copy/.test(onFactory.labelTitle) && sameDyn(dynWhileFactory, OTHER)
@@ -1051,8 +1089,8 @@ try {
         && back.resetTitle === "Restore this preset's saved EQ and switches"
         && fitPopup.labelInside && fitPopup.resetInside && fitPopup.rowH === 20 && fitPopup.updateShown
         && fitPanel.labelInside && fitPanel.resetInside && fitPanel.pageOverflow <= 0
-        && surfacesAgree;
-      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin };
+        && surfacesAgree && curveMatches && followOk;
+      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, curve, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin, followUpdated, followFlat, followBack, followCache };
     } finally {
       await popup.evaluate((snap) => new Promise((resolve) => {
         chrome.storage.local.set(snap.local, () => {
@@ -1063,7 +1101,7 @@ try {
       if (switchSnap.local.dynamics) await sendFrom(popup, { type: 'SET_DYNAMICS', dynamics: switchSnap.local.dynamics });
       if (switchSnap.local.currentParams) await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: switchSnap.local.currentParams, presetName: switchSnap.local.currentPreset });
     }
-    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the header stays on one row',
+    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a popup and a side panel open together follow a pick and an update; the header stays on one row',
       switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
 
     // ---- W-CAPTURE-STOP ----

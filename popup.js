@@ -17,8 +17,11 @@ let movieAlertTimer = null;
 // The top-level `dynamics` value is still the sound in force. The defaults are the 1.4.0 chain.
 const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
 let dynamics = { ...DYN_DEFAULT };
-let switchBaseline = null; // what Modified compares against; the worker keeps a copy in session storage
+let switchBaseline = null; // saved switches on the selected preset, or null when that preset has none
 let presetUiGen = 0; // a newer select, save, update, delete or reset ignores a stale reply
+let surfaceEditSeq = 0; // slider and switch edits since this screen opened
+let surfaceEditSettled = 0; // last of those edits whose storage write has finished
+let deferredSurface = null; // storage events held back while an edit on this screen is in flight
 let dynUnavailableTold = false;
 const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
@@ -175,9 +178,31 @@ function applyDynamicsToUI() {
   renderBandTags();
 }
 
+function noteSurfaceEdit() {
+  surfaceEditSeq += 1;
+  return surfaceEditSeq;
+}
+
+function surfaceEditInProgress() {
+  return surfaceEditSeq !== surfaceEditSettled;
+}
+
+function settleSurfaceEdit(seq) {
+  if (seq !== surfaceEditSeq) return;
+  surfaceEditSettled = seq;
+  if (!deferredSurface) return;
+  const changes = deferredSurface;
+  deferredSurface = null;
+  applyStoredSurface(changes);
+}
+
 function sendDynamicsUpdate() {
+  const seq = noteSurfaceEdit();
   dynamics = normaliseDyn(dynamics);
-  chrome.runtime.sendMessage({ type: 'SET_DYNAMICS', dynamics });
+  chrome.runtime.sendMessage({ type: 'SET_DYNAMICS', dynamics }, () => {
+    if (chrome.runtime.lastError) {}
+    settleSurfaceEdit(seq);
+  });
   applyDynamicsToUI();
   checkPresetModificationState();
 }
@@ -264,9 +289,9 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
 
   const selected = presets[currentPresetName];
   activePresetBaseline = selected ? { ...normaliseBypass(stripDynamics(selected)) } : null;
-  if (response.switchBaseline) switchBaseline = normaliseDyn(response.switchBaseline);
-  else if (presetHasSavedSwitches(selected)) switchBaseline = normaliseDyn(selected.dynamics);
-  else switchBaseline = normaliseDyn(dynamics);
+  // EQ-only presets (legacy custom and factory) compare EQ only, so opening one does not
+  // treat the switches already in force as a saved baseline.
+  switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
   checkPresetModificationState();
 
   physics.updateState(currentParams, isCapturingActive);
@@ -743,6 +768,11 @@ function presetHasSavedSwitches(preset) {
   return !!d && typeof d === 'object' && !Array.isArray(d);
 }
 
+function isFactoryPresetNameUi(name) {
+  const folded = String(name || '').toLowerCase();
+  return factoryPresetNames.some((factory) => String(factory).toLowerCase() === folded);
+}
+
 function stripDynamics(preset) {
   const copy = { ...(preset || {}) };
   delete copy.dynamics;
@@ -789,11 +819,12 @@ function checkPresetModificationState() {
     Math.abs((currentUI.semitones || 0) - (b.semitones || 0)) > 0.01 ||
     currentUI.autoBalance !== b.autoBalance ||
     ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch'].some((k) => !!cb[k] !== !!bb[k]);
-  const switchesChanged = !!switchBaseline && !sameSwitches(dynamics, switchBaseline);
-  const isModified = eqModified || switchesChanged;
-
   const isFactory = factoryPresetNames.includes(currentPresetName);
   const hasSwitches = presetHasSavedSwitches(presets[currentPresetName]);
+  // A switch change marks Modified only when this preset stored its switches. EQ-only presets
+  // keep Update visible so the current switches can be saved with one click.
+  const switchesChanged = hasSwitches && !!switchBaseline && !sameSwitches(dynamics, switchBaseline);
+  const isModified = eqModified || switchesChanged;
   presetStatusBadge.className = isModified ? 'preset-badge-modified' : 'preset-badge-saved';
   presetStatusBadge.textContent = isModified ? '● Modified' : '● Saved';
   btnUpdatePreset.style.display = (!isFactory && (isModified || !hasSwitches)) ? 'inline-block' : 'none';
@@ -822,27 +853,113 @@ function applyLiveSelection(name) {
     switchBaseline = { ...savedDyn };
     applyDynamicsToUI();
   } else {
-    switchBaseline = normaliseDyn(dynamics);
+    switchBaseline = null;
   }
   updatePresetButtonsVisibility();
+  // The response curve, Movie-mode pitch lock and Update all read currentParams. A pick or
+  // delete used to leave them on the previous preset until the next slider move.
+  currentParams = getParamsFromUI();
+  physics.updateState(currentParams, isCapturingActive);
   return savedDyn;
 }
 
-function sendApplyPreset(savedDyn) {
-  const msg = { type: 'APPLY_PRESET', presetName: currentPresetName, params: getParamsFromUI() };
-  if (savedDyn) msg.dynamics = { ...savedDyn };
-  chrome.runtime.sendMessage(msg, () => { if (chrome.runtime.lastError) {} });
+function sendApplyPreset() {
+  chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName }, () => {
+    if (chrome.runtime.lastError) {}
+  });
 }
+
+function mergeSurfaceChanges(prev, next) {
+  const out = { ...(prev || {}) };
+  for (const key of Object.keys(next || {})) out[key] = next[key];
+  return out;
+}
+
+// Another screen (or this screen's own finished write) changed storage. Refresh what is on
+// screen. This does not send a write back.
+function applyStoredSurface(changes) {
+  if (!changes) return;
+  if (changes.presets && changes.presets.newValue) presets = changes.presets.newValue;
+  if (changes.currentPreset && typeof changes.currentPreset.newValue === 'string') {
+    currentPresetName = changes.currentPreset.newValue;
+  }
+  if (changes.presets || changes.currentPreset) populatePresets(currentPresetName);
+
+  const selected = presets[currentPresetName];
+  if (selected && (changes.presets || changes.currentPreset)) {
+    activePresetBaseline = { ...normaliseBypass(stripDynamics(selected)) };
+    switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
+  }
+
+  const paramsValue = changes.currentParams && changes.currentParams.newValue
+    ? changes.currentParams.newValue
+    : (changes.currentPreset && selected ? selected : null);
+  if (paramsValue) {
+    applyParamsToUI(normaliseBypass(stripDynamics(paramsValue)));
+    currentParams = getParamsFromUI();
+    physics.updateState(currentParams, isCapturingActive);
+  }
+
+  if (changes.dynamics && changes.dynamics.newValue) {
+    dynamics = normaliseDyn(changes.dynamics.newValue);
+    applyDynamicsToUI();
+  }
+  checkPresetModificationState();
+}
+
+function applyAuthoritativeSnapshot(snap) {
+  applyStoredSurface({
+    presets: { newValue: snap.presets },
+    currentPreset: { newValue: snap.currentPreset },
+    currentParams: { newValue: snap.currentParams },
+    dynamics: { newValue: snap.dynamics }
+  });
+}
+
+// Storage after every write that was already queued. If the user edits again first, try once more.
+function hydrateFromAuthoritativeState(gen) {
+  const seq = surfaceEditSeq;
+  chrome.runtime.sendMessage({ type: 'READ_PRESET_STATE' }, (res) => {
+    if (!presetUiCurrent(gen) || !res?.success) return;
+    if (surfaceEditSeq !== seq) {
+      hydrateFromAuthoritativeState(gen);
+      return;
+    }
+    applyAuthoritativeSnapshot(res);
+  });
+}
+
+function onPresetStorageChanged(changes, area) {
+  if (area !== 'local' || !changes) return;
+  const watched = ['presets', 'currentPreset', 'currentParams', 'dynamics'];
+  if (!watched.some((key) => Object.prototype.hasOwnProperty.call(changes, key))) return;
+  if (surfaceEditInProgress()) {
+    deferredSurface = mergeSurfaceChanges(deferredSurface, changes);
+    // Keep the menu and the label current, but leave the slider or switch the user is editing.
+    if (changes.presets && changes.presets.newValue) {
+      presets = changes.presets.newValue;
+      populatePresets(currentPresetName);
+      checkPresetModificationState();
+    }
+    return;
+  }
+  applyStoredSurface(changes);
+}
+
+chrome.storage.onChanged.addListener(onPresetStorageChanged);
 
 presetSelect.onchange = () => {
   const gen = bumpPresetUi();
-  const savedDyn = applyLiveSelection(presetSelect.value);
+  const editAtSend = surfaceEditSeq;
+  applyLiveSelection(presetSelect.value);
   if (!presets[currentPresetName]) return;
-  const msg = { type: 'APPLY_PRESET', presetName: currentPresetName, params: getParamsFromUI() };
-  if (savedDyn) msg.dynamics = { ...savedDyn };
-  chrome.runtime.sendMessage(msg, (res) => {
+  chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName }, (res) => {
     if (!presetUiCurrent(gen) || !res?.success) return;
-    if (res.switchBaseline) switchBaseline = normaliseDyn(res.switchBaseline);
+    if (surfaceEditSeq !== editAtSend) {
+      hydrateFromAuthoritativeState(gen);
+      return;
+    }
+    switchBaseline = res.dynamicsApplied ? normaliseDyn(res.dynamics) : null;
     checkPresetModificationState();
   });
   const savedSt = parseFloat(sliderPitch.value) || 0;
@@ -858,7 +975,7 @@ btnSavePreset.onclick = () => {
   const name = prompt('Save current settings as new preset name:', defaultName);
   if (!name || !name.trim()) return;
   const trimmed = name.trim();
-  if (factoryPresetNames.includes(trimmed)) { showHint(FACTORY_NAME_HINT); return; }
+  if (isFactoryPresetNameUi(trimmed)) { showHint(FACTORY_NAME_HINT); return; }
   const gen = bumpPresetUi();
   const p = getParamsFromUI();
   const dyn = normaliseDyn(dynamics);
@@ -877,7 +994,7 @@ btnSavePreset.onclick = () => {
 };
 
 btnUpdatePreset.onclick = () => {
-  if (!currentPresetName || factoryPresetNames.includes(currentPresetName)) return;
+  if (!currentPresetName || isFactoryPresetNameUi(currentPresetName)) return;
   const gen = bumpPresetUi();
   const p = getParamsFromUI();
   const dyn = normaliseDyn(dynamics);
@@ -906,8 +1023,8 @@ btnDeletePreset.onclick = () => {
       if (!presetUiCurrent(gen) || !res?.success) return;
       presets = res.presets;
       populatePresets(factoryPresetNames[0]);
-      const savedDyn = applyLiveSelection(factoryPresetNames[0]);
-      if (presets[currentPresetName]) sendApplyPreset(savedDyn);
+      applyLiveSelection(factoryPresetNames[0]);
+      if (presets[currentPresetName]) sendApplyPreset();
     });
   }
 };
@@ -919,8 +1036,15 @@ btnResetDefaults.onclick = () => {
     : `Discard unsaved changes and go back to the saved values of "${currentPresetName}"?\n\n(Your custom presets are kept.)`;
   if (confirm(question)) {
     const gen = bumpPresetUi();
+    const editAtSend = surfaceEditSeq;
     chrome.runtime.sendMessage({ type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName }, (res) => {
       if (!presetUiCurrent(gen) || !res?.success) return;
+      // A switch or slider edit after Reset is already queued behind it. Hydrate from storage
+      // after that queue, instead of painting this reply over the newer edit.
+      if (surfaceEditSeq !== editAtSend) {
+        hydrateFromAuthoritativeState(gen);
+        return;
+      }
       presets = res.presets;
       currentPresetName = res.selectedName;
       populatePresets(res.selectedName);
@@ -931,8 +1055,10 @@ btnResetDefaults.onclick = () => {
       if (res.dynamicsApplied && res.dynamics) {
         dynamics = normaliseDyn(res.dynamics);
         applyDynamicsToUI();
+        switchBaseline = normaliseDyn(res.dynamics);
+      } else {
+        switchBaseline = null;
       }
-      switchBaseline = normaliseDyn(res.switchBaseline || dynamics);
       checkPresetModificationState();
       physics.updateState(currentParams, isCapturingActive);
     });
@@ -1023,8 +1149,12 @@ function getParamsFromUI() {
 }
 
 function sendAudioParamUpdate() {
+  const seq = noteSurfaceEdit();
   currentParams = getParamsFromUI();
-  chrome.runtime.sendMessage({ type: 'UPDATE_AUDIO_PARAMS', params: currentParams, presetName: currentPresetName });
+  chrome.runtime.sendMessage({ type: 'UPDATE_AUDIO_PARAMS', params: currentParams, presetName: currentPresetName }, () => {
+    if (chrome.runtime.lastError) {}
+    settleSurfaceEdit(seq);
+  });
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
 }
