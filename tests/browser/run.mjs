@@ -926,6 +926,146 @@ try {
     await shot(popup, 'popup-meters.png');
     await setDyn(DEFAULT_DYN);
 
+    // ---- W-PRESET-SWITCHES (1.5.8, R-28): a saved preset brings its switches back; a legacy one does not ----
+    const switchSnap = await popup.evaluate(() => new Promise((resolve) => {
+      chrome.storage.local.get(['presets', 'currentPreset', 'currentParams', 'dynamics'], (local) => {
+        chrome.storage.session.get('presetSwitchBaseline', (session) => {
+          resolve({ local, baseline: session.presetSwitchBaseline || null });
+        });
+      });
+    }));
+    const WANTED = { leveler: 'bass', match: true, limiter: 'lookahead', ceiling: 'warm' };
+    const OTHER = { leveler: 'slow', match: false, limiter: 'fast', ceiling: 'clean' };
+    const readModes = (pg) => pg.evaluate(() => {
+      const label = document.getElementById('preset-switch-label');
+      const row = document.querySelector('.section-title-row');
+      const reset = document.getElementById('btn-reset-defaults');
+      const lr = label.getBoundingClientRect();
+      const rr = row.getBoundingClientRect();
+      const br = reset.getBoundingClientRect();
+      return {
+        leveler: document.getElementById('mode-leveler').value,
+        limiter: document.getElementById('mode-limiter').value,
+        ceiling: document.getElementById('mode-ceiling').value,
+        match: document.querySelector('.band-tag[data-band="match"]').getAttribute('aria-pressed') === 'true',
+        label: label.textContent,
+        labelTitle: label.title,
+        badge: document.getElementById('preset-status-badge').textContent.trim(),
+        updateTitle: document.getElementById('btn-update-preset').title,
+        resetTitle: reset.title,
+        saveTitle: document.getElementById('btn-save-preset').title,
+        updateShown: getComputedStyle(document.getElementById('btn-update-preset')).display !== 'none',
+        preset: document.getElementById('preset-select').value,
+        rowH: +rr.height.toFixed(1),
+        labelInside: lr.width > 0 && lr.left >= rr.left - 1 && lr.right <= rr.right + 1 && label.scrollWidth <= label.clientWidth + 1,
+        resetInside: br.width > 0 && br.left >= rr.left - 1 && br.right <= rr.right + 1 && reset.scrollWidth <= reset.clientWidth + 1,
+        pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth
+      };
+    });
+    const setModes = async (pg, d) => {
+      await pg.selectOption('#mode-leveler', d.leveler);
+      await pg.selectOption('#mode-limiter', d.limiter);
+      await pg.selectOption('#mode-ceiling', d.ceiling);
+      const on = await pg.getAttribute('.band-tag[data-band="match"]', 'aria-pressed');
+      if ((on === 'true') !== d.match) await pg.click('.band-tag[data-band="match"]');
+      await sleep(250);
+    };
+    const sameDyn = (a, b) => !!a && !!b && a.leveler === b.leveler && a.match === b.match && a.limiter === b.limiter && a.ceiling === b.ceiling;
+    let switchDetail = {};
+    let switchOk = false;
+    try {
+      await setModes(popup, WANTED);
+      await popup.click('#btn-save-preset');
+      await sleep(400);
+      const savedPreset = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('presets', (d) => r(d.presets?.['Harness Preset'] || null))));
+      const savedJson = JSON.stringify(savedPreset);
+      await setModes(popup, OTHER);
+      const reopened = adopt(await openPopup());
+      const hydrated = await readModes(reopened);
+      await reopened.close();
+      await popup.selectOption('#preset-select', 'Flat (Bypass)');
+      await sleep(300);
+      const onFactory = await readModes(popup);
+      const dynWhileFactory = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics))));
+      await popup.selectOption('#preset-select', 'Harness Preset');
+      await sleep(350);
+      const back = await readModes(popup);
+      const storedBack = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics))));
+      const engineBack = await dynState();
+      await setModes(popup, OTHER);
+      await popup.click('#btn-reset-defaults');
+      await sleep(400);
+      const afterReset = await readModes(popup);
+      const storedReset = await popup.evaluate(() => new Promise((r) => chrome.storage.local.get(['dynamics', 'presets'], (d) => r({ dynamics: d.dynamics, preset: d.presets?.['Harness Preset'] || null }))));
+      const engineReset = await dynState();
+      const legacyBody = { bass: 14, hpf: 20, mid: 6, high: 0, gain: 1, semitones: 0, autoBalance: true, bypass: false };
+      await popup.evaluate((body) => new Promise((r) => chrome.storage.local.get('presets', (d) => {
+        chrome.storage.local.set({ presets: { ...(d.presets || {}), 'Legacy EQ only': body } }, r);
+      })), legacyBody);
+      const legacyPage = adopt(await openPopup());
+      await setModes(legacyPage, OTHER);
+      const beforeLegacy = await legacyPage.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics))));
+      await legacyPage.selectOption('#preset-select', 'Legacy EQ only');
+      await sleep(300);
+      const onLegacy = await readModes(legacyPage);
+      const storedLegacy = await legacyPage.evaluate(() => new Promise((r) => chrome.storage.local.get(['dynamics', 'presets'], (d) => r({ dynamics: d.dynamics, preset: d.presets?.['Legacy EQ only'] || null }))));
+      await legacyPage.selectOption('#preset-select', 'Punchy Bass & Clarity');
+      await sleep(250);
+      const onFactoryLabel = await readModes(legacyPage);
+      const storedFactory = await legacyPage.evaluate(() => new Promise((r) => chrome.storage.local.get('dynamics', (d) => r(d.dynamics))));
+      await legacyPage.close();
+
+      await popup.selectOption('#preset-select', 'Harness Preset');
+      await sleep(300);
+      await popup.click('.eq-nudge-btn[data-target="slider-bass"][data-action="up"]');
+      await sleep(200);
+      const fitPopup = await readModes(popup);
+      const panel = adopt(await openPopup('popup.html?panel=1'));
+      await panel.setViewportSize({ width: 360, height: 900 });
+      await sleep(300);
+      await panel.selectOption('#preset-select', 'Harness Preset');
+      await sleep(300);
+      const fitPanel = await readModes(panel);
+      const agreePanel = await readModes(panel);
+      await panel.close();
+      const win = adopt(await openPopup('popup.html?undocked=true'));
+      await win.selectOption('#preset-select', 'Harness Preset');
+      await sleep(300);
+      const agreeWin = await readModes(win);
+      await win.close();
+
+      const surfacesAgree = sameDyn(back, WANTED) && agreePanel.label === 'EQ + switches' && agreeWin.label === 'EQ + switches'
+        && agreePanel.labelTitle === back.labelTitle && agreeWin.labelTitle === back.labelTitle
+        && sameDyn(agreePanel, WANTED) && sameDyn(agreeWin, WANTED);
+      switchOk = sameDyn(savedPreset?.dynamics, WANTED)
+        && sameDyn(hydrated, OTHER) && hydrated.label === 'EQ + switches'
+        && onFactory.label === 'EQ only' && /Save a copy/.test(onFactory.labelTitle) && sameDyn(dynWhileFactory, OTHER)
+        && sameDyn(back, WANTED) && sameDyn(storedBack, WANTED) && sameDyn(engineBack?.eff, WANTED) && back.badge === '● Saved'
+        && sameDyn(afterReset, WANTED) && afterReset.badge === '● Saved' && JSON.stringify(storedReset.preset) === savedJson && sameDyn(storedReset.dynamics, WANTED) && sameDyn(engineReset?.eff, WANTED)
+        && sameDyn(onLegacy, OTHER) && sameDyn(storedLegacy.dynamics, beforeLegacy) && sameDyn(storedFactory, beforeLegacy)
+        && onLegacy.label === 'EQ only' && /Press Update/.test(onLegacy.labelTitle) && onLegacy.updateShown
+        && Object.keys(storedLegacy.preset).length === Object.keys(legacyBody).length
+        && onFactoryLabel.label === 'EQ only' && /Save a copy/.test(onFactoryLabel.labelTitle)
+        && back.label === 'EQ + switches' && /pressing Reset/.test(back.labelTitle)
+        && back.updateTitle === 'Save the current EQ and switches into this preset'
+        && back.resetTitle === "Restore this preset's saved EQ and switches"
+        && fitPopup.labelInside && fitPopup.resetInside && fitPopup.rowH === 20 && fitPopup.updateShown
+        && fitPanel.labelInside && fitPanel.resetInside && fitPanel.pageOverflow <= 0
+        && surfacesAgree;
+      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin };
+    } finally {
+      await popup.evaluate((snap) => new Promise((resolve) => {
+        chrome.storage.local.set(snap.local, () => {
+          if (snap.baseline) chrome.storage.session.set({ presetSwitchBaseline: snap.baseline }, resolve);
+          else chrome.storage.session.remove('presetSwitchBaseline', resolve);
+        });
+      }), switchSnap);
+      if (switchSnap.local.dynamics) await sendFrom(popup, { type: 'SET_DYNAMICS', dynamics: switchSnap.local.dynamics });
+      if (switchSnap.local.currentParams) await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: switchSnap.local.currentParams, presetName: switchSnap.local.currentPreset });
+    }
+    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the header stays on one row',
+      switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
+
     // ---- W-CAPTURE-STOP ----
     const stopRes = await sendFrom(popup, { type: 'STOP_CAPTURE' });
     await sleep(500);
@@ -1017,7 +1157,7 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-PRESET-SWITCHES', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }

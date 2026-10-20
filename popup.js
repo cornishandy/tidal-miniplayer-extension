@@ -13,9 +13,12 @@ let currentMovieOverride = null;
 let currentMovieModeOverride = null;
 let movieAlertText = '';
 let movieAlertTimer = null;
-// Dynamics modes (1.5.0, D-01): engine settings, not preset fields. The defaults are the 1.4.0 chain.
+// Dynamics modes (1.5.0, D-01). From 1.5.8 (R-28) Save and Update may store a copy on the preset.
+// The top-level `dynamics` value is still the sound in force. The defaults are the 1.4.0 chain.
 const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
 let dynamics = { ...DYN_DEFAULT };
+let switchBaseline = null; // what Modified compares against; the worker keeps a copy in session storage
+let presetUiGen = 0; // a newer select, save, update, delete or reset ignores a stale reply
 let dynUnavailableTold = false;
 const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
@@ -48,6 +51,7 @@ const btnMovieMode = document.getElementById('btn-movie-mode');
 const movieStatusLine = document.getElementById('movie-status-line');
 const presetSelect = document.getElementById('preset-select');
 const presetStatusBadge = document.getElementById('preset-status-badge');
+const presetSwitchLabel = document.getElementById('preset-switch-label');
 const btnUpdatePreset = document.getElementById('btn-update-preset');
 const btnSavePreset = document.getElementById('btn-save-preset');
 const btnDeletePreset = document.getElementById('btn-delete-preset');
@@ -175,6 +179,7 @@ function sendDynamicsUpdate() {
   dynamics = normaliseDyn(dynamics);
   chrome.runtime.sendMessage({ type: 'SET_DYNAMICS', dynamics });
   applyDynamicsToUI();
+  checkPresetModificationState();
 }
 
 if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate(); };
@@ -245,9 +250,10 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   presets = response.presets || {};
   factoryPresetNames = response.factoryPresets || [];
   currentPresetName = response.currentPreset || "Punchy Bass & Clarity";
-  currentParams = normaliseBypass({ ...(response.currentParams || presets[currentPresetName] || {}) });
+  currentParams = normaliseBypass(stripDynamics(response.currentParams || presets[currentPresetName] || {}));
   stayOpen = !!response.stayOpen;
   toggleStayOpen.checked = stayOpen;
+  // Hydrate only. A preset's saved switches are not applied again on open.
   dynamics = normaliseDyn(response.dynamics);
 
   updateEqPowerUI(isCapturingActive, response.capturedTabTitle);
@@ -256,7 +262,11 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   applyDynamicsToUI();
   updateMovieModeUI(response, { checkSavedPitch: true });
 
-  activePresetBaseline = presets[currentPresetName] ? normaliseBypass({ ...presets[currentPresetName] }) : null;
+  const selected = presets[currentPresetName];
+  activePresetBaseline = selected ? { ...normaliseBypass(stripDynamics(selected)) } : null;
+  if (response.switchBaseline) switchBaseline = normaliseDyn(response.switchBaseline);
+  else if (presetHasSavedSwitches(selected)) switchBaseline = normaliseDyn(selected.dynamics);
+  else switchBaseline = normaliseDyn(dynamics);
   checkPresetModificationState();
 
   physics.updateState(currentParams, isCapturingActive);
@@ -727,6 +737,36 @@ function populatePresets(selectedName) {
   updatePresetButtonsVisibility();
 }
 
+function presetHasSavedSwitches(preset) {
+  if (!preset || !Object.prototype.hasOwnProperty.call(preset, 'dynamics')) return false;
+  const d = preset.dynamics;
+  return !!d && typeof d === 'object' && !Array.isArray(d);
+}
+
+function stripDynamics(preset) {
+  const copy = { ...(preset || {}) };
+  delete copy.dynamics;
+  return copy;
+}
+
+function sameSwitches(a, b) {
+  const x = normaliseDyn(a);
+  const y = normaliseDyn(b);
+  return x.leveler === y.leveler && x.match === y.match && x.limiter === y.limiter && x.ceiling === y.ceiling;
+}
+
+function bumpPresetUi() { return ++presetUiGen; }
+function presetUiCurrent(gen) { return gen === presetUiGen; }
+
+const SWITCH_LABELS = {
+  saved: ['EQ + switches', 'Picking this preset or pressing Reset also sets Leveler, MATCH, Limiter and Ceiling.'],
+  custom: ['EQ only', 'Picking this preset sets the EQ only; Leveler, MATCH, Limiter and Ceiling stay as they are. Press Update to save the current switches with it.'],
+  factory: ['EQ only', 'Default presets set the EQ only. Save a copy to keep switches with it.']
+};
+const RESET_TITLE_SWITCHES = "Restore this preset's saved EQ and switches";
+const RESET_TITLE_VALUES = "Restore this preset's saved values (factory values for a default preset)";
+const FACTORY_NAME_HINT = 'That name belongs to a default preset. Pick another name.';
+
 function updatePresetButtonsVisibility() {
   const isFactory = factoryPresetNames.includes(presetSelect.value);
   btnDeletePreset.style.display = isFactory ? 'none' : 'inline-block';
@@ -740,7 +780,7 @@ function checkPresetModificationState() {
   const bb = b.stageBypass || {};
   const cb = currentUI.stageBypass;
 
-  const isModified =
+  const eqModified =
     Math.abs(currentUI.bass - b.bass) > 0.01 ||
     Math.abs(currentUI.hpf - b.hpf) > 0.5 ||
     Math.abs(currentUI.mid - b.mid) > 0.01 ||
@@ -749,32 +789,65 @@ function checkPresetModificationState() {
     Math.abs((currentUI.semitones || 0) - (b.semitones || 0)) > 0.01 ||
     currentUI.autoBalance !== b.autoBalance ||
     ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch'].some((k) => !!cb[k] !== !!bb[k]);
+  const switchesChanged = !!switchBaseline && !sameSwitches(dynamics, switchBaseline);
+  const isModified = eqModified || switchesChanged;
 
   const isFactory = factoryPresetNames.includes(currentPresetName);
-  if (isModified) {
-    presetStatusBadge.className = 'preset-badge-modified';
-    presetStatusBadge.textContent = '● Modified';
-    btnUpdatePreset.style.display = isFactory ? 'none' : 'inline-block';
-  } else {
-    presetStatusBadge.className = 'preset-badge-saved';
-    presetStatusBadge.textContent = '● Saved';
-    btnUpdatePreset.style.display = 'none';
+  const hasSwitches = presetHasSavedSwitches(presets[currentPresetName]);
+  presetStatusBadge.className = isModified ? 'preset-badge-modified' : 'preset-badge-saved';
+  presetStatusBadge.textContent = isModified ? '● Modified' : '● Saved';
+  btnUpdatePreset.style.display = (!isFactory && (isModified || !hasSwitches)) ? 'inline-block' : 'none';
+
+  const kind = isFactory ? 'factory' : (hasSwitches ? 'saved' : 'custom');
+  if (presetSwitchLabel) {
+    presetSwitchLabel.textContent = SWITCH_LABELS[kind][0];
+    presetSwitchLabel.title = SWITCH_LABELS[kind][1];
+  }
+  if (btnResetDefaults) {
+    btnResetDefaults.title = (!isFactory && hasSwitches) ? RESET_TITLE_SWITCHES : RESET_TITLE_VALUES;
   }
 }
 
-presetSelect.onchange = () => {
-  currentPresetName = presetSelect.value;
+// Show the preset's EQ, and its switches only when it stored them. Returns those switches, or null.
+function applyLiveSelection(name) {
+  currentPresetName = name;
+  const sel = presets[name];
+  if (!sel) { updatePresetButtonsVisibility(); return null; }
+  const savedDyn = presetHasSavedSwitches(sel) ? normaliseDyn(sel.dynamics) : null;
+  const p = normaliseBypass(stripDynamics(sel));
+  activePresetBaseline = { ...p };
+  applyParamsToUI(p);
+  if (savedDyn) {
+    dynamics = { ...savedDyn };
+    switchBaseline = { ...savedDyn };
+    applyDynamicsToUI();
+  } else {
+    switchBaseline = normaliseDyn(dynamics);
+  }
   updatePresetButtonsVisibility();
-  const sel = presets[currentPresetName];
-  if (sel) {
-    const p = normaliseBypass({ ...sel });
-    activePresetBaseline = { ...p };
-    applyParamsToUI(p);
-    sendAudioParamUpdate();
-    const savedSt = parseFloat(sliderPitch.value) || 0;
-    if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
-      flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
-    }
+  return savedDyn;
+}
+
+function sendApplyPreset(savedDyn) {
+  const msg = { type: 'APPLY_PRESET', presetName: currentPresetName, params: getParamsFromUI() };
+  if (savedDyn) msg.dynamics = { ...savedDyn };
+  chrome.runtime.sendMessage(msg, () => { if (chrome.runtime.lastError) {} });
+}
+
+presetSelect.onchange = () => {
+  const gen = bumpPresetUi();
+  const savedDyn = applyLiveSelection(presetSelect.value);
+  if (!presets[currentPresetName]) return;
+  const msg = { type: 'APPLY_PRESET', presetName: currentPresetName, params: getParamsFromUI() };
+  if (savedDyn) msg.dynamics = { ...savedDyn };
+  chrome.runtime.sendMessage(msg, (res) => {
+    if (!presetUiCurrent(gen) || !res?.success) return;
+    if (res.switchBaseline) switchBaseline = normaliseDyn(res.switchBaseline);
+    checkPresetModificationState();
+  });
+  const savedSt = parseFloat(sliderPitch.value) || 0;
+  if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
+    flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
   }
 };
 
@@ -783,31 +856,44 @@ btnSavePreset.onclick = () => {
     ? `${currentPresetName} (Custom)`
     : `${currentPresetName} (New)`;
   const name = prompt('Save current settings as new preset name:', defaultName);
-  if (name && name.trim()) {
-    const p = getParamsFromUI();
-    chrome.runtime.sendMessage({ type: 'SAVE_PRESET', name: name.trim(), params: p }, (res) => {
-      if (res?.success) {
-        presets = res.presets;
-        currentPresetName = res.savedName;
-        activePresetBaseline = { ...p };
-        populatePresets(res.savedName);
-        checkPresetModificationState();
-      }
-    });
-  }
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  if (factoryPresetNames.includes(trimmed)) { showHint(FACTORY_NAME_HINT); return; }
+  const gen = bumpPresetUi();
+  const p = getParamsFromUI();
+  const dyn = normaliseDyn(dynamics);
+  chrome.runtime.sendMessage({ type: 'SAVE_PRESET', name: trimmed, params: p, dynamics: dyn }, (res) => {
+    if (!presetUiCurrent(gen)) return;
+    if (res?.error === 'factory-name') { showHint(FACTORY_NAME_HINT); return; }
+    if (res?.success) {
+      presets = res.presets;
+      currentPresetName = res.savedName;
+      activePresetBaseline = { ...p };
+      switchBaseline = normaliseDyn(res.dynamics || dyn);
+      populatePresets(res.savedName);
+      checkPresetModificationState();
+    }
+  });
 };
 
 btnUpdatePreset.onclick = () => {
   if (!currentPresetName || factoryPresetNames.includes(currentPresetName)) return;
+  const gen = bumpPresetUi();
   const p = getParamsFromUI();
-  chrome.runtime.sendMessage({ type: 'UPDATE_PRESET', name: currentPresetName, params: p }, (res) => {
+  const dyn = normaliseDyn(dynamics);
+  chrome.runtime.sendMessage({ type: 'UPDATE_PRESET', name: currentPresetName, params: p, dynamics: dyn }, (res) => {
+    if (!presetUiCurrent(gen)) return;
+    if (res?.error === 'factory-name') { showHint(FACTORY_NAME_HINT); return; }
     if (res?.success) {
       presets = res.presets;
       activePresetBaseline = { ...p };
+      switchBaseline = normaliseDyn(res.dynamics || dyn);
       checkPresetModificationState();
-      const orig = btnUpdatePreset.textContent;
-      btnUpdatePreset.textContent = 'Saved';
-      setTimeout(() => { btnUpdatePreset.textContent = orig; }, 1200);
+      if (btnUpdatePreset.style.display !== 'none') {
+        const orig = btnUpdatePreset.textContent;
+        btnUpdatePreset.textContent = 'Saved';
+        setTimeout(() => { btnUpdatePreset.textContent = orig; }, 1200);
+      }
     }
   });
 };
@@ -815,18 +901,13 @@ btnUpdatePreset.onclick = () => {
 btnDeletePreset.onclick = () => {
   if (!currentPresetName || factoryPresetNames.includes(currentPresetName)) return;
   if (confirm(`Delete preset "${currentPresetName}"?`)) {
+    const gen = bumpPresetUi();
     chrome.runtime.sendMessage({ type: 'DELETE_PRESET', name: currentPresetName }, (res) => {
-      if (res?.success) {
-        presets = res.presets;
-        currentPresetName = factoryPresetNames[0];
-        populatePresets(currentPresetName);
-        if (presets[currentPresetName]) {
-          const p = normaliseBypass({ ...presets[currentPresetName] });
-          activePresetBaseline = { ...p };
-          applyParamsToUI(p);
-          sendAudioParamUpdate();
-        }
-      }
+      if (!presetUiCurrent(gen) || !res?.success) return;
+      presets = res.presets;
+      populatePresets(factoryPresetNames[0]);
+      const savedDyn = applyLiveSelection(factoryPresetNames[0]);
+      if (presets[currentPresetName]) sendApplyPreset(savedDyn);
     });
   }
 };
@@ -837,17 +918,23 @@ btnResetDefaults.onclick = () => {
     ? `Restore default factory settings for "${currentPresetName}"?`
     : `Discard unsaved changes and go back to the saved values of "${currentPresetName}"?\n\n(Your custom presets are kept.)`;
   if (confirm(question)) {
+    const gen = bumpPresetUi();
     chrome.runtime.sendMessage({ type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName }, (res) => {
-      if (res?.success) {
-        presets = res.presets;
-        currentPresetName = res.selectedName;
-        populatePresets(res.selectedName);
-        const p = normaliseBypass({ ...res.currentParams });
-        applyParamsToUI(p);
-        activePresetBaseline = { ...p };
-        sendAudioParamUpdate();
-        checkPresetModificationState();
+      if (!presetUiCurrent(gen) || !res?.success) return;
+      presets = res.presets;
+      currentPresetName = res.selectedName;
+      populatePresets(res.selectedName);
+      const p = normaliseBypass(stripDynamics(res.currentParams || {}));
+      applyParamsToUI(p);
+      activePresetBaseline = { ...p };
+      currentParams = getParamsFromUI();
+      if (res.dynamicsApplied && res.dynamics) {
+        dynamics = normaliseDyn(res.dynamics);
+        applyDynamicsToUI();
       }
+      switchBaseline = normaliseDyn(res.switchBaseline || dynamics);
+      checkPresetModificationState();
+      physics.updateState(currentParams, isCapturingActive);
     });
   }
 };
@@ -949,7 +1036,7 @@ document.querySelectorAll('button.band-tag').forEach((tag) => {
       notifyPitchLocked();
       return;
     }
-    if (band === 'match') { // an engine setting, not a preset value
+    if (band === 'match') { // the live switch; a preset remembers it only when you Save or Update (R-28)
       dynamics.match = !dynamics.match;
       sendDynamicsUpdate();
       return;
