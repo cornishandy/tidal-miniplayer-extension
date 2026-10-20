@@ -185,13 +185,20 @@ async function until(fn, label) {
 
 function snapshot(bag) { return structuredClone(bag); }
 
+function viewOf(bg) {
+  return {
+    expectedRev: Number.isInteger(bg.local.presetRev) ? bg.local.presetRev : 0,
+    expectedPreset: bg.local.currentPreset || 'Punchy Bass & Clarity'
+  };
+}
+
 test('save and update store normalised switches and strip them out of currentParams', async () => {
   const bg = loadBackground();
   await bg.ready();
   bg.setOffscreen(true);
   bg.local.dynamics = { ...DEFAULT_DYN };
   const odd = { leveler: 'BASS', match: 1, limiter: 'lookahead', ceiling: 'warm' };
-  const saved = await bg.send({ type: 'SAVE_PRESET', name: 'Movie night', params: { ...EQ, dynamics: { junk: true } }, dynamics: odd });
+  const saved = await bg.send({ type: 'SAVE_PRESET', name: 'Movie night', params: { ...EQ, dynamics: { junk: true } }, dynamics: odd, ...viewOf(bg) });
   assert.equal(saved.success, true);
   assert.deepEqual(saved.dynamics, { leveler: 'full', match: false, limiter: 'lookahead', ceiling: 'warm' });
   assert.equal(bg.local.presets['Movie night'].dynamics.leveler, 'full');
@@ -200,7 +207,7 @@ test('save and update store normalised switches and strip them out of currentPar
   assert.equal(bg.local.currentParams.bass, EQ.bass);
   assert.deepEqual(bg.local.dynamics, saved.dynamics);
   const before = snapshot(bg.local.presets['Movie night']);
-  const updated = await bg.send({ type: 'UPDATE_PRESET', name: 'Movie night', params: { ...EQ, bass: 8 }, dynamics: MOVIE });
+  const updated = await bg.send({ type: 'UPDATE_PRESET', name: 'Movie night', params: { ...EQ, bass: 8 }, dynamics: MOVIE, ...viewOf(bg) });
   assert.equal(updated.success, true);
   assert.deepEqual(bg.local.presets['Movie night'].dynamics, MOVIE);
   assert.equal(bg.local.presets['Movie night'].bass, 8);
@@ -208,7 +215,7 @@ test('save and update store normalised switches and strip them out of currentPar
   assert.notDeepEqual(bg.local.presets['Movie night'], before);
   // A save that omits dynamics stores the switches in force, not an invented set.
   bg.local.dynamics = { ...MUSIC };
-  const snapped = await bg.send({ type: 'SAVE_PRESET', name: 'From storage', params: EQ });
+  const snapped = await bg.send({ type: 'SAVE_PRESET', name: 'From storage', params: EQ, ...viewOf(bg) });
   assert.deepEqual(snapped.dynamics, MUSIC);
   assert.deepEqual(bg.local.presets['From storage'].dynamics, MUSIC);
 });
@@ -232,7 +239,15 @@ test('factory names are refused with no storage change', async () => {
     assert.deepEqual(update, { success: false, error: 'factory-name' });
     assert.deepEqual(bg.local, before);
   }
-  const custom = await bg.send({ type: 'SAVE_PRESET', name: 'My copy', params: EQ, dynamics: MOVIE });
+  for (const name of ['flat (bypass)', 'PUNCHY BASS & CLARITY', 'Deep Sub-Bass (dub/trap)']) {
+    const before = snapshot(bg.local);
+    const save = await bg.send({ type: 'SAVE_PRESET', name, params: EQ, dynamics: MOVIE });
+    const update = await bg.send({ type: 'UPDATE_PRESET', name, params: EQ, dynamics: MOVIE });
+    assert.deepEqual(save, { success: false, error: 'factory-name' });
+    assert.deepEqual(update, { success: false, error: 'factory-name' });
+    assert.deepEqual(bg.local, before);
+  }
+  const custom = await bg.send({ type: 'SAVE_PRESET', name: 'My copy', params: EQ, dynamics: MOVIE, ...viewOf(bg) });
   assert.equal(custom.success, true);
   assert.deepEqual(bg.local.presets['My copy'].dynamics, MOVIE);
 });
@@ -258,12 +273,15 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   const applied = await bg.send({ type: 'APPLY_PRESET', presetName: 'Movie', params: { ...EQ, bass: 1, dynamics: { junk: true } }, dynamics: MOVIE });
   const sets = bg.localSets.slice(start);
   assert.equal(sets.length, 1);
-  assert.deepEqual(Object.keys(sets[0]).sort(), ['currentParams', 'currentPreset', 'dynamics']);
+  assert.deepEqual(Object.keys(sets[0]).sort(), ['currentParams', 'currentPreset', 'dynamics', 'presetRev']);
   assert.equal('dynamics' in sets[0].currentParams, false);
   assert.deepEqual(sets[0].dynamics, MOVIE);
   assert.equal(applied.dynamicsApplied, true);
+  assert.equal(applied.saved, true);
+  assert.equal(applied.applied, true);
+  assert.equal(applied.offscreen.ok, true);
   assert.deepEqual(bg.local.presets.Movie, beforeMovie, 'picking a preset does not rewrite its entry');
-  assert.deepEqual(bg.session.presetSwitchBaseline, { name: 'Movie', dynamics: MOVIE });
+  assert.equal(bg.session.presetSwitchBaseline, undefined);
   const told = bg.offscreenMsgs.slice(offStart).map((m) => m.type);
   assert.deepEqual(told, ['UPDATE_AUDIO_PARAMS', 'SET_DYNAMICS']);
 
@@ -285,7 +303,7 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   bg.local.dynamics = { ...MUSIC };
   const presetBefore = snapshot(bg.local.presets.Movie);
   const resetMark = bg.localSets.length;
-  const reset = await bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Movie' });
+  const reset = await bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Movie', ...viewOf(bg) });
   const resetSets = bg.localSets.slice(resetMark);
   assert.equal(reset.success, true);
   assert.equal(reset.dynamicsApplied, true);
@@ -300,16 +318,16 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   const legacyDyn = snapshot(bg.local.dynamics);
   const legacyEntry = snapshot(bg.local.presets.Legacy);
   const legacyResetMark = bg.localSets.length;
-  const legacyReset = await bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Legacy' });
+  const legacyReset = await bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Legacy', ...viewOf(bg) });
   const legacyResetSets = bg.localSets.slice(legacyResetMark);
   assert.equal(legacyReset.dynamicsApplied, false);
   assert.equal('dynamics' in legacyResetSets[0], false);
   assert.deepEqual(bg.local.dynamics, legacyDyn);
   assert.deepEqual(bg.local.presets.Legacy, legacyEntry);
-  assert.deepEqual(bg.session.presetSwitchBaseline.dynamics, MOVIE);
+  assert.equal(bg.session.presetSwitchBaseline, undefined);
 
   const factoryDyn = snapshot(bg.local.dynamics);
-  const factoryReset = await bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Punchy Bass & Clarity' });
+  const factoryReset = await bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Punchy Bass & Clarity', ...viewOf(bg) });
   assert.equal(factoryReset.dynamicsApplied, false);
   assert.deepEqual(bg.local.dynamics, factoryDyn);
   assert.deepEqual(bg.local.presets['Punchy Bass & Clarity'], FACTORIES['Punchy Bass & Clarity']);
@@ -334,6 +352,8 @@ test('a slider does not put the switches back, and the last preset write wins', 
   assert.equal('dynamics' in bg.local.currentParams, false);
   assert.equal('dynamics' in bg.localSets[bg.localSets.length - 1], false);
   assert.equal(bg.localSets.length, mark + 1);
+  assert.equal('presetRev' in bg.localSets[bg.localSets.length - 1], false);
+  assert.equal(bg.local.presetRev, undefined);
   assert.deepEqual(bg.offscreenMsgs.slice(off).map((m) => m.type), ['UPDATE_AUDIO_PARAMS']);
 
   bg.hold(true);
@@ -418,7 +438,7 @@ test('a switch then Save stores the new switches, not the ones still in flight',
   bg.hold(true);
   const stale = bg.send({ type: 'SET_DYNAMICS', dynamics: DEFAULT_DYN });
   await until(() => bg.setWaiters.length === 1, 'stale switch held');
-  const save = bg.send({ type: 'SAVE_PRESET', name: 'Snap', params: EQ, dynamics: MOVIE });
+  const save = bg.send({ type: 'SAVE_PRESET', name: 'Snap', params: EQ, dynamics: MOVIE, ...viewOf(bg) });
   assert.equal(bg.setWaiters.length, 1);
   bg.releaseOneSet();
   await until(() => bg.setWaiters.length === 1, 'save held');
@@ -450,7 +470,7 @@ test('install and upgrade leave stored preset entries identical', async () => {
   assert.ok(bg.local.presets['Punchy Bass & Clarity'], 'a missing factory preset is still added');
 });
 
-test('GET_STATE returns the session baseline only for the preset in force', async () => {
+test('GET_STATE does not read a switch baseline from session storage', async () => {
   const bg = loadBackground();
   await bg.ready();
   bg.local.presets = { Movie: { ...EQ, dynamics: { ...MOVIE } } };
@@ -459,9 +479,509 @@ test('GET_STATE returns the session baseline only for the preset in force', asyn
   bg.local.dynamics = { ...MUSIC };
   bg.session.presetSwitchBaseline = { name: 'Movie', dynamics: { ...MOVIE } };
   const same = await bg.send({ type: 'GET_STATE' });
-  assert.deepEqual(same.switchBaseline, MOVIE);
+  assert.equal(same.switchBaseline, undefined);
   assert.deepEqual(same.dynamics, MUSIC, 'reopening reports the switches in force, not the saved copy');
-  bg.session.presetSwitchBaseline = { name: 'Other', dynamics: { ...MOVIE } };
-  const other = await bg.send({ type: 'GET_STATE' });
-  assert.equal(other.switchBaseline, null);
+  assert.deepEqual(bg.session.presetSwitchBaseline.dynamics, MOVIE, 'session is left untouched');
+});
+
+test('APPLY_PRESET publishes the stored preset, not the caller cache', async () => {
+  const bg = loadBackground();
+  await bg.ready();
+  bg.setOffscreen(true);
+  const storedDyn = { ...MUSIC, leveler: 'full' };
+  bg.local.presets = { B: { ...EQ, bass: 5, dynamics: storedDyn } };
+  bg.local.currentPreset = 'A';
+  bg.local.currentParams = { ...EQ, bass: 1 };
+  bg.local.dynamics = { ...MOVIE };
+  const applied = await bg.send({
+    type: 'APPLY_PRESET',
+    presetName: 'B',
+    params: { ...EQ, bass: 99 },
+    dynamics: MOVIE
+  });
+  assert.equal(applied.success, true);
+  assert.equal(applied.saved, true);
+  assert.equal(bg.local.currentPreset, 'B');
+  assert.equal(bg.local.currentParams.bass, 5);
+  assert.equal('dynamics' in bg.local.currentParams, false);
+  assert.deepEqual(bg.local.dynamics, storedDyn);
+  assert.deepEqual(bg.offscreenMsgs.at(-1).dynamics, storedDyn);
+});
+
+test('a queued preset read happens after writes that were already waiting', async () => {
+  const bg = loadBackground();
+  await bg.ready();
+  bg.setOffscreen(true);
+  bg.local.presets = { Movie: { ...EQ, bass: 1, dynamics: { ...MOVIE } } };
+  bg.local.currentPreset = 'Movie';
+  bg.local.currentParams = { ...EQ, bass: 4 };
+  bg.local.dynamics = { ...DEFAULT_DYN };
+  bg.hold(true);
+  const reset = bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Movie', ...viewOf(bg) });
+  await until(() => bg.setWaiters.length === 1, 'reset held');
+  const edit = bg.send({ type: 'SET_DYNAMICS', dynamics: { ...MOVIE, leveler: 'full' } });
+  const read = bg.send({ type: 'READ_PRESET_STATE' });
+  bg.releaseOneSet();
+  await until(() => bg.setWaiters.length === 1, 'switch held');
+  bg.releaseOneSet();
+  bg.hold(false);
+  await reset;
+  await edit;
+  const snap = await read;
+  assert.equal(snap.success, true);
+  assert.equal(snap.currentPreset, 'Movie');
+  assert.equal(snap.currentParams.bass, 1);
+  assert.equal(snap.dynamics.leveler, 'full');
+  assert.equal(bg.local.dynamics.leveler, 'full');
+});
+
+// The popup controller, loaded for real against the fake DOM and the same worker.
+const popupSrc = readFileSync(join(root, 'popup.js'), 'utf8');
+
+function openPopup(bg, search = '') {
+  const elements = new Map();
+  const pending = new Set();
+  const replies = [];
+  const held = new Set();
+  const docListeners = {};
+  const winListeners = {};
+  class El {
+    constructor(id = '') {
+      this.id = id;
+      this.style = {};
+      this.dataset = {};
+      this.children = [];
+      this._value = '';
+      this.textContent = '';
+      this.hidden = false;
+      this.checked = false;
+      this.disabled = false;
+      this.attributes = {};
+      this.classList = { add() {}, remove() {}, toggle() {}, contains() { return false; } };
+      this.firstElementChild = { style: {} };
+    }
+    get value() { return this._value; }
+    set value(x) { this._value = String(x); }
+    set innerHTML(x) { this.children = []; }
+    get innerHTML() { return ''; }
+    appendChild(x) { this.children.push(x); return x; }
+    setAttribute(k, v) { this.attributes[k] = v; }
+    removeAttribute(k) { delete this.attributes[k]; }
+    getAttribute(k) { return this.attributes[k] ?? null; }
+    querySelectorAll() { return []; }
+    querySelector() { return null; }
+    closest() { return null; }
+    addEventListener() {}
+    removeEventListener() {}
+  }
+  const get = (id) => {
+    if (!elements.has(id)) elements.set(id, new El(id));
+    return elements.get(id);
+  };
+  const document = {
+    getElementById: get,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    body: new El('body'),
+    createElement: () => new El(),
+    visibilityState: 'hidden',
+    addEventListener(type, fn) { (docListeners[type] ||= []).push(fn); }
+  };
+  const local = {
+    ...bg.chrome.storage.local,
+    get(keys, cb) {
+      const p = bg.chrome.storage.local.get(keys);
+      if (cb) p.then(cb);
+      return p;
+    }
+  };
+  class PhysicsView {
+    constructor() { this.params = null; this.capturing = null; }
+    updateState(params, isCapturing) {
+      if (params) this.params = { ...params };
+      if (typeof isCapturing === 'boolean') this.capturing = isCapturing;
+    }
+    setFrame() {}
+    resize() {}
+  }
+  const chrome = {
+    ...bg.chrome,
+    storage: { ...bg.chrome.storage, local },
+    runtime: {
+      ...bg.chrome.runtime,
+      onMessage: { addListener() {} },
+      sendMessage(message, cb) {
+        const p = bg.send(structuredClone(message)).then((res) => {
+          if (!cb) return;
+          const deliver = () => cb(res);
+          if (held.has(message.type)) replies.push({ type: message.type, deliver });
+          else deliver();
+        });
+        pending.add(p);
+        p.finally(() => pending.delete(p));
+        return p;
+      }
+    }
+  };
+  const sandbox = {
+    console,
+    document,
+    chrome,
+    window: {
+      location: { search },
+      addEventListener(type, fn) { (winListeners[type] ||= []).push(fn); }
+    },
+    URLSearchParams,
+    PhysicsView,
+    setTimeout: () => 0,
+    clearTimeout() {},
+    setInterval: () => 0,
+    clearInterval() {},
+    requestAnimationFrame() {},
+    confirm: () => true,
+    prompt: () => sandbox.saveName || 'Saved test',
+    Event: class {},
+    Math,
+    Number,
+    Object,
+    Array,
+    parseFloat,
+    isNaN,
+    isFinite
+  };
+  vm.createContext(sandbox);
+  vm.runInContext(popupSrc, sandbox, { filename: 'popup.js' });
+  return {
+    get,
+    run: (source) => vm.runInContext(source, sandbox),
+    sandbox,
+    select(name) {
+      get('preset-select').value = name;
+      get('preset-select').onchange();
+    },
+    mode(name, value) {
+      get('mode-' + name).value = value;
+      get('mode-' + name).onchange();
+    },
+    held,
+    replies,
+    save(name) {
+      sandbox.saveName = name;
+      get('btn-save-preset').onclick();
+    },
+    update() { get('btn-update-preset').onclick(); },
+    reset() { get('btn-reset-defaults').onclick(); },
+    release(type) {
+      const i = replies.findIndex((r) => r.type === type);
+      assert.ok(i >= 0, 'held reply ' + type);
+      const [r] = replies.splice(i, 1);
+      r.deliver();
+    },
+    focus() {
+      document.visibilityState = 'visible';
+      for (const fn of docListeners.visibilitychange || []) fn();
+      for (const fn of winListeners.focus || []) fn();
+    },
+    async idle() {
+      for (let i = 0; i < 30; i++) {
+        if (pending.size) await Promise.all([...pending]);
+        await new Promise((r) => setImmediate(r));
+        if (!pending.size) return;
+      }
+      throw new Error('popup did not settle');
+    },
+    state() {
+      return JSON.parse(vm.runInContext(
+        'JSON.stringify({name:currentPresetName,dynamics,switchBaseline,params:getParamsFromUI(),badge:presetStatusBadge.textContent,update:btnUpdatePreset.style.display,curve:physics.params&&physics.params.bass,hint:hintEl?hintEl.textContent:"",saveDisabled:!!btnSavePreset.disabled,updateDisabled:!!btnUpdatePreset.disabled})',
+        sandbox
+      ));
+    }
+  };
+}
+
+async function seedSurfaces() {
+  const bg = loadBackground();
+  await bg.ready();
+  bg.setOffscreen(true);
+  Object.assign(bg.local, {
+    presets: {
+      A: { ...EQ, bass: 1, dynamics: structuredClone(MOVIE) },
+      B: { ...EQ, bass: 2, dynamics: structuredClone(MUSIC) },
+      Legacy: { ...EQ, bass: 9 }
+    },
+    currentPreset: 'A',
+    currentParams: { ...EQ, bass: 1 },
+    dynamics: structuredClone(MOVIE)
+  });
+  return bg;
+}
+
+test('a late Reset reply does not paint over a newer switch edit', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  await popup.idle();
+  bg.hold(true);
+  popup.reset();
+  await until(() => bg.setWaiters.length === 1, 'Reset storage held');
+  popup.mode('leveler', 'full');
+  bg.releaseOneSet();
+  await until(() => bg.setWaiters.length === 1, 'newer switch held');
+  bg.releaseOneSet();
+  bg.hold(false);
+  await popup.idle();
+  assert.equal(popup.state().dynamics.leveler, 'full');
+  assert.equal(bg.local.dynamics.leveler, 'full');
+  assert.equal(bg.offscreenMsgs.filter((m) => m.type === 'SET_DYNAMICS').at(-1).dynamics.leveler, 'full');
+  popup.save('After reset');
+  await popup.idle();
+  assert.equal(bg.local.presets['After reset'].dynamics.leveler, 'full');
+  assert.equal(bg.local.dynamics.leveler, 'full');
+  assert.equal(bg.offscreenMsgs.filter((m) => m.type === 'SET_DYNAMICS').at(-1).dynamics.leveler, 'full');
+});
+
+test('a Save stores the switches from the click and does not repaint over a newer switch edit', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  await popup.idle();
+  bg.hold(true);
+  popup.save('Kept');
+  await until(() => bg.setWaiters.length === 1, 'save held');
+  popup.mode('leveler', 'full');
+  bg.releaseOneSet();
+  await until(() => bg.setWaiters.length === 1, 'switch after save held');
+  bg.releaseOneSet();
+  bg.hold(false);
+  await popup.idle();
+  assert.equal(bg.local.presets.Kept.dynamics.leveler, 'bass');
+  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().dynamics.leveler, 'full');
+  assert.equal(bg.local.dynamics.leveler, 'full');
+});
+
+test('a side panel refreshes on focus, and a stale Update writes nothing', async () => {
+  const bg = await seedSurfaces();
+  delete bg.local.presets.B.dynamics;
+  const panel = openPopup(bg, '?panel=1');
+  const popup = openPopup(bg);
+  await panel.idle();
+  await popup.idle();
+  const link = attachLink(bg.chrome);
+  link.ask();
+  await link.advance(0);
+  popup.select('B');
+  await popup.idle();
+  popup.mode('leveler', 'full');
+  await popup.idle();
+  popup.update();
+  await popup.idle();
+  assert.equal(bg.local.presets.B.dynamics.leveler, 'full');
+  assert.equal(panel.state().name, 'A', 'the panel does not follow another screen live');
+  panel.focus();
+  await panel.idle();
+  assert.equal(panel.state().name, 'B');
+  assert.equal(panel.state().params.bass, 2);
+  assert.equal(panel.state().dynamics.leveler, 'full');
+  assert.match(panel.run('presetSwitchLabel.textContent'), /EQ \+ switches/);
+  await link.advance(200);
+  const followed = settingsOf(link).at(-1);
+  assert.equal(followed.currentParams.bass, 2);
+  assert.equal(followed.dynamics.leveler, 'full');
+  panel.update();
+  await panel.idle();
+  assert.equal(bg.local.presets.B.dynamics.leveler, 'full');
+  assert.equal(bg.local.presets.B.bass, 2);
+  const savedB = snapshot(bg.local.presets.B);
+  popup.select('A');
+  await popup.idle();
+  assert.equal(panel.state().name, 'B');
+  panel.update();
+  await panel.idle();
+  assert.deepEqual(bg.local.presets.B, savedB);
+  assert.equal(bg.local.currentPreset, 'A');
+  assert.equal(panel.state().name, 'A');
+  assert.equal(panel.state().params.bass, 1);
+  assert.equal(panel.state().dynamics.leveler, 'bass');
+  assert.equal(panel.get('hint').textContent, 'Another window changed your presets, so this one has been refreshed. Please try again.');
+  await link.advance(200);
+  const after = settingsOf(link).at(-1);
+  assert.equal(after.currentPreset, 'A');
+  assert.equal(after.currentParams.bass, 1);
+  assert.equal(after.dynamics.leveler, 'bass');
+});
+
+test('picking a preset redraws currentParams, and an EQ-only switch change stays Saved', async () => {
+  const bg = await seedSurfaces();
+  bg.local.currentPreset = 'Legacy';
+  bg.local.currentParams = { ...bg.local.presets.Legacy };
+  const popup = openPopup(bg);
+  await popup.idle();
+  popup.mode('leveler', 'full');
+  await popup.idle();
+  const edited = popup.state();
+  assert.match(edited.badge, /Saved/);
+  assert.equal(edited.update, 'inline-block');
+  const reopened = openPopup(bg);
+  await reopened.idle();
+  assert.match(reopened.state().badge, /Saved/);
+  assert.equal(reopened.state().update, 'inline-block');
+  assert.equal(bg.session.presetSwitchBaseline, undefined);
+  popup.select('B');
+  await popup.idle();
+  const picked = popup.state();
+  assert.equal(picked.curve, 2);
+  assert.equal(picked.params.bass, 2);
+  assert.equal(popup.run('currentParams.bass'), 2);
+  assert.equal(picked.dynamics.leveler, 'slow');
+});
+
+const STALE_HINT = 'Another window changed your presets, so this one has been refreshed. Please try again.';
+
+test('a late Save reply cannot make Update copy the other preset onto the saved one', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  const panel = openPopup(bg, '?panel=1');
+  await popup.idle();
+  await panel.idle();
+  popup.held.add('SAVE_PRESET');
+  popup.save('Saved A');
+  await popup.idle();
+  assert.equal(bg.local.presets['Saved A'].bass, 1);
+  assert.deepEqual(bg.local.presets['Saved A'].dynamics, MOVIE);
+  panel.select('B');
+  await panel.idle();
+  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().params.bass, 1);
+  assert.deepEqual(popup.state().dynamics, MOVIE);
+  popup.release('SAVE_PRESET');
+  await popup.idle();
+  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().params.bass, 1);
+  popup.update();
+  await popup.idle();
+  assert.equal(bg.local.presets['Saved A'].bass, 1);
+  assert.deepEqual(bg.local.presets['Saved A'].dynamics, MOVIE);
+  assert.equal(bg.local.currentPreset, 'B');
+  assert.equal(popup.state().name, 'B');
+  assert.equal(popup.state().params.bass, 2);
+  assert.equal(popup.state().dynamics.leveler, 'slow');
+  assert.equal(popup.get('hint').textContent, STALE_HINT);
+});
+
+test('a delayed preset read does not let Save publish the preset another screen has left', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  const panel = openPopup(bg, '?panel=1');
+  await popup.idle();
+  await panel.idle();
+  const link = attachLink(bg.chrome);
+  link.ask();
+  await link.advance(0);
+  popup.held.add('RESET_DEFAULT_PRESETS');
+  popup.held.add('READ_PRESET_STATE');
+  popup.reset();
+  await popup.idle();
+  popup.mode('leveler', 'full');
+  await popup.idle();
+  popup.release('RESET_DEFAULT_PRESETS');
+  await popup.idle();
+  assert.equal(popup.replies[0].type, 'READ_PRESET_STATE');
+  panel.select('B');
+  await panel.idle();
+  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().dynamics.leveler, 'full');
+  popup.release('READ_PRESET_STATE');
+  await popup.idle();
+  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().dynamics.leveler, 'full');
+  const before = snapshot(bg.local.presets);
+  popup.save('Saved after remote B');
+  await popup.idle();
+  await link.advance(200);
+  assert.equal(bg.local.presets['Saved after remote B'], undefined);
+  assert.deepEqual(bg.local.presets, before);
+  assert.equal(bg.local.currentPreset, 'B');
+  assert.equal(popup.state().name, 'B');
+  assert.equal(popup.state().dynamics.leveler, 'slow');
+  assert.equal(popup.get('hint').textContent, STALE_HINT);
+  const posted = settingsOf(link).at(-1);
+  assert.equal(posted.currentParams.bass, 2);
+  assert.equal(posted.dynamics.leveler, 'slow');
+});
+
+test('a delayed Reset reply does not repaint a newer selection, and Save is refused', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  const panel = openPopup(bg, '?panel=1');
+  await popup.idle();
+  await panel.idle();
+  popup.held.add('RESET_DEFAULT_PRESETS');
+  popup.reset();
+  await popup.idle();
+  panel.select('B');
+  await panel.idle();
+  assert.equal(popup.state().name, 'A');
+  const sets = bg.localSets.length;
+  popup.release('RESET_DEFAULT_PRESETS');
+  await popup.idle();
+  assert.equal(bg.localSets.length, sets);
+  assert.equal(popup.state().name, 'A');
+  assert.equal(bg.local.currentPreset, 'B');
+  popup.save('Late reset');
+  await popup.idle();
+  assert.equal(bg.local.presets['Late reset'], undefined);
+  assert.equal(popup.state().name, 'B');
+  assert.equal(popup.state().params.bass, 2);
+  assert.equal(popup.state().dynamics.leveler, 'slow');
+  assert.equal(popup.get('hint').textContent, STALE_HINT);
+});
+
+test('an older storage event does not replace a newer local pick, and Save waits until that pick lands', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  await popup.idle();
+  bg.hold(true);
+  popup.select('B');
+  await until(() => bg.setWaiters.length === 1, 'B pick held');
+  popup.select('Legacy');
+  assert.equal(popup.state().name, 'Legacy');
+  assert.equal(popup.state().params.bass, 9);
+  assert.equal(popup.state().saveDisabled, true);
+  bg.releaseOneSet();
+  await until(() => bg.setWaiters.length === 1, 'Legacy pick held');
+  assert.equal(popup.state().name, 'Legacy');
+  assert.equal(popup.state().params.bass, 9);
+  popup.save('Rapid picks');
+  assert.equal(bg.local.presets['Rapid picks'], undefined);
+  bg.releaseOneSet();
+  bg.hold(false);
+  await popup.idle();
+  assert.equal(bg.local.currentPreset, 'Legacy');
+  assert.equal(bg.local.currentParams.bass, 9);
+  assert.equal(popup.state().saveDisabled, false);
+  popup.save('Rapid picks');
+  await popup.idle();
+  assert.equal(bg.local.presets['Rapid picks'].bass, 9);
+});
+
+test('reversed pick replies keep the newer preset, then Save stores that preset\'s edited switches', async () => {
+  const bg = await seedSurfaces();
+  const popup = openPopup(bg);
+  await popup.idle();
+  popup.held.add('APPLY_PRESET');
+  popup.select('A');
+  popup.select('B');
+  await popup.idle();
+  assert.equal(popup.replies.length, 2);
+  const pending = popup.replies.splice(0).reverse();
+  for (const reply of pending) reply.deliver();
+  await popup.idle();
+  assert.equal(popup.state().name, 'B');
+  assert.equal(popup.state().dynamics.leveler, 'slow');
+  assert.deepEqual(popup.state().switchBaseline, MUSIC);
+  popup.mode('leveler', 'bass');
+  await popup.idle();
+  popup.save('Toggle then Save');
+  await popup.idle();
+  assert.equal(bg.local.presets['Toggle then Save'].dynamics.leveler, 'bass');
+  assert.equal(bg.local.presets['Toggle then Save'].bass, 2);
 });
