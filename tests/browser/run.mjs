@@ -11,6 +11,7 @@
 //
 // Usage: node browser/run.mjs <unpackedDir> [--label name]
 import { chromium } from 'playwright-core';
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -2324,6 +2325,242 @@ try {
   });
   record('W-JUMP-USER-WINS', 'If the playback is moved in Tidal itself during the check, the extension leaves it there (no fallback seek)',
     userWins.t > 12 && userWins.t < 16 && userWins.handlerSeeks === 0 && userWins.errs.length === 0 && userWins.ppErrors.length === 0 ? 'PASS' : 'FAIL', userWins);
+
+  // ---- W-JUMP-FEEDBACK: the investigation's working and silent-failure states, on both shared surfaces.
+  // Existing W-JUMP checks above are intentionally unchanged. All pages here remain synthetic and silent.
+  const feedbackCases = [];
+  const feedbackHint = (pp) => pp.evaluate(() => {
+    const el = document.getElementById('hint');
+    return el.hidden ? '' : el.textContent;
+  });
+  const feedbackSet = async (pg, pp, time, paused = true) => {
+    await pg.evaluate(({ time, paused }) => {
+      audioEl.currentTime = time;
+      if (paused) {
+        audioEl.pause();
+        document.getElementById('footer-play').setAttribute('data-test', 'play');
+        document.getElementById('footer-play').setAttribute('aria-label', 'Play');
+      }
+    }, { time, paused });
+    await pp.waitForFunction(({ time, paused }) =>
+      currentTrackInfo && Math.abs(currentTrackInfo.currentTime - time) < 2 && currentTrackInfo.isPlaying !== paused,
+    { time, paused });
+  };
+  const feedbackDone = async (pp, count = 1) => {
+    await pp.waitForFunction((n) => __transport.length >= n, count, { timeout: 12000 });
+    return pp.evaluate(() => __transport.at(-1));
+  };
+  const blockFeedbackSeek = () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true, get() { return descriptor.get.call(this); }, set() {}
+    });
+  };
+  for (const surface of ['popup', 'panel']) {
+    const feedbackCase = async (name, query, run, play = true) => {
+      const pg = await context.newPage();
+      watchRequests(pg);
+      const errors = [];
+      pg.on('pageerror', (e) => errors.push(String(e)));
+      let opened;
+      try {
+        await pg.goto(TIDAL_URL + query);
+        await pg.waitForFunction(() => window.audioEl?.duration > 0);
+        if (play) await pg.click('#footer-play');
+        opened = await openPopup(surface === 'panel' ? 'popup.html?panel=1' : 'popup.html');
+        const pp = opened.page;
+        await pp.setViewportSize({ width: surface === 'panel' ? 360 : 440, height: 760 });
+        await pp.evaluate(() => {
+          window.__transport = [];
+          window.__hints = [];
+          const hint = document.getElementById('hint');
+          new MutationObserver(() => { if (!hint.hidden) __hints.push(hint.textContent); })
+            .observe(hint, { subtree: true, childList: true, attributes: true });
+          const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = (m, callback) => {
+            if (m.type !== 'FORWARD_PLAYER_COMMAND' || m.command.type === 'GET_TRACK_INFO') return original(m, callback);
+            const done = (res) => { __transport.push({ command: m.command, response: res }); callback?.(res); };
+            if (window.__replyMode === 'failed') return done({ success: false, error: 'Synthetic transport failure' });
+            if (window.__replyMode === 'missing') return done(undefined);
+            if (window.__replyMode === 'throw') throw new Error('Synthetic disconnected port');
+            return original(m, done);
+          };
+        });
+        const height = await pp.evaluate(() => document.body.getBoundingClientRect().height);
+        const evidence = await run(pg, pp);
+        const afterHeight = await pp.evaluate(() => document.body.getBoundingClientRect().height);
+        assert.equal(afterHeight, height, 'transport hint must not change layout height');
+        const hintVisible = await pp.evaluate(() => {
+          const el = document.getElementById('hint'), r = el.getBoundingClientRect();
+          return el.hidden || (r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth);
+        });
+        assert.ok(hintVisible, 'feedback must be on-screen, including a short scrolling side panel');
+        assert.deepEqual([...errors, ...opened.errors], []);
+        feedbackCases.push({ surface, name, pass: true, height, ...evidence });
+      } catch (error) {
+        feedbackCases.push({ surface, name, pass: false, error: String(error.stack || error) });
+      } finally {
+        if (opened) await opened.page.close();
+        if (!pg.isClosed()) await pg.close();
+      }
+    };
+    for (const [name, query, reachable, playing] of [
+      ['bar paused', '', false, false],
+      ['bar playing', '', false, true],
+      ['reachable media paused', '', true, false],
+      ['narrow handler paused', '?narrow=1&media=detached&session=1', false, false],
+      ['narrow closed element paused', '?narrow=1&media=closed', false, false],
+      ['dead bar falls back', '?deadbar=1&session=1', false, false],
+      ['noop handler falls back', '?narrow=1&media=detached&session=noop', false, false]
+    ]) {
+      await feedbackCase(name, query, async (pg, pp) => {
+        if (reachable) await pg.evaluate(() => document.body.append(audioEl));
+        await feedbackSet(pg, pp, 5, !playing);
+        await pp.click('#player-btn-fwd30');
+        const forward = await feedbackDone(pp);
+        assert.equal(forward.response.status, 'confirmed');
+        assert.equal(await feedbackHint(pp), '');
+        const fwd = await pg.evaluate(() => audioEl.currentTime);
+        assert.ok(fwd > 32 && fwd < 39);
+        await pp.click('#player-btn-back15');
+        const back = await feedbackDone(pp, 2);
+        assert.equal(back.response.status, 'confirmed');
+        assert.equal(await feedbackHint(pp), '');
+        const time = await pg.evaluate(() => audioEl.currentTime);
+        assert.ok(time > 17 && time < 26);
+        const hints = await pp.evaluate(() => __hints);
+        if (name === 'dead bar falls back' || name === 'noop handler falls back') assert.ok(hints.includes('Moving playback…'));
+        else assert.deepEqual(hints, [], 'fast success must never flash a hint');
+        return { fwd, back: time, forward: forward.response, hints };
+      });
+    }
+    await feedbackCase('unknown length before first play', '?narrow=1&media=detached', async (pg, pp) => {
+      await pp.click('#player-btn-fwd30');
+      assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
+      assert.equal(await pp.evaluate(() => __transport.length), 0);
+    }, false);
+    await feedbackCase('dead bar and empty helper', '?deadbar=1', async (pg, pp) => {
+      await pp.click('#player-btn-fwd30');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'exhausted');
+      assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 0);
+      assert.ok(await pp.evaluate(() => __hints.includes('Moving playback…')));
+      return { response: result.response };
+    }, false);
+    await feedbackCase('all routes refuse (synthetic ad-like state)', '?deadbar=1&session=noop', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pg.evaluate(blockFeedbackSeek);
+      await pp.click('#player-btn-fwd30');
+      await pp.waitForFunction(() => !document.getElementById('hint').hidden && document.getElementById('hint').textContent === 'Moving playback…');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'exhausted');
+      assert.equal(result.response.seeked, false);
+      assert.equal(await feedbackHint(pp), "This page isn't allowing seeking right now");
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 5);
+      assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+      await pp.screenshot({ path: join(outDir, `seek-feedback-${surface}.png`) });
+      return { response: result.response, screenshot: `results/${label}/seek-feedback-${surface}.png` };
+    });
+    // The ignored isolated-world assignment must fail verification, then retain the working footer fallback.
+    // With every other route refused as well it must finally show the seek refusal.
+    for (const blocked of [false, true]) {
+      await feedbackCase(blocked ? 'reachable assignment and all fallbacks ignored' : 'reachable assignment ignored; bar recovers',
+        blocked ? '?deadbar=1&session=noop' : '', async (pg, pp) => {
+          await feedbackSet(pg, pp, 5);
+          await pg.evaluate(() => document.body.append(audioEl));
+          if (blocked) await pg.evaluate(blockFeedbackSeek);
+          await pp.evaluate(async (url) => {
+            const [tab] = await chrome.tabs.query({ url });
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+              const media = document.querySelector('audio');
+              const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+              Object.defineProperty(media, 'currentTime', { configurable: true, get() { return descriptor.get.call(this); }, set() {} });
+            } });
+          }, pg.url());
+          await pp.click('#player-btn-fwd30');
+          const result = await feedbackDone(pp);
+          assert.equal(result.response.status, blocked ? 'exhausted' : 'confirmed');
+          assert.equal(await feedbackHint(pp), blocked ? "This page isn't allowing seeking right now" : '');
+          assert.ok(Math.abs(await pg.evaluate(() => audioEl.currentTime) - (blocked ? 5 : 35)) < 0.2);
+          return { response: result.response };
+        });
+    }
+    await feedbackCase('end goes next; quick repeat held', '?tracks=1', async (pg, pp) => {
+      await feedbackSet(pg, pp, 45);
+      // Same event turn guarantees that the second click arrives before the confirmation.
+      await pp.evaluate(() => { document.getElementById('player-btn-fwd30').click(); document.getElementById('player-btn-fwd30').click(); });
+      assert.equal(await feedbackHint(pp), 'Waiting for the next track');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'confirmed');
+      assert.equal(await feedbackHint(pp), '');
+      const clicks = await pg.evaluate(() => window.clicks);
+      assert.equal(clicks.next, 1);
+      assert.equal(clicks.seek, 0);
+      return { clicks };
+    });
+    for (const button of ['#player-btn-fwd30', '#player-btn-next']) {
+      await feedbackCase(`dead Next (${button})`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, 45);
+        await pp.click(button);
+        const result = await feedbackDone(pp);
+        assert.equal(result.response.status, 'exhausted');
+        assert.equal(await feedbackHint(pp), "Tidal didn't move to the next track");
+        const clicks = await pg.evaluate(() => window.clicks);
+        assert.equal(clicks.next, 1);
+        assert.equal(clicks.seek, 0);
+        assert.equal(await pg.evaluate(() => audioEl.currentTime), 45);
+        return { clicks, response: result.response };
+      });
+    }
+    await feedbackCase('disabled Next ends paused queue', '?nextdisabled=1&session=1', async (pg, pp) => {
+      await feedbackSet(pg, pp, 45);
+      await pp.click('#player-btn-fwd30');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'confirmed');
+      assert.equal(result.response.next, 'end');
+      assert.equal(await feedbackHint(pp), '');
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 60);
+    });
+    await feedbackCase('back at start', '', async (pg, pp) => {
+      await feedbackSet(pg, pp, 0);
+      await pp.click('#player-btn-back15');
+      assert.equal(await feedbackHint(pp), 'Already at the start');
+      assert.equal(await pp.evaluate(() => __transport.length), 0);
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 0);
+    });
+    await feedbackCase('closed target tab', '', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pg.close();
+      await pp.click('#player-btn-fwd30');
+      await feedbackDone(pp);
+      assert.equal(await feedbackHint(pp), "The Tidal tab isn't reachable. Open it and try again");
+      assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+    });
+    for (const mode of ['failed', 'missing', 'throw']) {
+      await feedbackCase(`${mode} transport reply`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, 5);
+        await pp.evaluate((mode) => { window.__replyMode = mode; }, mode);
+        await pp.click('#player-btn-fwd30');
+        assert.equal(await feedbackHint(pp), "The Tidal tab isn't reachable. Open it and try again");
+        assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+        assert.equal(await pg.evaluate(() => audioEl.currentTime), 5);
+      });
+    }
+    await feedbackCase('manual movement cancels without fallback or failure hint', '?deadbar=1&session=1', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pp.click('#player-btn-fwd30');
+      await sleep(450);
+      await pg.evaluate(() => { audioEl.currentTime = 12; });
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'cancelled');
+      assert.equal(await feedbackHint(pp), '');
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 12);
+      assert.equal(await pg.evaluate(() => clicks.sessionSeek), 0);
+    });
+  }
+  record('W-JUMP-FEEDBACK', 'Confirmed jumps clear feedback; every investigated silent failure is explained, without changing popup/panel height',
+    feedbackCases.every((c) => c.pass) ? 'PASS' : 'FAIL', { passed: feedbackCases.filter((c) => c.pass).length, total: feedbackCases.length, cases: feedbackCases });
 
   // ---- W-BRIDGE-PAUSE-TIME: with only Tidal's position report (no element known), paused time is not counted ----
   const pauseTime = await (async () => {

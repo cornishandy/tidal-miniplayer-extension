@@ -361,6 +361,7 @@ window.addEventListener('resize', () => {
 
 function showHint(text, ms = 4000) {
   if (!hintEl) return;
+  hintEl.classList.remove('transport-hint');
   hintEl.textContent = text;
   hintEl.hidden = !text;
   if (text && ms) setTimeout(() => { if (hintEl.textContent === text) hintEl.hidden = true; }, ms);
@@ -552,51 +553,109 @@ function playerCommand(command, after = 250) {
   });
 }
 
-function handlePlayPause() { playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
+function handlePlayPause() { cancelTransportFeedback(); playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
 // After Next, Previous or a jump into the next track, the screen still shows the old track for up to a second;
 // jumps wait for the new one (at most 2 s, 3 s after an end jump), so a quick click never skips it or seeks it
 // to the old track's time. Previous that only restarts the same track holds jumps for those 2 s.
 let leavingTrack = null;
 const leaveTrack = (ms) => { leavingTrack = currentTrackInfo ? { title: currentTrackInfo.title, until: Date.now() + ms } : null; };
 
-function handlePrev() { leaveTrack(2000); playerCommand({ type: 'PREV_TRACK' }, 300); }
-function handleNext() { leaveTrack(2000); playerCommand({ type: 'NEXT_TRACK' }, 300); }
+const jumpHints = {
+  moving: 'Moving playback…',
+  held: 'Waiting for the next track',
+  start: 'Already at the start',
+  seek: "This page isn't allowing seeking right now",
+  helper: 'Reload the Tidal tab once, then try again',
+  unreachable: "The Tidal tab isn't reachable. Open it and try again",
+  next: "Tidal didn't move to the next track"
+};
+let pendingTransport = null;
+
+function showTransportHint(text, ms = 4000) {
+  showHint(text, ms);
+  if (hintEl && text) hintEl.classList.add('transport-hint');
+}
+
+function cancelTransportFeedback() {
+  if (pendingTransport) {
+    clearTimeout(pendingTransport.progress);
+    clearTimeout(pendingTransport.deadline);
+    pendingTransport = null;
+  }
+  if (hintEl && hintEl.classList.contains('transport-hint')) showTransportHint('');
+}
+
+function heldForTrack() {
+  if ((pendingTransport && pendingTransport.command.type === 'NEXT_TRACK')
+    || (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until)) {
+    if (pendingTransport) pendingTransport.held = true;
+    showTransportHint(jumpHints.held);
+    return true;
+  }
+  return false;
+}
+
+function confirmedPlayerCommand(command) {
+  cancelTransportFeedback();
+  const attempt = { command, held: false };
+  pendingTransport = attempt;
+  attempt.progress = setTimeout(() => {
+    if (pendingTransport === attempt && !attempt.held) showTransportHint(jumpHints.moving, 0);
+  }, 400);
+  const finish = (res, failed) => {
+    if (pendingTransport !== attempt) return; // a newer command owns the feedback
+    clearTimeout(attempt.progress);
+    clearTimeout(attempt.deadline);
+    pendingTransport = null;
+    let text = '';
+    if (failed || !res || !['confirmed', 'cancelled', 'exhausted'].includes(res.status)) text = jumpHints.unreachable;
+    else if (res.status === 'exhausted') text = jumpHints[res.reason] || jumpHints.seek;
+    else if (res.status === 'confirmed' && res.success !== true) text = jumpHints.unreachable;
+    if (text || res?.status === 'cancelled') leavingTrack = null;
+    showTransportHint(text);
+    // Paint only observed playback, never the requested target or an unverified reply.
+    if (!text && res?.status === 'confirmed' && res.title) {
+      currentTrackInfo = res;
+      updatePlayerUI(res);
+    }
+    setTimeout(refreshTrackInfo, 250);
+  };
+  // All seek routes, including a no-button Next's end fallback, finish within this bound.
+  attempt.deadline = setTimeout(() => finish(null, true), 10000);
+  try {
+    chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command }, (res) => finish(res, !!chrome.runtime.lastError));
+  } catch (_) { finish(null, true); }
+}
+
+function handlePrev() { cancelTransportFeedback(); leaveTrack(2000); playerCommand({ type: 'PREV_TRACK' }, 300); }
+function handleNext() {
+  if (heldForTrack()) return;
+  leaveTrack(3000);
+  confirmedPlayerCommand({ type: 'NEXT_TRACK' });
+}
 
 function handleJump(deltaSecs) {
-  if (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until) return;
+  if (heldForTrack()) return;
   leavingTrack = null;
+  cancelTransportFeedback();
   if (!currentTrackInfo || !currentTrackInfo.duration) {
-    showHint("The track length isn't known on this page, so the jump can't be placed.");
+    showTransportHint(currentTrackInfo ? jumpHints.helper : jumpHints.unreachable);
     return;
   }
   const dur = currentTrackInfo.duration;
   const cur = currentTrackInfo.currentTime || 0;
+  if (deltaSecs < 0 && cur <= 0) {
+    showTransportHint(jumpHints.start);
+    return;
+  }
   if (deltaSecs > 0 && cur + deltaSecs >= dur - 0.5) {
     // The jump reaches the end: finish this track and go to the next one, as if it had played out.
     leaveTrack(3000);
-    chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'NEXT_TRACK', orEnd: true } }, (res) => {
-      if (res && res.next === false) {
-        leavingTrack = null;
-        showHint("Couldn't go to the next track or to the end of this one on this page.");
-      }
-      setTimeout(refreshTrackInfo, 300);
-    });
+    confirmedPlayerCommand({ type: 'NEXT_TRACK', orEnd: true });
     return;
   }
   const newTime = Math.max(0, Math.min(dur, cur + deltaSecs));
-  chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SEEK_AUDIO', time: newTime } }, (res) => {
-    if (res && res.seeked === false) {
-      showHint(res.bridge !== undefined // a Tidal tab
-        ? "Couldn't move the playback position in Tidal. If the Tidal tab was open before this update, reload it once."
-        : "Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
-      return;
-    }
-    if (!res || !res.unverified) { // unverified: show the real time from the next reading instead of the target
-      currentTrackInfo.currentTime = newTime;
-      updatePlayerUI(currentTrackInfo);
-    }
-    setTimeout(refreshTrackInfo, 250);
-  });
+  confirmedPlayerCommand({ type: 'SEEK_AUDIO', time: newTime });
 }
 
 function handleFav() {
