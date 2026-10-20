@@ -109,14 +109,19 @@ const EqCuts = (() => {
     if (!allowed(p, active, movieMode) || !frame?.isCapturing
       || frame.input?.length !== 72 || frame.output?.length !== 72) return cuts;
     const rate = Number.isFinite(frame.sampleRate) && frame.sampleRate > 0 ? frame.sampleRate : 48000;
+    const meter = (key) => Number.isFinite(frame.dyn?.[key]) ? frame.dyn[key] : 0;
+    const fullBandLeveler = p.autoBalance && !p.stageBypass?.comp
+      && ['full', 'slow'].includes(frame.dyn?.modes?.leveler) ? meter('leveler') : 0;
+    const netFullBandReduction = meter('limiter') + fullBandLeveler - meter('match');
     for (const [band, indices] of Object.entries(points)) {
       const valid = indices.filter((i) => Number.isFinite(frame.input[i])
         && frame.input[i] >= -70 && Number.isFinite(frame.output[i]));
       if (valid.length < 2) continue;
-      // Average both responses over exactly the same audible points, then clamp the cut.
+      // Independent spectrum maxima can mistake distortion for retained sound. Keep the
+      // spectral estimate, floored at live net full-band reduction (not the peak-based ceiling).
       const sum = valid.reduce((total, i) =>
         total + askedDb(p, frequencies[i], rate) - (frame.output[i] - frame.input[i]), 0);
-      cuts[band] = Math.max(0, sum / valid.length);
+      cuts[band] = Math.max(0, sum / valid.length, netFullBandReduction);
     }
     return cuts;
   }

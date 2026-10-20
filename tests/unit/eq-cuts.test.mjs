@@ -97,6 +97,80 @@ test('cut model: global reduction appears at zero Mid/High, but cuts never go ne
   for (const value of Object.values(cuts.measure(frame(5), flat, true, false))) near(value, 0);
 });
 
+test('cut model: Sol bass-plus-texture mixture cannot understate the full-band limiter', () => {
+  // Captured by Sol's OfflineAudioContext reproduction at Bass +56 / Master 250% / AUTO off.
+  // Independent output maxima include distortion, understating MID's cut at both rates.
+  const mixtures = [
+    { rate: 48000, limiter: 29.1, spectral: 11.539493689795624,
+      input: [-67.7, -68.3, -54.4, -67.9, -67.4], output: [-59.2, -71.7, -69.7, -66.2, -73.5] },
+    { rate: 96000, limiter: 29.2, spectral: 10.379493689795622,
+      input: [-68.4, -67.5, -53.9, -66.5, -69.1], output: [-57.5, -73.7, -67.8, -62.6, -72.6] }
+  ];
+  const p = { bass: 56, hpf: 20, mid: 0, high: 0, gain: 2.5, autoBalance: false, stageBypass: {} };
+  for (const mixture of mixtures) {
+    // Shipped frames omit sampleRate, including in the 96 kHz reproduction.
+    const f = frame();
+    f.input.fill(-120);
+    cuts.points.mid.forEach((i, j) => { f.input[i] = mixture.input[j]; f.output[i] = mixture.output[j]; });
+    near(cuts.measure(f, p, true, false).mid, mixture.spectral);
+    f.dyn = { modes: { leveler: 'full' }, limiter: mixture.limiter, leveler: 0, match: 0, ceiling: 4 };
+    const measured = cuts.measure(f, p, true, false);
+    near(measured.mid, mixture.limiter);
+    assert.equal(measured.bass, null, `${mixture.rate} Hz: meters must not invent band availability`);
+    assert.equal(measured.high, null);
+    near(cuts.smooth({ value: 0, visible: false }, measured.mid, 600).value,
+      mixture.limiter * (1 - Math.exp(-1)));
+    f.input[cuts.points.mid[1]] = f.input[cuts.points.mid[2]]
+      = f.input[cuts.points.mid[3]] = f.input[cuts.points.mid[4]] = -120;
+    assert.equal(cuts.measure(f, p, true, false).mid, null, 'one valid point still hides the band');
+  }
+});
+
+test('cut model: full-band and slow Leveler reductions add to the limiter before smoothing', () => {
+  for (const leveler of ['full', 'slow']) {
+    const f = { ...frame(-2), dyn: { modes: { leveler }, limiter: 6, leveler: 9, match: 0 } };
+    for (const value of Object.values(cuts.measure(f, { ...flat, autoBalance: true }, true, false))) near(value, 15);
+    // The spectral estimate remains authoritative when it exceeds the meter floor.
+    for (const value of Object.values(cuts.measure({ ...f, output: Array(72).fill(-50) },
+      { ...flat, autoBalance: true }, true, false))) near(value, 20);
+  }
+});
+
+test('cut model: signed MATCH gain lowers the floor and negative trim raises it; ceiling is excluded', () => {
+  const p = { ...flat, autoBalance: true };
+  for (const [match, expected] of [[4, 11], [-4, 19], [30, 2]]) {
+    const f = { ...frame(-2), dyn: { modes: { leveler: 'full' }, limiter: 6, leveler: 9, match, ceiling: 40 } };
+    for (const value of Object.values(cuts.measure(f, p, true, false))) near(value, expected);
+  }
+  const f = { ...frame(5), dyn: { modes: { leveler: 'full' }, limiter: 6, leveler: 9, match: 30, ceiling: 40 } };
+  for (const value of Object.values(cuts.measure(f, p, true, false))) near(value, 0);
+});
+
+test('cut model: Bass-only and disabled AUTO never supply a full-band Leveler floor', () => {
+  const f = { ...frame(-2), dyn: { modes: { leveler: 'bass' }, limiter: 6, leveler: 20 } };
+  const p = { ...flat, autoBalance: true };
+  for (const value of Object.values(cuts.measure(f, p, true, false))) near(value, 6);
+  f.dyn.modes.leveler = 'full';
+  for (const value of Object.values(cuts.measure(f, { ...p, autoBalance: false }, true, false))) near(value, 6);
+  for (const value of Object.values(cuts.measure(f,
+    { ...p, stageBypass: { ...p.stageBypass, comp: true } }, true, false))) near(value, 6);
+  // A failed Bass-only worklet reports the effective Full band fallback in the live frame.
+  f.dyn.available = false;
+  for (const value of Object.values(cuts.measure(f, p, true, false))) near(value, 26);
+});
+
+test('cut model: absent or non-finite meters contribute zero and unknown Leveler mode is excluded', () => {
+  const p = { ...flat, autoBalance: true };
+  for (const [dyn, expected] of [
+    [undefined, 2], [{}, 2], [{ limiter: 7 }, 7], [{ match: -5 }, 5],
+    [{ modes: { leveler: 'slow' }, leveler: 8 }, 8], [{ leveler: 30 }, 2],
+    [{ modes: { leveler: 'other' }, leveler: 30 }, 2],
+    [{ modes: { leveler: 'full' }, limiter: NaN, leveler: Infinity, match: -Infinity, ceiling: 40 }, 2]
+  ]) {
+    for (const value of Object.values(cuts.measure({ ...frame(-2), dyn }, p, true, false))) near(value, expected);
+  }
+});
+
 test('cut model: off, idle, missing/malformed frames, bypass and active Pitch hide all bands', () => {
   const hidden = (value) => assert.ok(Object.values(value).every((v) => v === null));
   hidden(cuts.measure(frame(), flat, false, false));
