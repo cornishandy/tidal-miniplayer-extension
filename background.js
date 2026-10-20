@@ -370,10 +370,26 @@ function askOffscreen(message) {
 
 // `saved` on a preset reply means storage accepted the write. `applied` is the offscreen
 // document's own acknowledgement, and is false when that document is closed or rejects the message.
+// The engine merges what it is sent (offscreen.js updateParams), so a field left out keeps its previous value.
+// Send every field the 1.5.7 screen always sent: bypass and all six stage flags explicit, semitones 0 for a preset
+// saved before pitch existed, and the legacy `eq` / `comp` / `speed` aliases read the way the screen reads them.
+// Without this, picking a factory preset after Flat (Bypass) left the engine bypassed (Fable, 1.5.8 final gate).
+function engineParams(params) {
+  const p = paramsWithoutDynamics(params) || {};
+  const out = { ...p };
+  const raw = { ...(p.stageBypass && typeof p.stageBypass === 'object' && !Array.isArray(p.stageBypass) ? p.stageBypass : {}) };
+  if (raw.eq) raw.bass = raw.mid = raw.high = true;
+  if (raw.comp) out.autoBalance = false;
+  out.stageBypass = { hpf: !!raw.hpf, bass: !!raw.bass, mid: !!raw.mid, high: !!raw.high, gain: !!raw.gain, pitch: !!(raw.pitch || raw.speed) };
+  out.bypass = p.bypass === true;
+  if (typeof p.semitones !== 'number' || !Number.isFinite(p.semitones)) out.semitones = 0;
+  return out;
+}
+
 async function tellOffscreen(params, dynamics) {
   const acks = [];
   if (params && typeof params === 'object') {
-    acks.push(await askOffscreen({ target: 'offscreen', type: 'UPDATE_AUDIO_PARAMS', params }));
+    acks.push(await askOffscreen({ target: 'offscreen', type: 'UPDATE_AUDIO_PARAMS', params: engineParams(params) }));
   }
   if (dynamics) {
     acks.push(await askOffscreen({ target: 'offscreen', type: 'SET_DYNAMICS', dynamics }));

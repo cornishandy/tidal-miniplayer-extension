@@ -1568,7 +1568,7 @@ test('Sol r4 failed-pick: one rejected storage set restores confirmed A before M
   assert.equal(settingsOf(link).at(-1).currentParams.bass, 8);
   assert.equal(settingsOf(link).at(-1).currentParams.mid, 6);
   assert.deepEqual(settingsOf(link).at(-1).dynamics, MOVIE);
-  assert.deepEqual(bg.offscreenMsgs.filter(x => x.type === 'UPDATE_AUDIO_PARAMS').at(-1).params, bg.local.currentParams);
+  assert.deepEqual(bg.offscreenMsgs.filter(x => x.type === 'UPDATE_AUDIO_PARAMS').at(-1).params, asEngineSees(bg.local.currentParams));
 });
 
 const controlIds = ['preset-select', 'btn-save-preset', 'btn-update-preset', 'btn-delete-preset', 'btn-reset-defaults',
@@ -1723,9 +1723,23 @@ function attachSilentEngine(bg) {
   };
 }
 
+// What the engine should hold for a stored EQ, written independently of the worker: the engine merges what it is
+// sent, so the worker sends every field the 1.5.7 screen sent (bypass and all six stage flags explicit, semitones 0
+// when missing, legacy eq/comp/speed aliases read as the screen reads them).
+const asEngineSees = (stored) => {
+  const p = { ...stored };
+  delete p.dynamics;
+  const raw = { ...(p.stageBypass || {}) };
+  if (raw.eq) raw.bass = raw.mid = raw.high = true;
+  if (raw.comp) p.autoBalance = false;
+  p.stageBypass = { hpf: !!raw.hpf, bass: !!raw.bass, mid: !!raw.mid, high: !!raw.high, gain: !!raw.gain, pitch: !!(raw.pitch || raw.speed) };
+  p.bypass = stored.bypass === true;
+  if (typeof stored.semitones !== 'number') p.semitones = 0;
+  return p;
+};
+
 const assertEngineMatches = (engine, stored) => {
-  // Factory EQ omits bypass; the unchanged engine retains the explicit neutral false.
-  assert.deepEqual(engine.state().params, { bypass: false, ...stored.currentParams }, 'engine EQ matches storage');
+  assert.deepEqual(engine.state().params, asEngineSees(stored.currentParams), 'engine EQ matches storage');
   assert.deepEqual(engine.state().dynamics, stored.dynamics, 'engine switches match storage');
 };
 
@@ -1757,7 +1771,7 @@ for (const operation of ['pick', 'reset', 'delete']) {
     bg.chrome.storage.local.get = get; bg.chrome.storage.local.set = set;
     assert.equal(failed, 1, 'the post-commit fault fired exactly once');
     assert.equal(bg.localSets.length, writes + 1, 'selection and recovery publish only once');
-    assert.deepEqual(engineAtRead.params, { bypass: false, ...storedAtRead.currentParams }, 'committed EQ reached engine BEFORE the failed read');
+    assert.deepEqual(engineAtRead.params, asEngineSees(storedAtRead.currentParams), 'committed EQ reached engine BEFORE the failed read');
     assert.deepEqual(engineAtRead.dynamics, storedAtRead.dynamics, 'committed switches reached engine BEFORE the failed read');
     assert.equal(p.sent.at(-1).type, 'READ_PRESET_STATE');
     assertLocked(p, false); assertEngineMatches(engine, bg.local);
@@ -1822,7 +1836,7 @@ test('queued state reads wait for both engine acknowledgements and never create 
   const read = bg.send({ type: 'READ_PRESET_STATE' }).then(result => { replied = true; return result; });
   await until(() => pending.length === 1, 'EQ acknowledgement');
   assert.equal(replied, false); assert.equal(sent[0].target, 'offscreen');
-  assert.deepEqual(sent[0].params, stored.currentParams);
+  assert.deepEqual(sent[0].params, asEngineSees(stored.currentParams));
   pending.shift()({ success: true });
   await until(() => pending.length === 1, 'switch acknowledgement');
   assert.equal(replied, false); assert.equal(sent[1].target, 'offscreen');
@@ -1833,4 +1847,26 @@ test('queued state reads wait for both engine acknowledgements and never create 
   assert.deepEqual(state.currentParams, stored.currentParams);
   assert.deepEqual(state.dynamics, stored.dynamics);
   assert.deepEqual(bg.local, stored); assert.equal(bg.localSets.length, writes);
+});
+
+test('Fable r3: a factory pick after Flat (Bypass) clears the engine bypass, and a band switched off does not survive a factory pick', async () => {
+  const bg = await seedSurfaces(), engine = attachSilentEngine(bg), p = openPopup(bg);
+  await p.idle();
+  p.select('Flat (Bypass)'); await p.idle();
+  assert.equal(engine.state().params.bypass, true, 'Flat bypasses the engine');
+  p.select('Punchy Bass & Clarity'); await p.idle();
+  let e = engine.state().params;
+  assert.equal(e.bypass, false, 'engine must not stay bypassed after picking Punchy');
+  assert.equal(e.bass, 5, 'Punchy bass reaches the engine');
+  assert.deepEqual(e.stageBypass, { hpf: false, bass: false, mid: false, high: false, gain: false, pitch: false }, 'every stage on for a factory preset');
+  p.slider('mid', 6); await p.idle();
+  assert.equal(engine.state().params.bypass, false, 'a Mid edit after the pick stays un-bypassed');
+  // A band switched off on the live EQ, then a factory pick: the factory preset has every band on.
+  bg.local.currentParams = { ...bg.local.currentParams, stageBypass: { hpf: false, bass: true, mid: false, high: false, gain: false, pitch: false } };
+  await bg.send({ type: 'READ_PRESET_STATE' });
+  assert.equal(engine.state().params.stageBypass.bass, true, 'the recovery read re-sends the stored band-off state');
+  p.select('Deep Sub-Bass (Dub/Trap)'); await p.idle();
+  e = engine.state().params;
+  assert.equal(e.stageBypass.bass, false, 'the bass band is back on after picking Deep Sub-Bass');
+  assert.equal(e.bypass, false);
 });
