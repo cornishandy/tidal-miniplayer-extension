@@ -1139,6 +1139,103 @@ try {
       const staleSwitchView = await readModes(followPanel);
       const staleSwitchHint = await followPanel.evaluate(() => document.getElementById('hint').textContent);
       await followPanel.close();
+      // Round 4: hold only delivery of real worker replies. Check native disabled attributes while
+      // the selection is committed but unconfirmed; then exercise each edit through the real DOM.
+      const confirmation = await popup.evaluate(async () => {
+        const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+        const calls = [], held = [];
+        const types = new Set(['APPLY_PRESET', 'RESET_DEFAULT_PRESETS', 'DELETE_PRESET']);
+        let hold = true;
+        chrome.runtime.sendMessage = (message, callback) => {
+          if (message.type?.startsWith('EDIT_')) calls.push(JSON.parse(JSON.stringify(message)));
+          if (hold && types.has(message.type) && callback) {
+            return original(message, (res) => {
+              const error = chrome.runtime.lastError;
+              held.push(() => callback(error ? undefined : res));
+            });
+          }
+          return original(message, callback);
+        };
+        const waitFor = async (fn) => {
+          for (let i = 0; i < 200; i++) {
+            if (fn()) return;
+            await new Promise(r => setTimeout(r, 10));
+          }
+          throw Error('confirmation/edit did not settle');
+        };
+        const controls = () => [...document.querySelectorAll('.eq-slider, .eq-nudge-btn, button.band-tag, #mode-leveler, #mode-limiter, #mode-ceiling, #preset-select, #btn-save-preset, #btn-update-preset, #btn-delete-preset, #btn-reset-defaults')];
+        const locked = () => controls().every(el => el.disabled && el.hasAttribute('disabled'));
+        const unlocked = () => controls().every(el => !el.disabled && !el.hasAttribute('disabled'));
+        const view = () => ({ name: currentPresetName, bass: currentParams.bass, dynamics: { ...dynamics } });
+        const rounds = [];
+        try {
+          // Fresh view after the independent stale-switch check above.
+          refreshPresetView();
+          await waitFor(() => presetOpsInFlight === 0);
+          const initial = view();
+          for (const name of ['Flat (Bypass)', 'Harness Preset']) {
+            presetSelect.value = name;
+            presetSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            const before = view();
+            await waitFor(() => held.length === 1);
+            rounds.push({ operation: 'pick', requested: name, locked: locked(), before, confirmed: currentPresetName !== name });
+            held.shift()();
+            await waitFor(() => presetOpsInFlight === 0);
+            rounds.at(-1).unlocked = unlocked();
+            rounds.at(-1).after = view();
+          }
+          for (const [operation, button] of [['reset', btnResetDefaults], ['delete', btnDeletePreset]]) {
+            const before = view();
+            button.click();
+            await waitFor(() => held.length === 1);
+            rounds.push({ operation, locked: locked(), before, stillConfirmed: JSON.stringify(view()) === JSON.stringify(before) });
+            held.shift()();
+            await waitFor(() => presetOpsInFlight === 0);
+            rounds.at(-1).unlocked = unlocked();
+          }
+          hold = false;
+          // Exercise edits on the confirmed fallback after Delete.
+          const beforeEdit = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          modeCeiling.value = beforeEdit.dynamics.ceiling === 'warm' ? 'clean' : 'warm';
+          modeCeiling.dispatchEvent(new Event('change', { bubbles: true }));
+          await waitFor(() => viewRev > beforeEdit.stateRev);
+          const afterSwitch = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          sliderMid.value = 6;
+          sliderMid.dispatchEvent(new Event('input', { bubbles: true }));
+          await waitFor(() => viewRev > afterSwitch.stateRev);
+          const afterSlider = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          document.querySelector('.eq-nudge-btn[data-target="slider-high"][data-action="up"]').click();
+          await waitFor(() => viewRev > afterSlider.stateRev);
+          const afterNudge = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          document.querySelector('button.band-tag[data-band="bass"]').click();
+          await waitFor(() => viewRev > afterNudge.stateRev);
+          const afterBand = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          document.querySelector('button.band-tag[data-band="match"]').click();
+          await waitFor(() => viewRev > afterBand.stateRev);
+          const afterMatch = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          valMid.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+          await waitFor(() => viewRev > afterMatch.stateRev);
+          const afterNeutral = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          valMid.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+          await waitFor(() => viewRev > afterNeutral.stateRev);
+          const final = await new Promise(r => original({ type: 'READ_PRESET_STATE' }, r));
+          return { initial, rounds, beforeEdit, afterSwitch, afterSlider, final, calls };
+        } finally {
+          hold = false;
+          chrome.runtime.sendMessage = original;
+          for (const deliver of held) deliver();
+        }
+      });
+      const editKeys = confirmation.calls.map(m => Object.keys(m.params || m.dynamics).join(','));
+      const confirmationOk = confirmation.rounds.every(r => r.locked && r.unlocked)
+        && confirmation.rounds.filter(r => r.operation === 'pick').every(r => r.confirmed && r.after.name === r.requested)
+        && confirmation.rounds.filter(r => r.operation !== 'pick').every(r => r.stillConfirmed)
+        && JSON.stringify(editKeys) === JSON.stringify(['ceiling', 'mid', 'high', 'stageBypass', 'match', 'mid', 'mid'])
+        && Object.keys(confirmation.calls[3].params.stageBypass).join(',') === 'bass'
+        && ['leveler', 'match', 'limiter'].every(k => confirmation.beforeEdit.dynamics[k] === confirmation.afterSwitch.dynamics[k])
+        && confirmation.beforeEdit.currentPreset === confirmation.afterSlider.currentPreset
+        && confirmation.afterSlider.currentParams.mid === 6
+        && confirmation.final.currentParams.mid === 6;
       const followOk = followBeforeFocus.preset === 'Harness Preset' && sameDyn(followBeforeFocus, WANTED)
         && sameDyn(followUpdated, SLOW) && followUpdated.label === 'EQ + switches' && followUpdated.preset === 'Harness Preset'
         && followStillHarness.preset === 'Harness Preset'
@@ -1167,8 +1264,8 @@ try {
         && back.resetTitle === "Restore this preset's saved EQ and switches"
         && fitPopup.labelInside && fitPopup.resetInside && fitPopup.rowH === 20 && fitPopup.updateShown
         && fitPanel.labelInside && fitPanel.resetInside && fitPanel.pageOverflow <= 0
-        && surfacesAgree && curveMatches && followOk;
-      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, curve, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin, followBeforeFocus, followUpdated, followStillHarness, followFlat, followBack, followCache, followRefused, staleHint, harnessBefore, harnessAfter, panelBefore, staleSwitchBefore, staleSwitchAfter, staleSwitchEngine, staleSwitchView, staleSwitchHint };
+        && surfacesAgree && curveMatches && followOk && confirmationOk;
+      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, curve, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin, followBeforeFocus, followUpdated, followStillHarness, followFlat, followBack, followCache, followRefused, staleHint, harnessBefore, harnessAfter, panelBefore, staleSwitchBefore, staleSwitchAfter, staleSwitchEngine, staleSwitchView, staleSwitchHint, confirmationOk, confirmation };
     } finally {
       await popup.evaluate((snap) => new Promise((resolve) => {
         chrome.storage.local.set(snap.local, () => {
@@ -1179,7 +1276,7 @@ try {
       if (switchSnap.local.dynamics) await writeFrom(popup, { type: 'EDIT_DYNAMICS', dynamics: switchSnap.local.dynamics });
       if (switchSnap.local.currentParams) await writeFrom(popup, { type: 'EDIT_PARAMS', params: switchSnap.local.currentParams });
     }
-    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a side panel left open refreshes on focus; a stale Update and a stale switch change are refused, write nothing, and refresh that panel; the header stays on one row',
+    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a side panel left open refreshes on focus; a stale Update and a stale switch change are refused, write nothing, and refresh that panel; pick/Reset/Delete lock all edit controls until confirmation; each edit sends only its changed field; the header stays on one row',
       switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
 
     // ---- W-CAPTURE-STOP ----

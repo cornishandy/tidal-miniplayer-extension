@@ -301,6 +301,42 @@ function paramsWithoutDynamics(params) {
   return copy;
 }
 
+// An edit is a delta, not a replacement made from a screen's cached controls.
+// Keep untouched values (including legacy fields); validate just the fields being edited.
+function mergeParamEdit(stored, delta) {
+  const merged = { ...paramsWithoutDynamics(stored) };
+  // Match the screen/engine's legacy aliases before overlaying one stage's new value.
+  // Otherwise a retained `eq` or `comp` alias could silently override that edit.
+  if (merged.stageBypass && typeof merged.stageBypass === 'object') {
+    const stages = { ...merged.stageBypass };
+    if (stages.eq) stages.bass = stages.mid = stages.high = true;
+    if (stages.comp) merged.autoBalance = false;
+    if (stages.speed) stages.pitch = true;
+    delete stages.eq;
+    delete stages.comp;
+    delete stages.speed;
+    merged.stageBypass = stages;
+  }
+  const patch = delta && typeof delta === 'object' && !Array.isArray(delta) ? delta : {};
+  const ranges = { bass: [0, 28], hpf: [20, 200], mid: [-12, 12], high: [-12, 12], gain: [0.5, 2.5], semitones: [-12, 12] };
+  for (const [key, [min, max]] of Object.entries(ranges)) {
+    if (typeof patch[key] === 'number' && Number.isFinite(patch[key])) {
+      merged[key] = Math.min(max, Math.max(min, patch[key]));
+    }
+  }
+  for (const key of ['autoBalance', 'bypass']) {
+    if (typeof patch[key] === 'boolean') merged[key] = patch[key];
+  }
+  if (patch.stageBypass && typeof patch.stageBypass === 'object' && !Array.isArray(patch.stageBypass)) {
+    const stages = { ...(merged.stageBypass || {}) };
+    for (const key of ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch']) {
+      if (typeof patch.stageBypass[key] === 'boolean') stages[key] = patch.stageBypass[key];
+    }
+    merged.stageBypass = stages;
+  }
+  return merged;
+}
+
 function presetSavedDynamics(preset) {
   if (!preset || !Object.prototype.hasOwnProperty.call(preset, 'dynamics')) return null;
   const d = preset.dynamics;
@@ -354,14 +390,12 @@ async function writeSelection({ presetName, params, dynamics, extra, stamp }) {
   else if (params !== undefined) payload.currentParams = params;
   if (dynamics) payload.dynamics = normaliseDynamics(dynamics);
   await chrome.storage.local.set(payload);
+  const state = await readPresetSnapshot();
   const open = await isOffscreenOpen();
   const offscreen = open ? await tellOffscreen(payload.currentParams, payload.dynamics || null) : null;
   return {
-    success: true,
-    saved: true,
-    currentParams: payload.currentParams,
+    ...state,
     dynamicsApplied: !!payload.dynamics,
-    dynamics: payload.dynamics,
     switchBaseline: payload.dynamics || null,
     applied: !!(offscreen && offscreen.ok),
     offscreen,
@@ -1062,11 +1096,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const result = await enqueuePresetWrite(async () => {
             const admit = await admitWrite(message);
             if (admit.refusal) return admit.refusal;
-            const clean = paramsWithoutDynamics(message.params);
+            const state = await readPresetSnapshot();
+            const clean = mergeParamEdit(state.currentParams, message.params);
             await chrome.storage.local.set({ currentParams: clean, ...admit.stamp });
             const open = await isOffscreenOpen();
             const offscreen = open ? await tellOffscreen(clean, null) : null;
-            return { success: true, saved: true, applied: !!(offscreen && offscreen.ok), offscreen, stateRev: admit.stamp.stateRev };
+            return { ...state, currentParams: clean, applied: !!(offscreen && offscreen.ok), offscreen, stateRev: admit.stamp.stateRev };
           });
           sendResponse(result);
           break;
@@ -1100,11 +1135,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           const result = await enqueuePresetWrite(async () => {
             const admit = await admitWrite(message);
             if (admit.refusal) return admit.refusal;
-            const dynamics = normaliseDynamics(message.dynamics);
+            const state = await readPresetSnapshot();
+            const dynamics = normaliseDynamics({ ...state.dynamics, ...message.dynamics });
             await chrome.storage.local.set({ dynamics, ...admit.stamp });
             const open = await isOffscreenOpen();
             const offscreen = open ? await tellOffscreen(null, dynamics) : null;
-            return { success: true, saved: true, dynamics, applied: !!(offscreen && offscreen.ok), offscreen, stateRev: admit.stamp.stateRev };
+            return { ...state, dynamics, applied: !!(offscreen && offscreen.ok), offscreen, stateRev: admit.stamp.stateRev };
           });
           sendResponse(result);
           break;
@@ -1182,7 +1218,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             await chrome.storage.local.set({ presets: p, currentPreset: name, currentParams: clean, dynamics: dyn, ...admit.stamp });
             const open = await isOffscreenOpen();
             const offscreen = open ? await tellOffscreen(clean, dyn) : null;
-            return { success: true, saved: true, presets: p, savedName: name, dynamics: dyn, applied: !!(offscreen && offscreen.ok), offscreen, stateRev: admit.stamp.stateRev };
+            return { ...await readPresetSnapshot(), savedName: name, applied: !!(offscreen && offscreen.ok), offscreen };
           });
           sendResponse(result);
           break;
@@ -1196,8 +1232,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const data = await chrome.storage.local.get('presets');
             const p = { ...DEFAULT_PRESETS, ...(data.presets || {}) };
             delete p[name];
-            await chrome.storage.local.set({ presets: p, ...admit.stamp });
-            return { success: true, presets: p, stateRev: admit.stamp.stateRev };
+            // Delete and the fallback selection are one operation and one publication.
+            const selectedName = FACTORY_PRESET_NAMES[0];
+            return writeSelection({
+              presetName: selectedName, params: p[selectedName],
+              dynamics: presetSavedDynamics(p[selectedName]),
+              extra: { presets: p }, stamp: admit.stamp
+            });
           });
           sendResponse(result);
           break;
@@ -1220,19 +1261,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 dynamics: savedDyn,
                 stamp: admit.stamp
               });
-              return {
-                success: true,
-                saved: true,
-                presets: p,
-                selectedName: presetToReset,
-                currentParams: applied.currentParams,
-                dynamicsApplied: applied.dynamicsApplied,
-                dynamics: applied.dynamics,
-                switchBaseline: applied.switchBaseline,
-                applied: applied.applied,
-                offscreen: applied.offscreen,
-                stateRev: applied.stateRev
-              };
+              return { ...applied, selectedName: presetToReset };
             }
 
             let selectedName = presetToReset;
@@ -1254,18 +1283,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               extra: { presets: presetsOut },
               stamp: admit.stamp
             });
-            return {
-              success: true,
-              saved: true,
-              presets: presetsOut,
-              selectedName,
-              currentParams: applied.currentParams,
-              dynamicsApplied: false,
-              switchBaseline: applied.switchBaseline,
-              applied: applied.applied,
-              offscreen: applied.offscreen,
-              stateRev: applied.stateRev
-            };
+            return { ...applied, selectedName };
           });
           sendResponse(result);
           break;

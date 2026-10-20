@@ -554,6 +554,9 @@ function openPopup(bg, search = '') {
   const replies = [];
   const held = new Set();
   const sent = [];
+  const faults = new Map();
+  const timers = new Set();
+  let now = 0;
   const docListeners = {};
   const winListeners = {};
   class El {
@@ -584,15 +587,37 @@ function openPopup(bg, search = '') {
     closest() { return null; }
     addEventListener() {}
     removeEventListener() {}
+    dispatchEvent(event) { this['on' + event.type]?.({ target: this }); }
   }
   const get = (id) => {
     if (!elements.has(id)) elements.set(id, new El(id));
     return elements.get(id);
   };
+  const tags = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'pitch', 'match'].map((band) => {
+    const tag = get('tag-' + band);
+    tag.dataset.band = band;
+    return tag;
+  });
+  const nudges = ['bass', 'hpf', 'mid', 'high', 'gain', 'pitch'].flatMap((band) => {
+    const slider = get('slider-' + band);
+    const [min, max, step] = { bass: [0, 28, 0.5], hpf: [20, 200, 5], mid: [-12, 12, 0.5], high: [-12, 12, 0.5], gain: [0.5, 2.5, 0.05], pitch: [-12, 12, 0.5] }[band];
+    Object.assign(slider, { min, max, defaultValue: 0 });
+    return ['up', 'down'].map((action) => {
+      const button = get(`nudge-${band}-${action}`);
+      button.setAttribute('data-target', slider.id);
+      button.setAttribute('data-action', action);
+      button.setAttribute('data-step', step);
+      return button;
+    });
+  });
   const document = {
     getElementById: get,
     querySelector: () => null,
-    querySelectorAll: () => [],
+    querySelectorAll: (selector) => {
+      if (selector === '.band-tag' || selector === 'button.band-tag') return tags;
+      if (selector === '.eq-nudge-btn') return nudges;
+      return [];
+    },
     body: new El('body'),
     createElement: () => new El(),
     visibilityState: 'hidden',
@@ -623,8 +648,22 @@ function openPopup(bg, search = '') {
       onMessage: { addListener() {} },
       sendMessage(message, cb) {
         sent.push(structuredClone(message));
+        const fault = faults.get(message.type);
+        if (fault) {
+          faults.delete(message.type);
+          if (fault === 'throw') throw new Error('injected port exception');
+          if (fault === 'error') { cb({ success: false, error: 'injected reply error' }); return; }
+          if (fault === 'missing') { cb(); return; }
+          if (fault === 'port') {
+            chrome.runtime.lastError = { message: 'injected port error' };
+            cb();
+            chrome.runtime.lastError = null;
+            return;
+          }
+        }
         const p = bg.send(structuredClone(message)).then((res) => {
           if (!cb) return;
+          if (fault === 'timeout') return;
           const deliver = () => cb(res);
           if (held.has(message.type)) replies.push({ type: message.type, deliver });
           else deliver();
@@ -645,14 +684,14 @@ function openPopup(bg, search = '') {
     },
     URLSearchParams,
     PhysicsView,
-    setTimeout: () => 0,
-    clearTimeout() {},
+    setTimeout(fn, ms) { const timer = { fn, at: now + ms }; timers.add(timer); return timer; },
+    clearTimeout(timer) { timers.delete(timer); },
     setInterval: () => 0,
     clearInterval() {},
     requestAnimationFrame() {},
     confirm: () => true,
     prompt: () => sandbox.saveName || 'Saved test',
-    Event: class {},
+    Event: class { constructor(type) { this.type = type; } },
     Math,
     Number,
     Object,
@@ -665,6 +704,13 @@ function openPopup(bg, search = '') {
   vm.runInContext(popupSrc, sandbox, { filename: 'popup.js' });
   return {
     get,
+    faults,
+    advance(ms) {
+      now += ms;
+      for (const timer of [...timers]) {
+        if (timer.at <= now && timers.delete(timer)) timer.fn();
+      }
+    },
     run: (source) => vm.runInContext(source, sandbox),
     sandbox,
     select(name) {
@@ -777,7 +823,7 @@ test('a Save stores the switches from the click and does not repaint over a newe
   bg.hold(false);
   await popup.idle();
   assert.equal(bg.local.presets.Kept.dynamics.leveler, 'bass');
-  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().name, 'Kept', 'the merged edit reply confirms the saved name too');
   assert.equal(popup.state().dynamics.leveler, 'full');
   assert.equal(bg.local.dynamics.leveler, 'full');
 });
@@ -991,13 +1037,13 @@ test('an older storage event does not replace a newer local pick, and Save waits
   popup.select('B');
   await until(() => bg.setWaiters.length === 1, 'B pick held');
   popup.select('Legacy');
-  assert.equal(popup.state().name, 'Legacy');
-  assert.equal(popup.state().params.bass, 9);
+  assert.equal(popup.state().name, 'A', 'keep the confirmed selection until the newest pick replies');
+  assert.equal(popup.state().params.bass, 1);
   assert.equal(popup.state().saveDisabled, true);
   bg.releaseOneSet();
   await until(() => bg.setWaiters.length === 1, 'Legacy pick held');
-  assert.equal(popup.state().name, 'Legacy');
-  assert.equal(popup.state().params.bass, 9);
+  assert.equal(popup.state().name, 'A');
+  assert.equal(popup.state().params.bass, 1);
   popup.save('Rapid picks');
   assert.equal(bg.local.presets['Rapid picks'], undefined);
   bg.releaseOneSet();
@@ -1005,6 +1051,8 @@ test('an older storage event does not replace a newer local pick, and Save waits
   await popup.idle();
   assert.equal(bg.local.currentPreset, 'Legacy');
   assert.equal(bg.local.currentParams.bass, 9);
+  assert.equal(popup.state().name, 'Legacy');
+  assert.equal(popup.state().params.bass, 9);
   assert.equal(popup.state().saveDisabled, false);
   popup.save('Rapid picks');
   await popup.idle();
@@ -1467,4 +1515,178 @@ test('an absent or invalid stored revision counts as 0, install leaves it alone,
     assert.ok(bg.local.presets.A && bg.local.presets.Legacy, 'custom presets are kept');
     for (const [name, preset] of Object.entries(FACTORIES)) assert.deepEqual(bg.local.presets[name], preset);
   }
+});
+
+// Round 4: confirm selections before painting; merge only the edited fields in the worker queue.
+test('Sol r4 late-update: a delayed Update and re-pick cannot restore cached Bass-only on a Ceiling edit', async () => {
+  const bg = await seedSurfaces(), p = openPopup(bg);
+  await p.idle();
+  const link = attachLink(bg.chrome); link.ask(); await link.advance(0);
+  p.mode('leveler', 'slow'); await p.idle();
+  p.held.add('UPDATE_PRESET'); p.update(); await p.idle();
+  assert.equal(bg.local.presets.A.dynamics.leveler, 'slow');
+  assert.equal(p.get('preset-select').disabled, true);
+  // Deliberately invoke disabled handlers, as Sol's probe does, to also test out-of-order delivery.
+  p.select('B'); await p.idle();
+  p.held.add('APPLY_PRESET'); p.select('A'); await p.idle();
+  assert.equal(p.state().name, 'B', 'A has not been confirmed to this screen');
+  assert.equal(bg.local.dynamics.leveler, 'slow');
+  p.mode('ceiling', 'clean'); await p.idle();
+  assert.deepEqual(p.sent.filter(x => x.type === 'EDIT_DYNAMICS').at(-1).dynamics, { ceiling: 'clean' });
+  p.release('APPLY_PRESET'); await p.idle();
+  p.release('UPDATE_PRESET'); p.held.delete('UPDATE_PRESET'); await p.idle();
+  assert.equal(p.run('presets.A.dynamics.leveler'), 'slow', 'every newer snapshot refreshes the preset cache');
+  p.update(); await p.idle(); await link.advance(200);
+  assert.equal(bg.local.presets.A.dynamics.leveler, 'slow');
+  assert.equal(bg.local.dynamics.leveler, 'slow');
+  assert.equal(p.state().dynamics.leveler, 'slow');
+  for (const post of settingsOf(link).slice(1)) assert.equal(post.dynamics.leveler, 'slow', 'Movie Sound never gets Bass-only back');
+  for (const message of bg.offscreenMsgs.filter(x => x.type === 'SET_DYNAMICS').slice(1)) assert.equal(message.dynamics.leveler, 'slow');
+});
+
+test('Sol r4 failed-pick: one rejected storage set restores confirmed A before Mid writes only Mid 6', async () => {
+  const bg = await seedSurfaces(), p = openPopup(bg);
+  await p.idle(); p.slider('bass', 8); await p.idle();
+  const link = attachLink(bg.chrome); link.ask(); await link.advance(0);
+  const before = snapshot(bg.local), set = bg.chrome.storage.local.set;
+  let once = true;
+  bg.chrome.storage.local.set = (payload) => {
+    if (once) { once = false; return Promise.reject(new Error('one failed selection')); }
+    return set(payload);
+  };
+  p.select('B');
+  assert.equal(p.state().name, 'A'); assert.equal(p.state().params.bass, 8);
+  await p.idle(); bg.chrome.storage.local.set = set;
+  assert.deepEqual(bg.local, before);
+  assert.equal(p.state().name, 'A'); assert.equal(p.get('preset-select').value, 'A');
+  assert.deepEqual(p.state().dynamics, MOVIE);
+  assert.equal(p.sent.at(-1).type, 'READ_PRESET_STATE');
+  p.slider('mid', 6); await p.idle(); await link.advance(200);
+  assert.deepEqual(p.sent.filter(x => x.type === 'EDIT_PARAMS').at(-1).params, { mid: 6 });
+  assert.deepEqual(bg.local.currentParams, { ...before.currentParams, mid: 6 });
+  assert.equal(bg.local.currentPreset, 'A'); assert.deepEqual(bg.local.dynamics, MOVIE);
+  assert.equal(settingsOf(link).at(-1).currentParams.bass, 8);
+  assert.equal(settingsOf(link).at(-1).currentParams.mid, 6);
+  assert.deepEqual(settingsOf(link).at(-1).dynamics, MOVIE);
+  assert.deepEqual(bg.offscreenMsgs.filter(x => x.type === 'UPDATE_AUDIO_PARAMS').at(-1).params, bg.local.currentParams);
+});
+
+const controlIds = ['preset-select', 'btn-save-preset', 'btn-update-preset', 'btn-delete-preset', 'btn-reset-defaults',
+  'slider-bass', 'slider-hpf', 'slider-mid', 'slider-high', 'slider-gain', 'slider-pitch', 'mode-leveler', 'mode-limiter', 'mode-ceiling',
+  ...['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'pitch', 'match'].map(x => 'tag-' + x),
+  ...['bass', 'hpf', 'mid', 'high', 'gain', 'pitch'].flatMap(x => [`nudge-${x}-up`, `nudge-${x}-down`])];
+const assertLocked = (p, locked) => controlIds.forEach(id => assert.equal(p.get(id).disabled, locked, id));
+
+test('preset controls lock through confirmation and queued recovery on success, error, missing response, port error and timeout', async () => {
+  for (const operation of ['pick', 'reset', 'delete', 'save', 'update']) {
+    for (const fault of ['success', 'storage', 'error', 'missing', 'port', 'throw', 'timeout']) {
+      const bg = await seedSurfaces(), p = openPopup(bg); await p.idle();
+      const type = { pick: 'APPLY_PRESET', reset: 'RESET_DEFAULT_PRESETS', delete: 'DELETE_PRESET', save: 'SAVE_PRESET', update: 'UPDATE_PRESET' }[operation];
+      const set = bg.chrome.storage.local.set;
+      if (fault === 'storage') {
+        let once = true;
+        bg.chrome.storage.local.set = (obj) => { if (once) { once = false; return Promise.reject(Error('one storage failure')); } return set(obj); };
+      } else if (fault !== 'success') p.faults.set(type, fault);
+      if (fault === 'success') p.held.add(type);
+      else p.held.add('READ_PRESET_STATE');
+      const old = p.state();
+      ({ pick: () => p.select('B'), reset: () => p.reset(), delete: () => p.remove(), save: () => p.save('Locked save'), update: () => p.update() })[operation]();
+      assertLocked(p, true);
+      const messages = p.sent.length;
+      p.get('val-mid').ondblclick({ preventDefault() {} });
+      assert.equal(p.sent.length, messages, 'neutral/restore cannot edit through the lock');
+      assert.equal(p.state().name, old.name, operation + '/' + fault + ': no optimistic name');
+      assert.deepEqual(p.state().params, old.params, operation + '/' + fault + ': no optimistic EQ');
+      await p.idle();
+      if (fault === 'success') p.release(type);
+      else {
+        if (fault === 'timeout') { p.advance(5000); await p.idle(); }
+        assertLocked(p, true);
+        assert.equal(p.replies.at(-1).type, 'READ_PRESET_STATE');
+        p.release('READ_PRESET_STATE');
+      }
+      await p.idle(); assertLocked(p, false);
+      assert.equal(p.state().name, bg.local.currentPreset);
+      assert.deepEqual(p.state().dynamics, bg.local.dynamics);
+      assert.equal(p.state().params.bass, bg.local.currentParams.bass);
+      assert.equal(p.run('authoritativePresetPaint'), true);
+    }
+  }
+});
+
+test('a lost recovery response unlocks; Save waits for an authoritative paint; a late pick reply cannot repaint', async () => {
+  const bg = await seedSurfaces(), p = openPopup(bg); await p.idle();
+  p.held.add('APPLY_PRESET'); p.select('B'); await p.idle();
+  p.faults.set('READ_PRESET_STATE', 'timeout');
+  p.advance(5000); await p.idle(); assertLocked(p, true);
+  p.advance(5000); await p.idle(); assertLocked(p, false);
+  assert.equal(p.run('authoritativePresetPaint'), false);
+  p.save('Unconfirmed'); await p.idle();
+  assert.equal(bg.local.presets.Unconfirmed, undefined);
+  assert.equal(p.state().name, 'B'); assert.equal(p.run('authoritativePresetPaint'), true);
+  p.held.delete('APPLY_PRESET'); p.select('Legacy'); await p.idle();
+  p.release('APPLY_PRESET'); await p.idle();
+  assert.equal(p.state().name, 'Legacy'); assertLocked(p, false);
+  p.save('Confirmed'); await p.idle(); assert.equal(bg.local.presets.Confirmed.bass, 9);
+});
+
+test('a stale-but-admitted switch sends one field and preserves the other three stored switches', async () => {
+  const bg = await seedSurfaces(), p = openPopup(bg); await p.idle();
+  p.held.add('EDIT_DYNAMICS'); p.mode('leveler', 'slow'); await p.idle();
+  p.run('dynamics = { leveler: "bass", match: false, limiter: "fast", ceiling: "warm" }; applyDynamicsToUI()');
+  p.mode('ceiling', 'clean'); await p.idle();
+  assert.deepEqual(bg.local.dynamics, { ...MOVIE, leveler: 'slow', ceiling: 'clean' });
+  const replies = p.replies.splice(0).reverse(); replies.forEach(r => r.deliver());
+  assert.deepEqual(p.state().dynamics, bg.local.dynamics);
+  assert.equal(p.run('viewRev'), bg.local.stateRev);
+  assert.deepEqual(p.sent.filter(x => x.type === 'EDIT_DYNAMICS').map(x => x.dynamics), [{ leveler: 'slow' }, { ceiling: 'clean' }]);
+});
+
+test('slider, nudge, band, MATCH and neutral/restore send minimal deltas; edits never select a preset', async () => {
+  const bg = await seedSurfaces(), p = openPopup(bg); await p.idle();
+  const last = () => p.sent.filter(x => x.type.startsWith('EDIT_')).at(-1);
+  p.slider('mid', 6); await p.idle(); assert.deepEqual(last().params, { mid: 6 });
+  p.get('nudge-high-up').onclick({ preventDefault() {}, shiftKey: false }); await p.idle();
+  assert.deepEqual(last().params, { high: 0.5 });
+  p.get('tag-bass').onclick(); await p.idle(); assert.deepEqual(last().params, { stageBypass: { bass: true } });
+  p.get('tag-high').onclick(); await p.idle(); assert.deepEqual(last().params, { stageBypass: { high: true } });
+  assert.deepEqual(bg.local.currentParams.stageBypass, { bass: true, high: true });
+  p.get('tag-comp').onclick(); await p.idle(); assert.deepEqual(last().params, { autoBalance: true });
+  p.get('tag-match').onclick(); await p.idle(); assert.deepEqual(last().dynamics, { match: false });
+  p.get('val-mid').ondblclick({ preventDefault() {} }); await p.idle(); assert.deepEqual(last().params, { mid: 0 });
+  p.get('val-mid').ondblclick({ preventDefault() {} }); await p.idle(); assert.deepEqual(last().params, { mid: 6 });
+  p.slider('pitch', 2); await p.idle(); assert.deepEqual(last().params, { semitones: 2 });
+  assert.equal(bg.local.currentPreset, 'A');
+  assert.equal(bg.local.currentParams.bass, 1); assert.equal(bg.local.currentParams.high, 0.5);
+  for (const set of bg.localSets) assert.equal('currentPreset' in set, false);
+});
+
+test('edit deltas merge once inside the queue and normalise changed fields without rewriting presets', async () => {
+  const bg = await seedSurfaces();
+  const before = snapshot(bg.local.presets);
+  bg.local.currentParams.stageBypass = { bass: true, high: true };
+  const mark = bg.localSets.length;
+  const reply = await bg.send({ type: 'EDIT_PARAMS', params: { mid: 99, gain: NaN, stageBypass: { bass: false }, dynamics: MUSIC, unknown: 'ignored' }, ...viewOf(bg) });
+  assert.equal(bg.localSets.length, mark + 1);
+  assert.equal(bg.local.currentParams.mid, 12); assert.equal(bg.local.currentParams.gain, 1);
+  assert.deepEqual(bg.local.currentParams.stageBypass, { bass: false, high: true });
+  assert.equal('unknown' in bg.local.currentParams, false);
+  assert.equal('dynamics' in bg.local.currentParams, false);
+  assert.deepEqual(reply.currentParams, bg.local.currentParams);
+  assert.deepEqual(reply.dynamics, MOVIE); assert.equal(reply.currentPreset, 'A');
+  assert.deepEqual(bg.local.presets, before);
+  const dyn = await bg.send({ type: 'EDIT_DYNAMICS', dynamics: { ceiling: 'invalid' }, ...viewOf(bg) });
+  assert.deepEqual(dyn.dynamics, { ...MOVIE, ceiling: 'clean' });
+});
+
+test('minimal band edits override legacy aliases in live params without migrating the saved preset', async () => {
+  const bg = await seedSurfaces();
+  const legacy = { ...EQ, autoBalance: true, stageBypass: { eq: true, comp: true, speed: true } };
+  bg.local.currentPreset = 'Legacy'; bg.local.currentParams = snapshot(legacy); bg.local.presets.Legacy = snapshot(legacy);
+  const p = openPopup(bg); await p.idle();
+  p.get('tag-bass').onclick(); await p.idle();
+  assert.deepEqual(bg.local.currentParams.stageBypass, { bass: false, mid: true, high: true, pitch: true });
+  p.get('tag-comp').onclick(); await p.idle(); assert.equal(bg.local.currentParams.autoBalance, true);
+  p.get('tag-pitch').onclick(); await p.idle(); assert.equal(bg.local.currentParams.stageBypass.pitch, false);
+  assert.deepEqual(bg.local.presets.Legacy, legacy);
 });

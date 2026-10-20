@@ -28,6 +28,8 @@ const surfaceId = (typeof crypto !== 'undefined' && crypto.randomUUID)
   : `s${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
 let viewRev = 0;
 let presetOpsInFlight = 0;
+let authoritativePresetPaint = false;
+let presetCacheRev = -1;
 let presetViewWatching = false;
 let dynUnavailableTold = false;
 const query = new URLSearchParams(window.location.search);
@@ -190,22 +192,23 @@ function noteSurfaceEdit() {
   return surfaceEditSeq;
 }
 
-function sendDynamicsUpdate() {
+function sendDynamicsUpdate(delta) {
   const editAtSend = noteSurfaceEdit();
   const gen = presetUiGen;
   dynamics = normaliseDyn(dynamics);
-  chrome.runtime.sendMessage({ type: 'EDIT_DYNAMICS', dynamics, ...viewTag() }, (res) => {
+  chrome.runtime.sendMessage({ type: 'EDIT_DYNAMICS', dynamics: delta, ...viewTag() }, (res) => {
     if (chrome.runtime.lastError) return;
     if (handleRefusal(res, gen, editAtSend)) return;
     noteAccepted(res);
+    if (mayPaint(res, gen, editAtSend)) paintPresetSnapshot(res);
   });
   applyDynamicsToUI();
   checkPresetModificationState();
 }
 
-if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate(); };
-if (modeLimiter) modeLimiter.onchange = () => { dynamics.limiter = modeLimiter.value; sendDynamicsUpdate(); };
-if (modeCeiling) modeCeiling.onchange = () => { dynamics.ceiling = modeCeiling.value; sendDynamicsUpdate(); };
+if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate({ leveler: dynamics.leveler }); };
+if (modeLimiter) modeLimiter.onchange = () => { dynamics.limiter = modeLimiter.value; sendDynamicsUpdate({ limiter: dynamics.limiter }); };
+if (modeCeiling) modeCeiling.onchange = () => { dynamics.ceiling = modeCeiling.value; sendDynamicsUpdate({ ceiling: dynamics.ceiling }); };
 window.addEventListener('unload', stopFrames);
 let resizeTimer = null;
 window.addEventListener('resize', () => {
@@ -275,6 +278,8 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   if (opened) {
     viewRev = openedRev;
     presets = response.presets || {};
+    presetCacheRev = openedRev;
+    authoritativePresetPaint = true;
     currentPresetName = response.currentPreset || "Punchy Bass & Clarity";
     currentParams = normaliseBypass(stripDynamics(response.currentParams || presets[currentPresetName] || {}));
     // Hydrate only. A preset's saved switches are not applied again on open.
@@ -847,30 +852,6 @@ function checkPresetModificationState() {
   }
 }
 
-// Show the preset's EQ, and its switches only when it stored them. Returns those switches, or null.
-function applyLiveSelection(name) {
-  currentPresetName = name;
-  const sel = presets[name];
-  if (!sel) { updatePresetButtonsVisibility(); return null; }
-  const savedDyn = presetHasSavedSwitches(sel) ? normaliseDyn(sel.dynamics) : null;
-  const p = normaliseBypass(stripDynamics(sel));
-  activePresetBaseline = { ...p };
-  applyParamsToUI(p);
-  if (savedDyn) {
-    dynamics = { ...savedDyn };
-    switchBaseline = { ...savedDyn };
-    applyDynamicsToUI();
-  } else {
-    switchBaseline = null;
-  }
-  updatePresetButtonsVisibility();
-  // The response curve, Movie-mode pitch lock and Update all read currentParams. A pick or
-  // delete used to leave them on the previous preset until the next slider move.
-  currentParams = getParamsFromUI();
-  physics.updateState(currentParams, isCapturingActive);
-  return savedDyn;
-}
-
 const STALE_VIEW_HINT = 'Another window changed your presets, so this one has been refreshed. Please try again.';
 
 // Every write of the preset state carries these.
@@ -890,10 +871,18 @@ function replyRev(res) {
 // refused ones, and a refusal means the stored revision had already moved past this one.
 function noteAccepted(res) {
   if (!res || res.success !== true) return;
+  refreshPresetCache(res);
   const rev = replyRev(res);
   if (rev == null || rev < viewRev) return;
   viewRev = rev;
-  if (res.presets) presets = res.presets;
+}
+
+function refreshPresetCache(snap) {
+  const rev = replyRev(snap);
+  if (snap?.presets && rev != null && rev >= presetCacheRev) {
+    presets = snap.presets;
+    presetCacheRev = rev;
+  }
 }
 
 function mayPaint(res, gen, editAtSend) {
@@ -908,32 +897,60 @@ function presetOpButtons() {
   return [btnSavePreset, btnUpdatePreset, btnDeletePreset, btnResetDefaults];
 }
 
+function presetEditControls() {
+  return [...presetOpButtons(), presetSelect, sliderBass, sliderHpf, sliderMid, sliderHigh, sliderGain, sliderPitch,
+    modeLeveler, modeLimiter, modeCeiling, ...document.querySelectorAll('.eq-nudge-btn'),
+    ...document.querySelectorAll('button.band-tag')];
+}
+
 function lockPresetOps() {
   presetOpsInFlight += 1;
-  for (const btn of presetOpButtons()) if (btn) btn.disabled = true;
+  authoritativePresetPaint = false;
+  for (const control of presetEditControls()) if (control) control.disabled = true;
 }
 
 function unlockPresetOps() {
   presetOpsInFlight = Math.max(0, presetOpsInFlight - 1);
   if (presetOpsInFlight === 0) {
-    for (const btn of presetOpButtons()) if (btn) btn.disabled = false;
+    for (const control of presetEditControls()) if (control) control.disabled = false;
+  }
+}
+
+// A closed message port normally calls back with lastError; a lost callback must not lock a screen forever.
+// Ignore a response delivered after its deadline, then reconcile through the same worker queue.
+const PRESET_REPLY_TIMEOUT_MS = 5000;
+function presetRequest(message, done) {
+  let settled = false;
+  const finish = (res) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    done(res);
+  };
+  const timer = setTimeout(() => finish(null), PRESET_REPLY_TIMEOUT_MS);
+  try {
+    chrome.runtime.sendMessage(message, (res) => finish(chrome.runtime.lastError ? null : res));
+  } catch {
+    finish(null);
   }
 }
 
 // The stored state, from the worker's queue. Never painted over a newer state these controls already show.
 function paintPresetSnapshot(snap) {
   if (!snap) return;
+  refreshPresetCache(snap);
   const rev = Number.isInteger(snap.stateRev) ? snap.stateRev : null;
   if (rev == null || rev < viewRev) return;
   viewRev = rev;
-  if (snap.presets) presets = snap.presets;
+  authoritativePresetPaint = true;
   const name = snap.currentPreset || currentPresetName;
   currentPresetName = name;
   populatePresets(name);
   const p = normaliseBypass(stripDynamics(snap.currentParams || presets[name] || {}));
+  currentParams = p;
   applyParamsToUI(p);
   currentParams = getParamsFromUI();
-  activePresetBaseline = { ...p };
+  activePresetBaseline = normaliseBypass(stripDynamics(presets[name] || p));
   if (snap.dynamics) {
     dynamics = normaliseDyn(snap.dynamics);
     applyDynamicsToUI();
@@ -942,22 +959,7 @@ function paintPresetSnapshot(snap) {
   switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
-}
-
-function paintPickedReply(res) {
-  const p = normaliseBypass(stripDynamics(res.currentParams || {}));
-  applyParamsToUI(p);
-  activePresetBaseline = { ...p };
-  currentParams = getParamsFromUI();
-  if (res.dynamicsApplied && res.dynamics) {
-    dynamics = normaliseDyn(res.dynamics);
-    applyDynamicsToUI();
-    switchBaseline = normaliseDyn(res.dynamics);
-  } else {
-    switchBaseline = null;
-  }
-  checkPresetModificationState();
-  physics.updateState(currentParams, isCapturingActive);
+  return true;
 }
 
 // The worker refused this screen's write and wrote nothing. Paint the stored state it sent, with the hint,
@@ -965,6 +967,7 @@ function paintPickedReply(res) {
 // reply settles the screen, so a drag converges and a late refusal never paints over a newer accepted edit.
 function handleRefusal(res, gen, editAtSend) {
   if (!res || res.error !== 'stale-view') return false;
+  refreshPresetCache(res.state);
   const rev = replyRev(res);
   if (res.state && presetUiCurrent(gen) && surfaceEditSeq === editAtSend && rev != null && rev >= viewRev) {
     paintPresetSnapshot(res.state);
@@ -974,16 +977,17 @@ function handleRefusal(res, gen, editAtSend) {
 }
 
 // A newer local edit is already on screen. Read the queue, which runs after that edit, and paint the result.
-function hydrateFromAuthoritativeState(gen) {
+function hydrateFromAuthoritativeState(gen, done = () => {}) {
   const seq = surfaceEditSeq;
-  chrome.runtime.sendMessage({ type: 'READ_PRESET_STATE' }, (res) => {
-    if (!res?.success) return;
-    if (!presetUiCurrent(gen)) return;
+  presetRequest({ type: 'READ_PRESET_STATE' }, (res) => {
+    if (res?.success) refreshPresetCache(res);
+    if (!res?.success || !presetUiCurrent(gen)) { done(); return; }
     if (surfaceEditSeq !== seq) {
-      hydrateFromAuthoritativeState(gen);
+      hydrateFromAuthoritativeState(gen, done);
       return;
     }
     paintPresetSnapshot(res);
+    done();
   });
 }
 
@@ -994,6 +998,7 @@ function refreshPresetView() {
   const editAtSend = surfaceEditSeq;
   chrome.runtime.sendMessage({ type: 'READ_PRESET_STATE' }, (res) => {
     if (!res?.success) return;
+    refreshPresetCache(res);
     if (!presetUiCurrent(gen) || surfaceEditSeq !== editAtSend) return;
     if (!Number.isInteger(res.stateRev) || res.stateRev <= viewRev) return;
     paintPresetSnapshot(res);
@@ -1009,32 +1014,46 @@ function watchPresetView() {
   window.addEventListener('focus', () => refreshPresetView());
 }
 
-presetSelect.onchange = () => {
+function runPresetOperation(message, onPaint = () => {}, hydrateAfterEdit = true) {
   const gen = bumpPresetUi();
   const editAtSend = surfaceEditSeq;
-  applyLiveSelection(presetSelect.value);
-  if (!presets[currentPresetName]) return;
   lockPresetOps();
-  chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName, ...viewTag() }, (res) => {
-    unlockPresetOps();
-    if (handleRefusal(res, gen, editAtSend)) return;
+  presetRequest({ ...message, ...viewTag() }, (res) => {
+    const refused = handleRefusal(res, gen, editAtSend);
     noteAccepted(res);
-    if (!presetUiCurrent(gen)) return;
-    if (surfaceEditSeq !== editAtSend) {
-      hydrateFromAuthoritativeState(gen);
+    if (res?.error === 'factory-name') showHint(FACTORY_NAME_HINT);
+    if (!res?.success || refused || (hydrateAfterEdit && presetUiCurrent(gen) && surfaceEditSeq !== editAtSend)) {
+      hydrateFromAuthoritativeState(gen, unlockPresetOps);
       return;
     }
-    if (!mayPaint(res, gen, editAtSend)) return;
-    paintPickedReply(res);
+    if (mayPaint(res, gen, editAtSend) && paintPresetSnapshot(res)) onPaint();
+    unlockPresetOps();
   });
-  const savedSt = parseFloat(sliderPitch.value) || 0;
-  if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
-    flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
-  }
+}
+
+function canSavePreset() {
+  if (presetOpsInFlight) return false;
+  if (authoritativePresetPaint) return true;
+  // A failed recovery read cannot authorise a Save from an unconfirmed display.
+  lockPresetOps();
+  hydrateFromAuthoritativeState(presetUiGen, unlockPresetOps);
+  return false;
+}
+
+presetSelect.onchange = () => {
+  const name = presetSelect.value;
+  // Even the selector keeps the confirmed name until the worker returns its stored snapshot.
+  presetSelect.value = currentPresetName;
+  runPresetOperation({ type: 'APPLY_PRESET', presetName: name }, () => {
+    const savedSt = parseFloat(sliderPitch.value) || 0;
+    if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
+      flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
+    }
+  });
 };
 
 btnSavePreset.onclick = () => {
-  if (btnSavePreset.disabled) return;
+  if (btnSavePreset.disabled || !canSavePreset()) return;
   const defaultName = factoryPresetNames.includes(currentPresetName)
     ? `${currentPresetName} (Custom)`
     : `${currentPresetName} (New)`;
@@ -1042,81 +1061,30 @@ btnSavePreset.onclick = () => {
   if (!name || !name.trim()) return;
   const trimmed = name.trim();
   if (isFactoryPresetNameUi(trimmed)) { showHint(FACTORY_NAME_HINT); return; }
-  const gen = bumpPresetUi();
-  const editAtSend = surfaceEditSeq;
   const p = getParamsFromUI();
   const dyn = normaliseDyn(dynamics);
-  lockPresetOps();
-  chrome.runtime.sendMessage({
-    type: 'SAVE_PRESET', name: trimmed, params: p, dynamics: dyn, ...viewTag()
-  }, (res) => {
-    unlockPresetOps();
-    if (handleRefusal(res, gen, editAtSend)) return;
-    if (res?.error === 'factory-name') { showHint(FACTORY_NAME_HINT); return; }
-    noteAccepted(res);
-    if (!mayPaint(res, gen, editAtSend)) return;
-    presets = res.presets;
-    currentPresetName = res.savedName;
-    activePresetBaseline = { ...p };
-    switchBaseline = normaliseDyn(res.dynamics || dyn);
-    populatePresets(res.savedName);
-    checkPresetModificationState();
-  });
+  runPresetOperation({ type: 'SAVE_PRESET', name: trimmed, params: p, dynamics: dyn }, undefined, false);
 };
 
 btnUpdatePreset.onclick = () => {
-  if (btnUpdatePreset.disabled) return;
+  if (btnUpdatePreset.disabled || !canSavePreset()) return;
   if (!currentPresetName || isFactoryPresetNameUi(currentPresetName)) return;
-  const gen = bumpPresetUi();
-  const editAtSend = surfaceEditSeq;
   const p = getParamsFromUI();
   const dyn = normaliseDyn(dynamics);
-  lockPresetOps();
-  chrome.runtime.sendMessage({
-    type: 'UPDATE_PRESET', name: currentPresetName, params: p, dynamics: dyn, ...viewTag()
-  }, (res) => {
-    unlockPresetOps();
-    if (handleRefusal(res, gen, editAtSend)) return;
-    if (res?.error === 'factory-name') { showHint(FACTORY_NAME_HINT); return; }
-    noteAccepted(res);
-    if (!mayPaint(res, gen, editAtSend)) return;
-    presets = res.presets;
-    activePresetBaseline = { ...p };
-    switchBaseline = normaliseDyn(res.dynamics || dyn);
-    checkPresetModificationState();
+  runPresetOperation({ type: 'UPDATE_PRESET', name: currentPresetName, params: p, dynamics: dyn }, () => {
     if (btnUpdatePreset.style.display !== 'none') {
       const orig = btnUpdatePreset.textContent;
       btnUpdatePreset.textContent = 'Saved';
       setTimeout(() => { btnUpdatePreset.textContent = orig; }, 1200);
     }
-  });
+  }, false);
 };
 
 btnDeletePreset.onclick = () => {
   if (btnDeletePreset.disabled) return;
   if (!currentPresetName || factoryPresetNames.includes(currentPresetName)) return;
   if (!confirm(`Delete preset "${currentPresetName}"?`)) return;
-  const gen = bumpPresetUi();
-  const editAtSend = surfaceEditSeq;
-  lockPresetOps();
-  chrome.runtime.sendMessage({
-    type: 'DELETE_PRESET', name: currentPresetName, ...viewTag()
-  }, (res) => {
-    if (handleRefusal(res, gen, editAtSend)) { unlockPresetOps(); return; }
-    noteAccepted(res);
-    if (!mayPaint(res, gen, editAtSend)) { unlockPresetOps(); return; }
-    presets = res.presets;
-    populatePresets(factoryPresetNames[0]);
-    applyLiveSelection(factoryPresetNames[0]);
-    if (!presets[currentPresetName]) { unlockPresetOps(); return; }
-    chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName, ...viewTag() }, (applyRes) => {
-      unlockPresetOps();
-      if (handleRefusal(applyRes, gen, editAtSend)) return;
-      noteAccepted(applyRes);
-      if (!mayPaint(applyRes, gen, editAtSend)) return;
-      paintPickedReply(applyRes);
-    });
-  });
+  runPresetOperation({ type: 'DELETE_PRESET', name: currentPresetName });
 };
 
 btnResetDefaults.onclick = () => {
@@ -1126,40 +1094,7 @@ btnResetDefaults.onclick = () => {
     ? `Restore default factory settings for "${currentPresetName}"?`
     : `Discard unsaved changes and go back to the saved values of "${currentPresetName}"?\n\n(Your custom presets are kept.)`;
   if (!confirm(question)) return;
-  const gen = bumpPresetUi();
-  const editAtSend = surfaceEditSeq;
-  lockPresetOps();
-  chrome.runtime.sendMessage({
-    type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName, ...viewTag()
-  }, (res) => {
-    unlockPresetOps();
-    if (handleRefusal(res, gen, editAtSend)) return;
-    noteAccepted(res);
-    if (!presetUiCurrent(gen)) return;
-    // A switch or slider edit after Reset is already queued behind it. Hydrate from storage
-    // after that queue, instead of painting this reply over the newer edit.
-    if (surfaceEditSeq !== editAtSend) {
-      hydrateFromAuthoritativeState(gen);
-      return;
-    }
-    if (!mayPaint(res, gen, editAtSend)) return;
-    presets = res.presets;
-    currentPresetName = res.selectedName;
-    populatePresets(res.selectedName);
-    const p = normaliseBypass(stripDynamics(res.currentParams || {}));
-    applyParamsToUI(p);
-    activePresetBaseline = { ...p };
-    currentParams = getParamsFromUI();
-    if (res.dynamicsApplied && res.dynamics) {
-      dynamics = normaliseDyn(res.dynamics);
-      applyDynamicsToUI();
-      switchBaseline = normaliseDyn(res.dynamics);
-    } else {
-      switchBaseline = null;
-    }
-    checkPresetModificationState();
-    physics.updateState(currentParams, isCapturingActive);
-  });
+  runPresetOperation({ type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName });
 };
 
 // ---------- Values, band switches and the audio engine ----------
@@ -1231,7 +1166,6 @@ const renderSliders = applyParamsToUI;
 const renderStageBypass = () => renderBandTags();
 
 function getParamsFromUI() {
-  const sel = presets[presetSelect.value];
   return {
     bass: parseFloat(sliderBass.value),
     hpf: parseFloat(sliderHpf.value),
@@ -1240,19 +1174,20 @@ function getParamsFromUI() {
     gain: parseFloat(sliderGain.value),
     semitones: parseFloat(sliderPitch.value),
     autoBalance: !bandOff.comp,
-    bypass: sel?.bypass === true,
+    bypass: currentParams.bypass === true,
     stageBypass: { hpf: bandOff.hpf, bass: bandOff.bass, mid: bandOff.mid, high: bandOff.high, gain: bandOff.gain, pitch: bandOff.pitch }
   };
 }
 
-function sendAudioParamUpdate() {
+function sendAudioParamUpdate(delta) {
   const editAtSend = noteSurfaceEdit();
   const gen = presetUiGen;
   currentParams = getParamsFromUI();
-  chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: currentParams, ...viewTag() }, (res) => {
+  chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: delta, ...viewTag() }, (res) => {
     if (chrome.runtime.lastError) return;
     if (handleRefusal(res, gen, editAtSend)) return;
     noteAccepted(res);
+    if (mayPaint(res, gen, editAtSend)) paintPresetSnapshot(res);
   });
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
@@ -1267,12 +1202,12 @@ document.querySelectorAll('button.band-tag').forEach((tag) => {
     }
     if (band === 'match') { // the live switch; a preset remembers it only when you Save or Update (R-28)
       dynamics.match = !dynamics.match;
-      sendDynamicsUpdate();
+      sendDynamicsUpdate({ match: dynamics.match });
       return;
     }
     bandOff[band] = !bandOff[band];
     renderBandTags();
-    sendAudioParamUpdate();
+    sendAudioParamUpdate(band === 'comp' ? { autoBalance: !bandOff.comp } : { stageBypass: { [band]: bandOff[band] } });
   };
 });
 
@@ -1281,6 +1216,7 @@ function setupValueToggle(valEl, sliderEl, neutralVal, formatFn, onChange) {
   let prevVal = parseFloat(sliderEl.value);
   valEl.ondblclick = (e) => {
     e.preventDefault();
+    if (presetOpsInFlight) return;
     if (sliderEl === sliderPitch && currentMovieMode) {
       notifyPitchLocked();
       return;
@@ -1293,7 +1229,8 @@ function setupValueToggle(valEl, sliderEl, neutralVal, formatFn, onChange) {
       sliderEl.value = neutralVal;
     }
     valEl.textContent = formatFn(sliderEl.value);
-    sendAudioParamUpdate();
+    const key = sliderEl === sliderPitch ? 'semitones' : sliderEl.id.replace('slider-', '');
+    sendAudioParamUpdate({ [key]: parseFloat(sliderEl.value) });
     if (onChange) onChange();
   };
 }
@@ -1331,11 +1268,11 @@ if (sliderPitch) {
   });
 }
 
-sliderBass.oninput = (e) => { valBass.textContent = fmt.bass(e.target.value); sendAudioParamUpdate(); };
-sliderHpf.oninput = (e) => { valHpf.textContent = fmt.hpf(e.target.value); sendAudioParamUpdate(); };
-sliderMid.oninput = (e) => { valMid.textContent = fmt.mid(e.target.value); sendAudioParamUpdate(); };
-sliderHigh.oninput = (e) => { valHigh.textContent = fmt.high(e.target.value); sendAudioParamUpdate(); };
-sliderGain.oninput = (e) => { valGain.textContent = fmt.gain(e.target.value); sendAudioParamUpdate(); };
+sliderBass.oninput = (e) => { valBass.textContent = fmt.bass(e.target.value); sendAudioParamUpdate({ bass: parseFloat(e.target.value) }); };
+sliderHpf.oninput = (e) => { valHpf.textContent = fmt.hpf(e.target.value); sendAudioParamUpdate({ hpf: parseFloat(e.target.value) }); };
+sliderMid.oninput = (e) => { valMid.textContent = fmt.mid(e.target.value); sendAudioParamUpdate({ mid: parseFloat(e.target.value) }); };
+sliderHigh.oninput = (e) => { valHigh.textContent = fmt.high(e.target.value); sendAudioParamUpdate({ high: parseFloat(e.target.value) }); };
+sliderGain.oninput = (e) => { valGain.textContent = fmt.gain(e.target.value); sendAudioParamUpdate({ gain: parseFloat(e.target.value) }); };
 sliderPitch.oninput = (e) => {
   if (currentMovieMode) {
     sliderPitch.value = typeof currentParams.semitones === 'number' ? currentParams.semitones : 0;
@@ -1344,7 +1281,7 @@ sliderPitch.oninput = (e) => {
     return;
   }
   valPitch.textContent = fmt.pitch(e.target.value);
-  sendAudioParamUpdate();
+  sendAudioParamUpdate({ semitones: parseFloat(e.target.value) });
 };
 
 // − / + nudges; Shift-click = 5× finer
