@@ -41,6 +41,104 @@ if (isPanel) document.body.classList.add('panel');
 const BANDS = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'pitch'];
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
 
+// ---------- Band cut model (display only; no audio nodes or parameter writes) ----------
+const EqCuts = (() => {
+  const ranges = { bass: [45, 80], mid: [800, 1250], high: [6000, 10000] };
+  // spectrumPoints reports maxima of 72 logarithmic spans, not 72 endpoint samples.
+  const frequencies = Array.from({ length: 72 }, (_, i) => 20 * 1000 ** ((i + 0.5) / 72));
+  const points = Object.fromEntries(Object.entries(ranges).map(([band, [lo, hi]]) =>
+    [band, frequencies.flatMap((f, i) => f >= lo && f <= hi ? [i] : [])]));
+
+  // Web Audio's biquad coefficients (Audio EQ Cookbook, shelf slope S = 1).
+  // HPF Q is in dB in Web Audio; peaking Q is linear:
+  // https://webaudio.github.io/web-audio-api/#filters-characteristics
+  function biquadDb(type, f, f0, gain, q, rate) {
+    const w0 = 2 * Math.PI * f0 / rate;
+    const c = Math.cos(w0), s = Math.sin(w0), A = 10 ** (gain / 40);
+    let b0, b1, b2, a0, a1, a2;
+    if (type === 'highpass') {
+      const alpha = s / (2 * 10 ** (q / 20));
+      b0 = (1 + c) / 2; b1 = -(1 + c); b2 = b0;
+      a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+    } else if (type === 'peaking') {
+      const alpha = s / (2 * q);
+      b0 = 1 + alpha * A; b1 = -2 * c; b2 = 1 - alpha * A;
+      a0 = 1 + alpha / A; a1 = -2 * c; a2 = 1 - alpha / A;
+    } else {
+      const beta = Math.sqrt(2 * A) * s;
+      if (type === 'lowshelf') {
+        b0 = A * ((A + 1) - (A - 1) * c + beta);
+        b1 = 2 * A * ((A - 1) - (A + 1) * c);
+        b2 = A * ((A + 1) - (A - 1) * c - beta);
+        a0 = (A + 1) + (A - 1) * c + beta;
+        a1 = -2 * ((A - 1) + (A + 1) * c);
+        a2 = (A + 1) + (A - 1) * c - beta;
+      } else {
+        b0 = A * ((A + 1) + (A - 1) * c + beta);
+        b1 = -2 * A * ((A - 1) + (A + 1) * c);
+        b2 = A * ((A + 1) + (A - 1) * c - beta);
+        a0 = (A + 1) - (A - 1) * c + beta;
+        a1 = 2 * ((A - 1) - (A + 1) * c);
+        a2 = (A + 1) - (A - 1) * c - beta;
+      }
+    }
+    const w = 2 * Math.PI * f / rate;
+    const magnitude = (x0, x1, x2) => Math.hypot(
+      x0 + x1 * Math.cos(w) + x2 * Math.cos(2 * w),
+      x1 * Math.sin(w) + x2 * Math.sin(2 * w));
+    return 20 * Math.log10(Math.max(1e-12, magnitude(b0, b1, b2) / magnitude(a0, a1, a2)));
+  }
+
+  function askedDb(p, f, rate = 48000) {
+    if (p.bypass) return 0;
+    const off = p.stageBypass || {};
+    let db = off.gain ? 0 : 20 * Math.log10(p.gain ?? 1);
+    if (!off.hpf) db += biquadDb('highpass', f, p.hpf ?? 20, 0, 0.707, rate);
+    if (!off.bass) db += biquadDb('lowshelf', f, 120, p.bass || 0, 0, rate);
+    if (!off.mid) db += biquadDb('peaking', f, 1000, p.mid || 0, 0.8, rate);
+    if (!off.high) db += biquadDb('highshelf', f, 5000, p.high || 0, 0, rate);
+    return db;
+  }
+
+  function allowed(p, active, movieMode) {
+    return active && !p.bypass && !(p.semitones && !p.stageBypass?.pitch && !movieMode);
+  }
+
+  function measure(frame, p, active, movieMode) {
+    const cuts = { bass: null, mid: null, high: null };
+    if (!allowed(p, active, movieMode) || !frame?.isCapturing
+      || frame.input?.length !== 72 || frame.output?.length !== 72) return cuts;
+    const rate = Number.isFinite(frame.sampleRate) && frame.sampleRate > 0 ? frame.sampleRate : 48000;
+    const meter = (key) => Number.isFinite(frame.dyn?.[key]) ? frame.dyn[key] : 0;
+    const fullBandLeveler = p.autoBalance && !p.stageBypass?.comp
+      && ['full', 'slow'].includes(frame.dyn?.modes?.leveler) ? meter('leveler') : 0;
+    const netFullBandReduction = meter('limiter') + fullBandLeveler - meter('match');
+    for (const [band, indices] of Object.entries(points)) {
+      const valid = indices.filter((i) => Number.isFinite(frame.input[i])
+        && frame.input[i] >= -70 && Number.isFinite(frame.output[i]));
+      if (valid.length < 2) continue;
+      // Independent spectrum maxima can mistake distortion for retained sound. Keep the
+      // spectral estimate, floored at live net full-band reduction (not the peak-based ceiling).
+      const sum = valid.reduce((total, i) =>
+        total + askedDb(p, frequencies[i], rate) - (frame.output[i] - frame.input[i]), 0);
+      cuts[band] = Math.max(0, sum / valid.length, netFullBandReduction);
+    }
+    return cuts;
+  }
+
+  function smooth(previous, raw, elapsedMs) {
+    if (raw == null || !Number.isFinite(raw)) return { value: 0, visible: false };
+    const value = previous.value + (Math.max(0, raw) - previous.value) * -Math.expm1(-Math.max(0, elapsedMs) / 600);
+    return { value, visible: previous.visible ? value >= 1 : value >= 2 };
+  }
+
+  function position(value, cut, min, max) {
+    return Math.max(0, Math.min(1, (value - Math.max(0, cut) - min) / (max - min)));
+  }
+  return { frequencies, points, biquadDb, askedDb, allowed, measure, smooth, position };
+})();
+// ---------- End band cut model ----------
+
 // DOM: player
 const artCover = document.getElementById('art-cover');
 const artSlice = document.getElementById('art-slice');
@@ -62,6 +160,8 @@ const eqPowerStatusBadge = document.getElementById('eq-power-status-badge');
 const btnMovieMode = document.getElementById('btn-movie-mode');
 const movieStatusLine = document.getElementById('movie-status-line');
 const presetSelect = document.getElementById('preset-select');
+const btnPrevPreset = document.getElementById('btn-prev-preset');
+const btnNextPreset = document.getElementById('btn-next-preset');
 const presetStatusBadge = document.getElementById('preset-status-badge');
 const presetSwitchLabel = document.getElementById('preset-switch-label');
 const btnUpdatePreset = document.getElementById('btn-update-preset');
@@ -102,6 +202,49 @@ const meters = {
   ceiling: { bar: document.getElementById('meter-ceiling'), val: document.getElementById('val-ceiling'), shown: 0 }
 };
 
+const bandCuts = Object.fromEntries(['bass', 'mid', 'high'].map((band) => {
+  const caption = document.getElementById(`cut-${band}`);
+  return [band, {
+    caption, normal: caption.textContent,
+    tick: document.getElementById(`cut-tick-${band}`),
+    slider: document.getElementById(`slider-${band}`),
+    state: { value: 0, visible: false }
+  }];
+}));
+let cutFrameAt = null;
+
+function paintBandCuts() {
+  for (const { caption, normal, tick, slider, state } of Object.values(bandCuts)) {
+    const n = Math.round(state.value);
+    caption.textContent = state.visible ? `cut ${n} dB` : normal;
+    caption.classList.toggle('cutting', state.visible);
+    if (state.visible) {
+      caption.title = `About ${n} dB of this band is being taken back by the leveler, limiter and ceiling right now. Measured from the audio, so it shows only while this band has sound.`;
+      const ratio = EqCuts.position(+slider.value, state.value, +slider.min, +slider.max);
+      // Range thumbs travel within the track's 7 px end insets (14 px thumb).
+      tick.style.left = `calc(${ratio * 100}% + ${7 - 14 * ratio}px)`;
+    } else {
+      caption.removeAttribute('title');
+    }
+    tick.hidden = !state.visible;
+  }
+}
+
+function updateBandCuts(frame) {
+  const now = Date.now();
+  const cuts = EqCuts.measure(frame, currentParams, isCapturingActive, currentMovieMode);
+  for (const [band, ui] of Object.entries(bandCuts)) {
+    ui.state = EqCuts.smooth(ui.state, cuts[band], cutFrameAt == null ? 66 : now - cutFrameAt);
+  }
+  cutFrameAt = frame ? now : null;
+  paintBandCuts();
+}
+
+function syncBandCutVisibility() {
+  if (!EqCuts.allowed(currentParams, isCapturingActive, currentMovieMode)) updateBandCuts(null);
+  else paintBandCuts();
+}
+
 // Per-band on/off. Off keeps the slider value but takes that stage out of the chain.
 // `comp` is the Auto-Balancing switch (autoBalance); the others live in stageBypass.
 let bandOff = { hpf: false, bass: false, mid: false, high: false, comp: false, gain: false, pitch: false };
@@ -118,9 +261,10 @@ function startFrames() {
   if (frameTimer) return;
   frameTimer = setInterval(() => {
     chrome.runtime.sendMessage({ target: 'offscreen', type: 'GET_AUDIO_FRAME' }, (res) => {
-      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); updateMeters(null); return; }
+      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); updateMeters(null); updateBandCuts(null); return; }
       physics.setFrame(res);
       updateMeters(res.dyn || null);
+      updateBandCuts(res);
     });
   }, 66);
 }
@@ -129,6 +273,7 @@ function stopFrames() {
   frameTimer = null;
   physics.setFrame(null);
   updateMeters(null);
+  updateBandCuts(null);
 }
 
 // ---------- Dynamics meters ----------
@@ -218,10 +363,13 @@ window.addEventListener('resize', () => {
 
 function showHint(text, ms = 4000) {
   if (!hintEl) return;
+  clearTimeout(hintHideTimer);
+  hintEl.classList.remove('transport-hint');
   hintEl.textContent = text;
   hintEl.hidden = !text;
-  if (text && ms) setTimeout(() => { if (hintEl.textContent === text) hintEl.hidden = true; }, ms);
+  if (text && ms) hintHideTimer = setTimeout(() => { hintEl.hidden = true; }, ms);
 }
+let hintHideTimer = null;
 
 // Stay-open window only: size the window to its content. (Chrome sizes the toolbar popup itself.)
 function fitUndockedWindow() {
@@ -409,51 +557,109 @@ function playerCommand(command, after = 250) {
   });
 }
 
-function handlePlayPause() { playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
+function handlePlayPause() { cancelTransportFeedback(); playerCommand({ type: 'TOGGLE_PLAY_PAUSE' }); }
 // After Next, Previous or a jump into the next track, the screen still shows the old track for up to a second;
 // jumps wait for the new one (at most 2 s, 3 s after an end jump), so a quick click never skips it or seeks it
 // to the old track's time. Previous that only restarts the same track holds jumps for those 2 s.
 let leavingTrack = null;
 const leaveTrack = (ms) => { leavingTrack = currentTrackInfo ? { title: currentTrackInfo.title, until: Date.now() + ms } : null; };
 
-function handlePrev() { leaveTrack(2000); playerCommand({ type: 'PREV_TRACK' }, 300); }
-function handleNext() { leaveTrack(2000); playerCommand({ type: 'NEXT_TRACK' }, 300); }
+const jumpHints = {
+  moving: 'Moving playback…',
+  held: 'Waiting for the next track',
+  start: 'Already at the start',
+  seek: "This page isn't allowing seeking right now",
+  helper: 'Reload the Tidal tab once, then try again',
+  unreachable: "The Tidal tab isn't reachable. Open it and try again",
+  next: "Tidal didn't move to the next track"
+};
+let pendingTransport = null;
+
+function showTransportHint(text, ms = 4000) {
+  showHint(text, ms);
+  if (hintEl && text) hintEl.classList.add('transport-hint');
+}
+
+function cancelTransportFeedback() {
+  if (pendingTransport) {
+    clearTimeout(pendingTransport.progress);
+    clearTimeout(pendingTransport.deadline);
+    pendingTransport = null;
+  }
+  if (hintEl && hintEl.classList.contains('transport-hint')) showTransportHint('');
+}
+
+function heldForTrack() {
+  if ((pendingTransport && pendingTransport.command.type === 'NEXT_TRACK')
+    || (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until)) {
+    if (pendingTransport) pendingTransport.held = true;
+    showTransportHint(jumpHints.held);
+    return true;
+  }
+  return false;
+}
+
+function confirmedPlayerCommand(command) {
+  cancelTransportFeedback();
+  const attempt = { command, held: false };
+  pendingTransport = attempt;
+  attempt.progress = setTimeout(() => {
+    if (pendingTransport === attempt && !attempt.held) showTransportHint(jumpHints.moving, 0);
+  }, 400);
+  const finish = (res, failed) => {
+    if (pendingTransport !== attempt) return; // a newer command owns the feedback
+    clearTimeout(attempt.progress);
+    clearTimeout(attempt.deadline);
+    pendingTransport = null;
+    let text = '';
+    if (failed || !res || !['confirmed', 'cancelled', 'exhausted'].includes(res.status)) text = jumpHints.unreachable;
+    else if (res.status === 'exhausted') text = jumpHints[res.reason] || jumpHints.seek;
+    else if (res.status === 'confirmed' && res.success !== true) text = jumpHints.unreachable;
+    if (text || res?.status === 'cancelled') leavingTrack = null;
+    showTransportHint(text);
+    // Paint only observed playback, never the requested target or an unverified reply.
+    if (!text && res?.status === 'confirmed' && res.title) {
+      currentTrackInfo = res;
+      updatePlayerUI(res);
+    }
+    setTimeout(refreshTrackInfo, 250);
+  };
+  // All seek routes, including a no-button Next's end fallback, finish within this bound.
+  attempt.deadline = setTimeout(() => finish(null, true), 10000);
+  try {
+    chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command }, (res) => finish(res, !!chrome.runtime.lastError));
+  } catch (_) { finish(null, true); }
+}
+
+function handlePrev() { cancelTransportFeedback(); leaveTrack(2000); playerCommand({ type: 'PREV_TRACK' }, 300); }
+function handleNext() {
+  if (heldForTrack()) return;
+  leaveTrack(3000);
+  confirmedPlayerCommand({ type: 'NEXT_TRACK' });
+}
 
 function handleJump(deltaSecs) {
-  if (leavingTrack && currentTrackInfo && currentTrackInfo.title === leavingTrack.title && Date.now() < leavingTrack.until) return;
+  if (heldForTrack()) return;
   leavingTrack = null;
+  cancelTransportFeedback();
   if (!currentTrackInfo || !currentTrackInfo.duration) {
-    showHint("The track length isn't known on this page, so the jump can't be placed.");
+    showTransportHint(currentTrackInfo ? jumpHints.helper : jumpHints.unreachable);
     return;
   }
   const dur = currentTrackInfo.duration;
   const cur = currentTrackInfo.currentTime || 0;
+  if (deltaSecs < 0 && cur <= 0) {
+    showTransportHint(jumpHints.start);
+    return;
+  }
   if (deltaSecs > 0 && cur + deltaSecs >= dur - 0.5) {
     // The jump reaches the end: finish this track and go to the next one, as if it had played out.
     leaveTrack(3000);
-    chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'NEXT_TRACK', orEnd: true } }, (res) => {
-      if (res && res.next === false) {
-        leavingTrack = null;
-        showHint("Couldn't go to the next track or to the end of this one on this page.");
-      }
-      setTimeout(refreshTrackInfo, 300);
-    });
+    confirmedPlayerCommand({ type: 'NEXT_TRACK', orEnd: true });
     return;
   }
   const newTime = Math.max(0, Math.min(dur, cur + deltaSecs));
-  chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'SEEK_AUDIO', time: newTime } }, (res) => {
-    if (res && res.seeked === false) {
-      showHint(res.bridge !== undefined // a Tidal tab
-        ? "Couldn't move the playback position in Tidal. If the Tidal tab was open before this update, reload it once."
-        : "Couldn't move the playback position on this page (no media element or seek bar found). Prev, next and play still work.");
-      return;
-    }
-    if (!res || !res.unverified) { // unverified: show the real time from the next reading instead of the target
-      currentTrackInfo.currentTime = newTime;
-      updatePlayerUI(currentTrackInfo);
-    }
-    setTimeout(refreshTrackInfo, 250);
-  });
+  confirmedPlayerCommand({ type: 'SEEK_AUDIO', time: newTime });
 }
 
 function handleFav() {
@@ -503,6 +709,7 @@ function notifyPitchLocked() {
 }
 
 function syncMoviePresentation() {
+  syncBandCutVisibility();
   if (btnMovieMode) {
     const on = !!currentMovieMode;
     const manualOff = currentMovieOverride === false;
@@ -894,7 +1101,7 @@ function mayPaint(res, gen, editAtSend) {
 }
 
 function presetOpButtons() {
-  return [btnSavePreset, btnUpdatePreset, btnDeletePreset, btnResetDefaults];
+  return [btnSavePreset, btnUpdatePreset, btnDeletePreset, btnResetDefaults, btnPrevPreset, btnNextPreset];
 }
 
 function presetEditControls() {
@@ -1040,17 +1247,33 @@ function canSavePreset() {
   return false;
 }
 
-presetSelect.onchange = () => {
-  const name = presetSelect.value;
-  // Even the selector keeps the confirmed name until the worker returns its stored snapshot.
-  presetSelect.value = currentPresetName;
+function pickPreset(name) {
   runPresetOperation({ type: 'APPLY_PRESET', presetName: name }, () => {
     const savedSt = parseFloat(sliderPitch.value) || 0;
     if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
       flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
     }
   });
+}
+
+presetSelect.onchange = () => {
+  const name = presetSelect.value;
+  // Even the selector keeps the confirmed name until the worker returns its stored snapshot.
+  presetSelect.value = currentPresetName;
+  pickPreset(name);
 };
+
+function stepPreset(direction) {
+  if (presetOpsInFlight || presetSelect.disabled) return;
+  // Read the rendered optgroups: defaults first, then custom presets, exactly as in the menu.
+  const names = Array.from(presetSelect.options, option => option.value);
+  if (!names.length) return;
+  const index = names.indexOf(currentPresetName);
+  pickPreset(names[(index + direction + names.length) % names.length]);
+}
+
+btnPrevPreset.onclick = () => { if (!btnPrevPreset.disabled) stepPreset(-1); };
+btnNextPreset.onclick = () => { if (!btnNextPreset.disabled) stepPreset(1); };
 
 btnSavePreset.onclick = () => {
   if (btnSavePreset.disabled || !canSavePreset()) return;
@@ -1183,6 +1406,7 @@ function sendAudioParamUpdate(delta) {
   const editAtSend = noteSurfaceEdit();
   const gen = presetUiGen;
   currentParams = getParamsFromUI();
+  syncBandCutVisibility();
   chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: delta, ...viewTag() }, (res) => {
     if (chrome.runtime.lastError) return;
     if (handleRefusal(res, gen, editAtSend)) return;

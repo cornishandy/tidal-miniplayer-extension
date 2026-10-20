@@ -1870,3 +1870,94 @@ test('Fable r3: a factory pick after Flat (Bypass) clears the engine bypass, and
   assert.equal(e.stageBypass.bass, false, 'the bass band is back on after picking Deep Sub-Bass');
   assert.equal(e.bypass, false);
 });
+
+// R-31: the buttons use the rendered dropdown order and the existing confirmed pick path.
+// Extend only these test instances with the select.options DOM API; earlier checks stay unchanged.
+function stepOptions(popup) {
+  const select = popup.get('preset-select');
+  Object.defineProperty(select, 'options', { get: () => select.children.flatMap(group => group.children) });
+  return () => select.options.map(option => option.value);
+}
+
+for (const [surface, search] of [['popup', ''], ['side panel', '?panel=1']]) {
+  test(`preset steps follow menu order and wrap both ends in the ${surface}`, async () => {
+    const bg = await seedSurfaces();
+    const p = openPopup(bg, search);
+    const order = stepOptions(p);
+    await p.idle();
+    const names = order();
+    assert.deepEqual(names.slice(-3), ['A', 'B', 'Legacy']);
+    assert.equal(p.get('preset-select').children[0].label, 'Default Presets');
+    assert.equal(p.get('preset-select').children[1].label, 'My Custom Presets');
+    p.select(names[0]); await p.idle();
+    for (const direction of [1, -1]) {
+      const button = p.get(direction === 1 ? 'btn-next-preset' : 'btn-prev-preset');
+      for (let i = 0; i < names.length; i++) {
+        const expected = names[(names.indexOf(p.state().name) + direction + names.length) % names.length];
+        button.onclick(); await p.idle();
+        assert.equal(p.sent.filter(m => m.type === 'APPLY_PRESET').at(-1).presetName, expected);
+        assert.equal(bg.local.currentPreset, expected);
+        assert.equal(p.state().name, expected);
+        assert.equal(p.get('preset-select').value, expected);
+        assert.equal(p.state().params.bass, bg.local.currentParams.bass);
+        if (expected === 'A' || expected === 'B') {
+          assert.deepEqual(p.state().dynamics, expected === 'A' ? MOVIE : MUSIC);
+        }
+      }
+      assert.equal(p.state().name, names[0]);
+    }
+  });
+
+  test(`preset step buttons lock and wait for the worker snapshot in the ${surface}`, async () => {
+    const bg = await seedSurfaces();
+    const p = openPopup(bg, search);
+    stepOptions(p);
+    await p.idle();
+    p.held.add('APPLY_PRESET');
+    p.get('btn-next-preset').onclick();
+    await p.idle();
+    assert.equal(bg.local.currentPreset, 'B');
+    assert.equal(p.state().name, 'A', 'no optimistic paint while reply is held');
+    assert.equal(p.get('preset-select').value, 'A');
+    assert.deepEqual(p.state().dynamics, MOVIE);
+    for (const id of ['btn-prev-preset', 'btn-next-preset', 'preset-select']) assert.equal(p.get(id).disabled, true);
+    const before = p.sent.length;
+    p.get('btn-prev-preset').onclick();
+    p.get('btn-next-preset').onclick();
+    p.run('stepPreset(1)');
+    assert.equal(p.sent.length, before, 'locked steps send nothing');
+    p.release('APPLY_PRESET'); await p.idle();
+    assert.equal(p.state().name, 'B');
+    assert.deepEqual(p.state().dynamics, MUSIC);
+    for (const id of ['btn-prev-preset', 'btn-next-preset', 'preset-select']) assert.equal(p.get(id).disabled, false);
+    // All preset operations share the lock, including Save, Update, Reset and Delete.
+    p.held.delete('APPLY_PRESET');
+    for (const [type, action] of [
+      ['SAVE_PRESET', () => p.save('Step saved')], ['UPDATE_PRESET', () => p.update()],
+      ['RESET_DEFAULT_PRESETS', () => p.reset()], ['DELETE_PRESET', () => p.remove()]
+    ]) {
+      p.held.add(type); action(); await p.idle();
+      assert.equal(p.get('btn-prev-preset').disabled, true, type);
+      assert.equal(p.get('btn-next-preset').disabled, true, type);
+      p.release(type); await p.idle();
+      assert.equal(p.get('btn-prev-preset').disabled, false, type);
+      assert.equal(p.get('btn-next-preset').disabled, false, type);
+    }
+  });
+
+  test(`failed preset steps recover without painting the requested name in the ${surface}`, async () => {
+    const bg = await seedSurfaces();
+    const p = openPopup(bg, search);
+    stepOptions(p);
+    await p.idle();
+    p.faults.set('APPLY_PRESET', 'missing');
+    p.held.add('READ_PRESET_STATE');
+    p.get('btn-next-preset').onclick(); await p.idle();
+    assert.equal(p.state().name, 'A');
+    assert.equal(p.get('btn-next-preset').disabled, true);
+    p.release('READ_PRESET_STATE'); await p.idle();
+    assert.equal(bg.local.currentPreset, 'A');
+    assert.equal(p.state().name, 'A');
+    assert.equal(p.get('btn-next-preset').disabled, false);
+  });
+}

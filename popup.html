@@ -12,6 +12,8 @@
     <symbol id="s-heart" viewBox="0 0 24 24"><path d="M12 21s-7-4.6-9.3-9A5.2 5.2 0 0 1 12 6.2 5.2 5.2 0 0 1 21.3 12C19 16.4 12 21 12 21z"/></symbol>
     <symbol id="s-prev" viewBox="0 0 24 24"><path d="M6 5v14"/><path d="M18 5 8 12l10 7z"/></symbol>
     <symbol id="s-next" viewBox="0 0 24 24"><path d="M18 5v14"/><path d="M6 5l10 7-10 7z"/></symbol>
+    <symbol id="s-chevron-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+    <symbol id="s-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
     <symbol id="s-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
     <symbol id="s-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
     <symbol id="s-back" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 3v5h5"/></symbol>
@@ -71,7 +73,11 @@
               <button id="btn-reset-defaults" class="btn-text" title="Restore this preset's saved values (factory values for a default preset)">↺ Reset</button>
             </div>
           </div>
-          <select id="preset-select" class="preset-dropdown"></select>
+          <div class="preset-picker">
+            <button type="button" id="btn-prev-preset" class="preset-step" aria-label="Previous preset" title="Previous preset"><svg aria-hidden="true"><use href="#s-chevron-left"/></svg></button>
+            <select id="preset-select" class="preset-dropdown"></select>
+            <button type="button" id="btn-next-preset" class="preset-step" aria-label="Next preset" title="Next preset"><svg aria-hidden="true"><use href="#s-chevron-right"/></svg></button>
+          </div>
         </div>
 
         <!-- Physics: the live spectrum of the processed audio (grey = in, colour = out) and the settings' response curve -->
@@ -105,27 +111,27 @@
 
           <div class="eq-row" data-band="bass">
             <button class="band-tag" aria-pressed="true" data-band="bass" title="Bass on. Click to switch it off without losing the value.">LOW</button>
-            <div class="eq-label" title="Low-shelf filter at 120 Hz: warm low-end weight, +0 to +56 dB. Large boosts can make the leveler and limiter work hard: pumping, flattened kicks or fizz; if you hear that, lower the boost first.">Bass Boost</div>
+            <div class="eq-label eq-cut-label" title="Low-shelf filter at 120 Hz: warm low-end weight, +0 to +56 dB. Large boosts can make the leveler and limiter work hard: pumping, flattened kicks or fizz; if you hear that, lower the boost first."><span>Bass Boost</span><small id="cut-bass"></small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-bass" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
-            <input type="range" id="slider-bass" class="eq-slider" aria-label="Bass Boost, dB" min="0" max="56" step="0.5" value="5.0">
+            <span class="eq-cut-track"><input type="range" id="slider-bass" class="eq-slider" aria-label="Bass Boost, dB" min="0" max="56" step="0.5" value="5.0"><i id="cut-tick-bass" class="eq-cut-tick" aria-hidden="true" hidden></i></span>
             <button class="eq-nudge-btn" data-action="up" data-target="slider-bass" data-step="0.5" title="+0.5 dB (Shift: +0.1)">+</button>
             <span class="eq-val" id="val-bass" title="Double-click: neutral / restore">+5.0 dB</span>
           </div>
 
           <div class="eq-row" data-band="mid">
             <button class="band-tag" aria-pressed="true" data-band="mid" title="Mid on. Click to switch it off without losing the value.">MID</button>
-            <div class="eq-label" title="Peaking filter at 1 kHz (Q 0.8): vocal presence and body, −24 to +24 dB. Large boosts can make the leveler and limiter work hard.">Mid <small>vocals / body</small></div>
+            <div class="eq-label eq-cut-label" title="Peaking filter at 1 kHz (Q 0.8): vocal presence and body, −24 to +24 dB. Large boosts can make the leveler and limiter work hard."><span>Mid</span><small id="cut-mid">vocals / body</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-mid" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
-            <input type="range" id="slider-mid" class="eq-slider" aria-label="Mid, dB" min="-24" max="24" step="0.5" value="1.5">
+            <span class="eq-cut-track"><input type="range" id="slider-mid" class="eq-slider" aria-label="Mid, dB" min="-24" max="24" step="0.5" value="1.5"><i id="cut-tick-mid" class="eq-cut-tick" aria-hidden="true" hidden></i></span>
             <button class="eq-nudge-btn" data-action="up" data-target="slider-mid" data-step="0.5" title="+0.5 dB (Shift: +0.1)">+</button>
             <span class="eq-val" id="val-mid" title="Double-click: neutral / restore">+1.5 dB</span>
           </div>
 
           <div class="eq-row" data-band="high">
             <button class="band-tag" aria-pressed="true" data-band="high" title="High on. Click to switch it off without losing the value.">HI</button>
-            <div class="eq-label" title="High-shelf filter at 5 kHz: air and sparkle, −24 to +24 dB. Large boosts can make the leveler and limiter work hard, and add fizz.">High <small>sparkle</small></div>
+            <div class="eq-label eq-cut-label" title="High-shelf filter at 5 kHz: air and sparkle, −24 to +24 dB. Large boosts can make the leveler and limiter work hard, and add fizz."><span>High</span><small id="cut-high">sparkle</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-high" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
-            <input type="range" id="slider-high" class="eq-slider" aria-label="High, dB" min="-24" max="24" step="0.5" value="2.0">
+            <span class="eq-cut-track"><input type="range" id="slider-high" class="eq-slider" aria-label="High, dB" min="-24" max="24" step="0.5" value="2.0"><i id="cut-tick-high" class="eq-cut-tick" aria-hidden="true" hidden></i></span>
             <button class="eq-nudge-btn" data-action="up" data-target="slider-high" data-step="0.5" title="+0.5 dB (Shift: +0.1)">+</button>
             <span class="eq-val" id="val-high" title="Double-click: neutral / restore">+2.0 dB</span>
           </div>

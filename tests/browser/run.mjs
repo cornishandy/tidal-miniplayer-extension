@@ -11,6 +11,7 @@
 //
 // Usage: node browser/run.mjs <unpackedDir> [--label name]
 import { chromium } from 'playwright-core';
+import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -632,6 +633,7 @@ try {
     await sleep(400);
     const flat = (await evalOffscreen(measure)).value;
     const source = (await evalOffscreen(measureInput)).value;
+
     await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
     const boosted = (await evalOffscreen(measure)).value;
@@ -1279,6 +1281,329 @@ try {
     record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a side panel left open refreshes on focus; a stale Update and a stale switch change are refused, write nothing, and refresh that panel; pick/Reset/Delete lock all edit controls until confirmation; each edit sends only its changed field; the header stays on one row',
       switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
 
+    // ---- W-PRESET-STEP (R-31): two buttons share the dropdown's confirmed pick path.
+    // Additive check only: restore the synthetic preset state before the existing checks continue.
+    const stepSaved = await sendFrom(popup, { type: 'READ_PRESET_STATE' });
+    const stepDetail = { surfaces: [], layouts: [], screenshots: [] };
+    let stepOk = false;
+    try {
+      const stepBase = { bass: 3, hpf: 20, mid: 1, high: 0, gain: 1, semitones: 0,
+        autoBalance: false, bypass: false, stageBypass: NONE };
+      const stepModes = [
+        { leveler: 'bass', match: true, limiter: 'lookahead', ceiling: 'warm' },
+        { leveler: 'slow', match: false, limiter: 'fast', ceiling: 'clean' }
+      ];
+      for (const [i, name] of ['Step switches A', 'Step switches B'].entries()) {
+        const saved = await writeFrom(popup, { type: 'SAVE_PRESET', name,
+          params: { ...stepBase, bass: 3 + i }, dynamics: stepModes[i] });
+        assert.equal(saved.success, true);
+      }
+      for (const [surface, path, widths] of [
+        ['popup', 'popup.html', [440]], ['panel', 'popup.html?panel=1', [300, 360, 400, 440, 480]]
+      ]) {
+        const opened = await openPopup(path);
+        const pg = opened.page;
+        const surfaceResult = { surface, steps: [] };
+        stepDetail.surfaces.push(surfaceResult);
+        try {
+          await pg.setViewportSize({ width: surface === 'popup' ? 440 : 360, height: 800 });
+          const menu = await pg.evaluate(() => ({
+            names: Array.from(presetSelect.options, option => option.value),
+            groups: Array.from(presetSelect.children, group => ({ label: group.label, names: Array.from(group.children, option => option.value) }))
+          }));
+          assert.equal(menu.groups[0].label, 'Default Presets');
+          assert.equal(menu.groups[1].label, 'My Custom Presets');
+          assert.deepEqual(menu.names, menu.groups.flatMap(group => group.names));
+          assert.deepEqual(menu.names.slice(-2), ['Step switches A', 'Step switches B']);
+          surfaceResult.order = menu.names;
+          await pg.selectOption('#preset-select', menu.names[0]);
+          await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, menu.names[0]);
+          let index = 0;
+          const checkSelection = async (expected) => {
+            const stored = await pg.evaluate(() => chrome.storage.local.get(['presets', 'currentPreset', 'currentParams', 'dynamics']));
+            const ui = await pg.evaluate(params => {
+              // A dropdown pick also uses native range rounding (e.g. factory HPF 32 displays 30).
+              // Independent detached inputs give the expected display without changing stored/engine values.
+              const expected = { autoBalance: params.autoBalance };
+              for (const key of ['bass', 'hpf', 'mid', 'high', 'gain', 'semitones']) {
+                const input = document.getElementById(`slider-${key === 'semitones' ? 'pitch' : key}`).cloneNode();
+                input.value = params[key] ?? (key === 'semitones' ? 0 : '');
+                expected[key] = input.valueAsNumber;
+              }
+              return { name: currentPresetName, selected: presetSelect.value, expected,
+                params: getParamsFromUI(), dynamics: { leveler: modeLeveler.value, limiter: modeLimiter.value,
+                  ceiling: modeCeiling.value, match: document.querySelector('.band-tag[data-band="match"]').getAttribute('aria-pressed') === 'true' } };
+            }, stored.currentParams);
+            const engine = (await evalOffscreen('({ params: currentParams, dynamics: currentDynamics, capturing: isCapturing })')).value;
+            assert.equal(stored.currentPreset, expected);
+            assert.equal(ui.name, expected);
+            assert.equal(ui.selected, expected);
+            assert.equal(engine?.capturing, true);
+            for (const key of ['bass', 'hpf', 'mid', 'high', 'gain', 'semitones', 'autoBalance']) {
+              assert.equal(ui.params[key], ui.expected[key], `UI ${expected}: ${key}`);
+              assert.equal(engine.params[key], stored.currentParams[key] ?? (key === 'semitones' ? 0 : undefined), `engine ${expected}: ${key}`);
+            }
+            assert.equal(engine.params.bypass, stored.currentParams.bypass === true);
+            assert.deepEqual(ui.dynamics, stored.dynamics);
+            assert.deepEqual(engine.dynamics, stored.dynamics);
+            if (stored.presets[expected].dynamics) assert.deepEqual(stored.dynamics, stored.presets[expected].dynamics);
+            return { name: expected, bass: ui.params.bass, dynamics: ui.dynamics };
+          };
+          for (const direction of [1, -1]) {
+            for (let n = 0; n < menu.names.length; n++) {
+              index = (index + direction + menu.names.length) % menu.names.length;
+              const expected = menu.names[index];
+              await pg.click(direction === 1 ? '#btn-next-preset' : '#btn-prev-preset');
+              await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, expected);
+              surfaceResult.steps.push({ direction, ...await checkSelection(expected) });
+            }
+            assert.equal(index, 0, 'one full lap wraps to the first option');
+          }
+          surfaceResult.lock = await pg.evaluate(async () => {
+            const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+            const before = { name: currentPresetName, bass: currentParams.bass, dynamics: { ...dynamics } };
+            let release;
+            let calls = 0;
+            chrome.runtime.sendMessage = (message, callback) => {
+              if (message.type !== 'APPLY_PRESET') return original(message, callback);
+              calls++;
+              return original(message, response => { release = () => callback(response); });
+            };
+            try {
+              btnNextPreset.click();
+              for (let i = 0; i < 200 && !release; i++) await new Promise(r => setTimeout(r, 10));
+              if (!release) throw Error('preset reply never arrived');
+              const locked = btnPrevPreset.disabled && btnNextPreset.disabled && presetSelect.disabled;
+              const heldView = { name: currentPresetName, bass: currentParams.bass, dynamics: { ...dynamics } };
+              btnPrevPreset.click(); btnNextPreset.click();
+              const whileHeldCalls = calls;
+              release(); release = null;
+              return { locked, before, heldView, whileHeldCalls,
+                unlocked: !btnPrevPreset.disabled && !btnNextPreset.disabled && !presetSelect.disabled };
+            } finally {
+              chrome.runtime.sendMessage = original;
+              if (release) release();
+            }
+          });
+          assert.equal(surfaceResult.lock.locked, true);
+          assert.equal(surfaceResult.lock.unlocked, true);
+          assert.equal(surfaceResult.lock.whileHeldCalls, 1);
+          assert.deepEqual(surfaceResult.lock.heldView, surfaceResult.lock.before);
+          await checkSelection(menu.names[1]);
+          // Compare the new row against the original select-only DOM, without changing shipped code.
+          // Test both default and custom labels at every supported width.
+          for (const name of [menu.names[0], 'Step switches A']) {
+            await pg.selectOption('#preset-select', name);
+            await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, name);
+            for (const width of widths) {
+              await pg.setViewportSize({ width, height: 800 });
+              const layout = await pg.evaluate(() => {
+                const row = document.querySelector('.preset-picker');
+                const select = document.getElementById('preset-select');
+                const rect = element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right }; };
+                const measure = () => ({ height: document.querySelector('.popup-container').getBoundingClientRect().height,
+                  section: rect(document.querySelector('.preset-section')), physics: rect(document.querySelector('.physics')),
+                  select: rect(select), overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth });
+                const current = measure();
+                const buttons = [btnPrevPreset, btnNextPreset].map(button => ({ ...rect(button),
+                  label: button.getAttribute('aria-label'), title: button.title, svg: !!button.querySelector('svg use') }));
+                row.before(select); row.remove();
+                const original = measure();
+                select.before(row); row.insertBefore(select, btnNextPreset);
+                return { current, original, buttons };
+              });
+              assert.equal(layout.current.height, layout.original.height, `${surface} ${width}: page height`);
+              assert.equal(layout.current.section.h, layout.original.section.h, `${surface} ${width}: preset height`);
+              assert.deepEqual(layout.current.physics, layout.original.physics, `${surface} ${width}: drawings do not move`);
+              assert.equal(layout.current.select.h, layout.original.select.h);
+              assert.ok(layout.current.overflow <= 0);
+              assert.ok(layout.current.select.w >= 100, 'dropdown retains usable width');
+              if (surface === 'popup') assert.ok(layout.current.height < 600);
+              for (const [i, button] of layout.buttons.entries()) {
+                assert.equal(button.label, i === 0 ? 'Previous preset' : 'Next preset');
+                assert.equal(button.title, button.label);
+                assert.equal(button.svg, true);
+                assert.equal(button.y, layout.current.select.y);
+                assert.equal(button.h, layout.current.select.h);
+                assert.ok(button.x >= layout.current.section.x && button.right <= layout.current.section.right);
+              }
+              assert.ok(layout.buttons[0].right < layout.current.select.x);
+              assert.ok(layout.buttons[1].x > layout.current.select.right);
+              stepDetail.layouts.push({ surface, width, name, ...layout });
+            }
+          }
+          await pg.setViewportSize({ width: surface === 'popup' ? 440 : 360, height: surface === 'popup' ? 600 : 900 });
+          const filename = `preset-step-${surface}.png`;
+          if (surface === 'popup') stepDetail.screenshots.push(await shot(pg, filename));
+          else {
+            await pg.screenshot({ path: join(outDir, filename), fullPage: true });
+            stepDetail.screenshots.push(`results/${label}/${filename}`);
+          }
+          assert.deepEqual(opened.errors, []);
+        } finally {
+          await pg.close();
+        }
+      }
+      stepOk = true;
+    } catch (error) {
+      stepDetail.error = String(error.stack || error);
+    } finally {
+      await popup.evaluate(saved => chrome.storage.local.set({ presets: saved.presets, currentPreset: saved.currentPreset,
+        currentParams: saved.currentParams, dynamics: saved.dynamics }), stepSaved);
+      await sendFrom(popup, { type: 'READ_PRESET_STATE' });
+      await showSurface(popup);
+    }
+    record('W-PRESET-STEP', 'Previous/Next follow dropdown order and wrap both ends; confirmed storage, engine, UI and saved switches agree; buttons lock in flight; unchanged popup height and unclipped 300–480 px panel layouts',
+      stepOk ? 'PASS' : 'FAIL', stepDetail);
+
+    // ---- W-EQ-CUT (R-29): the shipped display reads the existing synthetic spectra.
+    // No new audio source, output path, browser or profile; keep the harness's silent flags.
+    // Keep these extra steps after the timed audio checks so fixture loop seams do not move into their measurements.
+    const cutSaved = await sendFrom(popup, { type: 'READ_PRESET_STATE' });
+    await setDyn(DEFAULT_DYN);
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
+    await showSurface(popup);
+    await sleep(2000);
+    const readCuts = (page) => page.evaluate(() => {
+      const rect = (el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, w: r.width, h: r.height };
+      };
+      return {
+        body: rect(document.body),
+        bands: ['bass', 'mid', 'high'].map((band) => {
+          const row = document.querySelector(`.eq-row[data-band="${band}"]`);
+          const slider = document.getElementById(`slider-${band}`);
+          const caption = document.getElementById(`cut-${band}`);
+          const tick = document.getElementById(`cut-tick-${band}`);
+          const track = rect(slider);
+          const thumbX = track.x + 7 + (track.w - 14) * ((+slider.value - +slider.min) / (+slider.max - +slider.min));
+          return { band, text: caption.textContent, title: caption.getAttribute('title'),
+            cutting: caption.classList.contains('cutting'), hidden: tick.hidden,
+            tick: rect(tick), ariaHidden: tick.getAttribute('aria-hidden'),
+            thumbX, track, row: rect(row), label: rect(row.querySelector('.eq-label')),
+            fits: caption.scrollWidth <= caption.clientWidth && row.querySelector('.eq-label').scrollWidth <= row.querySelector('.eq-label').clientWidth };
+        })
+      };
+    });
+    const cutFlat = await readCuts(popup);
+    await setParams({ bass: 56, gain: 2.5 });
+    await showSurface(popup);
+    await sleep(3000);
+    const cutHot = await readCuts(popup);
+    const cutScreenshot = await shot(popup, 'eq-cut-bass56.png');
+
+    const cutContrast = await popup.evaluate(() => {
+      const savedTheme = document.body.className;
+      const rgb = (v) => v.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const luminance = (rgb) => rgb.map((v) => {
+        const c = v / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      }).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const contrast = (a, b) => {
+        const x = luminance(a), y = luminance(b);
+        return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+      };
+      const results = [];
+      for (const theme of ['cyan', 'amber', 'synthwave', 'matrix', 'oled']) {
+        document.body.className = `theme-${theme}`;
+        const bg = rgb(getComputedStyle(document.body).backgroundColor);
+        for (const band of ['bass', 'mid', 'high']) {
+          const row = document.querySelector(`.eq-row[data-band="${band}"]`);
+          const caption = document.getElementById(`cut-${band}`);
+          const tick = document.getElementById(`cut-tick-${band}`);
+          const savedRow = row.className, savedCaption = caption.className;
+          caption.classList.add('cutting');
+          for (const off of [false, true]) {
+            row.classList.toggle('is-off', off);
+            const style = getComputedStyle(caption);
+            const opacity = +style.opacity * +getComputedStyle(caption.parentElement).opacity;
+            const fg = rgb(style.color).map((v, i) => v * opacity + bg[i] * (1 - opacity));
+            results.push({ theme, band, off, text: contrast(fg, bg),
+              tick: contrast(rgb(getComputedStyle(tick).backgroundColor), rgb(getComputedStyle(document.getElementById(`slider-${band}`)).backgroundColor)) });
+          }
+          row.className = savedRow;
+          caption.className = savedCaption;
+        }
+      }
+      document.body.className = savedTheme;
+      return results;
+    });
+
+    // The panel and fallback window execute the same renderer. Toggle only its presentation
+    // synchronously to compare geometry with/without cuts while the real frame stream continues.
+    const cutLayouts = [];
+    for (const path of ['popup.html?panel=1', 'popup.html?undocked=true']) {
+      const { page, errors } = await openPopup(path);
+      await sleep(1200);
+      for (const width of path.includes('panel') ? [300, 360, 400, 440, 480] : [440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await sleep(150);
+        const geometry = await page.evaluate(() => {
+          const positions = () => [...document.querySelectorAll('.eq-cut-label, .eq-cut-track, .eq-row')].map((el) => {
+            const r = el.getBoundingClientRect();
+            return [r.x, r.y, r.width, r.height];
+          });
+          const shown = positions();
+          const saved = Object.values(bandCuts).map((ui) => ui.state);
+          Object.values(bandCuts).forEach((ui) => { ui.state = { value: 0, visible: false }; });
+          paintBandCuts();
+          const hidden = positions();
+          const rows = () => [...document.querySelectorAll('.eq-row')].map((el) => {
+            const r = el.getBoundingClientRect();
+            return [r.y, r.height];
+          });
+          const cutRows = rows();
+          // The original labels had no fixed height and their small text was inline.
+          const labels = [...document.querySelectorAll('.eq-cut-label')];
+          labels.forEach((el) => el.classList.remove('eq-cut-label'));
+          const originalRows = rows();
+          labels.forEach((el) => el.classList.add('eq-cut-label'));
+          Object.values(bandCuts).forEach((ui, i) => { ui.state = saved[i]; });
+          paintBandCuts();
+          return { stable: JSON.stringify(shown) === JSON.stringify(hidden),
+            originalRowHeights: JSON.stringify(cutRows) === JSON.stringify(originalRows),
+            noOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth };
+        });
+        cutLayouts.push({ path, width, ...geometry, ...(await readCuts(page)), errors: [...errors] });
+      }
+      await page.close();
+    }
+
+    await showSurface(popup);
+    await setParams({ bypass: true });
+    await showSurface(popup);
+    const cutBypass = await readCuts(popup);
+    await setParams({ bypass: false, semitones: 1 });
+    await showSurface(popup);
+    const cutPitch = await readCuts(popup);
+    await setParams({ semitones: 0 });
+    await showSurface(popup);
+    await sleep(1500);
+    await popup.click('.power-switch');
+    await sleep(500);
+    const cutOff = await readCuts(popup);
+    const normalCaptions = ['', 'vocals / body', 'sparkle'];
+    const allHidden = (r) => r.bands.every((b, i) => b.hidden && !b.cutting && b.title === null && b.text === normalCaptions[i]);
+    const noShift = cutHot.bands.every((b, i) => JSON.stringify(b.row) === JSON.stringify(cutFlat.bands[i].row)
+      && JSON.stringify(b.track) === JSON.stringify(cutFlat.bands[i].track));
+    const low = cutHot.bands[0], mid = cutHot.bands[1];
+    const cutText = /^cut (\d+) dB$/;
+    record('W-EQ-CUT', 'Flat hides cuts; Bass +56 / Master 250% / AUTO off shows LOW ≥10 dB and a left tick plus a MID cut; no shift/overflow in popup, 300–480 px panel or window; all themes ≥4.5:1; bypass, Pitch and EQ off restore captions',
+      allHidden(cutFlat) && cutText.test(low.text) && +low.text.match(cutText)[1] >= 10
+        && !low.hidden && low.tick.x + 1 < low.thumbX && low.tick.w === 2 && low.tick.h === low.track.h
+        && cutText.test(mid.text) && !mid.hidden && noShift && cutHot.body.h < 600
+        && cutHot.bands.every((b) => b.ariaHidden === 'true' && (!b.cutting || b.title === `About ${b.text.match(cutText)?.[1]} dB of this band is being taken back by the leveler, limiter and ceiling right now. Measured from the audio, so it shows only while this band has sound.`))
+        && cutContrast.every((c) => c.text >= 4.5 && c.tick >= 4.5)
+        && cutLayouts.every((l) => l.stable && l.originalRowHeights && l.noOverflow && l.errors.length === 0
+          && l.bands[0].cutting && l.bands.every((b) => b.fits))
+        && allHidden(cutBypass) && allHidden(cutPitch) && allHidden(cutOff) ? 'PASS' : 'FAIL',
+      { flat: cutFlat, hot: cutHot, noShift, contrast: cutContrast, layouts: cutLayouts,
+        bypass: cutBypass, pitch: cutPitch, off: cutOff, screenshot: cutScreenshot });
+    await setParams(cutSaved.currentParams);
+    await setDyn(cutSaved.dynamics);
+    await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
+
     // ---- W-CAPTURE-STOP ----
     const stopRes = await sendFrom(popup, { type: 'STOP_CAPTURE' });
     await sleep(500);
@@ -1370,7 +1695,8 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-PRESET-SWITCHES', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    record('W-PRESET-STEP', 'Preset stepping requires the synthetic capture engine', 'BLOCKED', startRes);
+    for (const id of ['W-EQ-CUT', 'W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-PRESET-SWITCHES', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }
@@ -2175,6 +2501,304 @@ try {
   });
   record('W-JUMP-USER-WINS', 'If the playback is moved in Tidal itself during the check, the extension leaves it there (no fallback seek)',
     userWins.t > 12 && userWins.t < 16 && userWins.handlerSeeks === 0 && userWins.errs.length === 0 && userWins.ppErrors.length === 0 ? 'PASS' : 'FAIL', userWins);
+
+  // ---- W-JUMP-FEEDBACK: the investigation's working and silent-failure states, on both shared surfaces.
+  // Existing W-JUMP checks above are intentionally unchanged. All pages here remain synthetic and silent.
+  const feedbackCases = [];
+  const feedbackHint = (pp) => pp.evaluate(() => {
+    const el = document.getElementById('hint');
+    return el.hidden ? '' : el.textContent;
+  });
+  const feedbackSet = async (pg, pp, time, paused = true) => {
+    await pg.evaluate(({ time, paused }) => {
+      audioEl.currentTime = time;
+      if (paused) {
+        audioEl.pause();
+        document.getElementById('footer-play').setAttribute('data-test', 'play');
+        document.getElementById('footer-play').setAttribute('aria-label', 'Play');
+      }
+    }, { time, paused });
+    await pp.waitForFunction(({ time, paused }) =>
+      currentTrackInfo && Math.abs(currentTrackInfo.currentTime - time) < 2 && currentTrackInfo.isPlaying !== paused,
+    { time, paused });
+  };
+  const feedbackDone = async (pp, count = 1) => {
+    await pp.waitForFunction((n) => __transport.length >= n, count, { timeout: 12000 });
+    return pp.evaluate(() => __transport.at(-1));
+  };
+  const blockFeedbackSeek = () => {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+    Object.defineProperty(audioEl, 'currentTime', {
+      configurable: true, get() { return descriptor.get.call(this); }, set() {}
+    });
+  };
+  for (const surface of ['popup', 'panel']) {
+    const feedbackCase = async (name, query, run, play = true) => {
+      const pg = await context.newPage();
+      watchRequests(pg);
+      const errors = [];
+      pg.on('pageerror', (e) => errors.push(String(e)));
+      let opened;
+      try {
+        await pg.goto(TIDAL_URL + query);
+        await pg.waitForFunction(() => window.audioEl?.duration > 0);
+        if (play) await pg.click('#footer-play');
+        opened = await openPopup(surface === 'panel' ? 'popup.html?panel=1' : 'popup.html');
+        const pp = opened.page;
+        await pp.setViewportSize({ width: surface === 'panel' ? 360 : 440, height: 760 });
+        await pp.evaluate(() => {
+          window.__transport = [];
+          window.__hints = [];
+          const hint = document.getElementById('hint');
+          new MutationObserver(() => { if (!hint.hidden) __hints.push(hint.textContent); })
+            .observe(hint, { subtree: true, childList: true, attributes: true });
+          const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = (m, callback) => {
+            if (m.type !== 'FORWARD_PLAYER_COMMAND' || m.command.type === 'GET_TRACK_INFO') return original(m, callback);
+            const done = (res) => { __transport.push({ command: m.command, response: res }); callback?.(res); };
+            if (window.__replyMode === 'failed') return done({ success: false, error: 'Synthetic transport failure' });
+            if (window.__replyMode === 'missing') return done(undefined);
+            if (window.__replyMode === 'throw') throw new Error('Synthetic disconnected port');
+            return original(m, done);
+          };
+        });
+        const height = await pp.evaluate(() => document.body.getBoundingClientRect().height);
+        const evidence = await run(pg, pp);
+        const afterHeight = await pp.evaluate(() => document.body.getBoundingClientRect().height);
+        assert.equal(afterHeight, height, 'transport hint must not change layout height');
+        const hintVisible = await pp.evaluate(() => {
+          const el = document.getElementById('hint'), r = el.getBoundingClientRect();
+          return el.hidden || (r.top >= 0 && r.bottom <= innerHeight && r.left >= 0 && r.right <= innerWidth);
+        });
+        assert.ok(hintVisible, 'feedback must be on-screen, including a short scrolling side panel');
+        assert.deepEqual([...errors, ...opened.errors], []);
+        feedbackCases.push({ surface, name, pass: true, height, ...evidence });
+      } catch (error) {
+        feedbackCases.push({ surface, name, pass: false, error: String(error.stack || error) });
+      } finally {
+        if (opened) await opened.page.close();
+        if (!pg.isClosed()) await pg.close();
+      }
+    };
+    for (const [name, query, reachable, playing] of [
+      ['bar paused', '', false, false],
+      ['bar playing', '', false, true],
+      ['reachable media paused', '', true, false],
+      ['narrow handler paused', '?narrow=1&media=detached&session=1', false, false],
+      ['narrow closed element paused', '?narrow=1&media=closed', false, false],
+      ['dead bar falls back', '?deadbar=1&session=1', false, false],
+      ['noop handler falls back', '?narrow=1&media=detached&session=noop', false, false]
+    ]) {
+      await feedbackCase(name, query, async (pg, pp) => {
+        if (reachable) await pg.evaluate(() => document.body.append(audioEl));
+        await feedbackSet(pg, pp, 5, !playing);
+        await pp.click('#player-btn-fwd30');
+        const forward = await feedbackDone(pp);
+        assert.equal(forward.response.status, 'confirmed');
+        assert.equal(await feedbackHint(pp), '');
+        const fwd = await pg.evaluate(() => audioEl.currentTime);
+        assert.ok(fwd > 32 && fwd < 39);
+        await pp.click('#player-btn-back15');
+        const back = await feedbackDone(pp, 2);
+        assert.equal(back.response.status, 'confirmed');
+        assert.equal(await feedbackHint(pp), '');
+        const time = await pg.evaluate(() => audioEl.currentTime);
+        assert.ok(time > 17 && time < 26);
+        const hints = await pp.evaluate(() => __hints);
+        if (name === 'dead bar falls back' || name === 'noop handler falls back') assert.ok(hints.includes('Moving playback…'));
+        else assert.deepEqual(hints, [], 'fast success must never flash a hint');
+        return { fwd, back: time, forward: forward.response, hints };
+      });
+    }
+    // Review B1/B2 regressions: successful actions must not produce failure feedback.
+    await feedbackCase('short backward seek while playing', '', async (pg, pp) => {
+      await pg.evaluate(async () => {
+        document.body.append(audioEl);
+        await audioEl.play();
+        await new Promise((resolve) => {
+          audioEl.addEventListener('seeked', resolve, { once: true });
+          audioEl.currentTime = 0.2;
+        });
+        window.__feedbackSeeks = [];
+        audioEl.addEventListener('seeking', () => __feedbackSeeks.push(audioEl.currentTime));
+      });
+      const before = await pp.evaluate(() => new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'GET_TRACK_INFO' } }, (info) => {
+          currentTrackInfo = info;
+          document.getElementById('player-btn-back15').click();
+          resolve(info);
+        });
+      }));
+      assert.ok(before.isPlaying && before.currentTime > 0 && before.currentTime < 0.4);
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'confirmed');
+      assert.equal(result.response.seeked, 'media');
+      assert.equal(await feedbackHint(pp), '');
+      const actual = await pg.evaluate(() => ({ time: audioEl.currentTime, seeks: __feedbackSeeks, clicks }));
+      assert.ok(actual.time > 0.1 && actual.time < 1, 'playback continues past the old arrival tolerance');
+      assert.equal(actual.seeks.length, 1, 'a successful route must not be retried');
+      assert.equal(actual.clicks.seek, 0, 'no footer fallback');
+      return { before, response: result.response, actual };
+    });
+    for (const identity of ['track link', 'media source', 'restart only']) {
+      await feedbackCase(`same title and artist Next (${identity})`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, identity === 'restart only' ? 2 : 0);
+        await pg.evaluate((identity) => {
+          document.body.append(audioEl);
+          document.getElementById('next').onclick = () => {
+            clicks.next++;
+            if (identity === 'track link') document.querySelector('[data-test="footer-track-title"]').href = '/album/2';
+            if (identity === 'media source') { audioEl.src = '/tone.wav?track=two'; audioEl.load(); }
+            else audioEl.currentTime = 0;
+          };
+        }, identity);
+        const before = await pp.evaluate(() => ({ ...currentTrackInfo }));
+        await pp.click('#player-btn-next');
+        const result = await feedbackDone(pp);
+        assert.equal(result.response.status, 'confirmed');
+        assert.equal(result.response.next, 'button');
+        assert.equal(result.response.title, before.title);
+        assert.equal(result.response.artist, before.artist);
+        assert.equal(await feedbackHint(pp), '');
+        const actual = await pg.evaluate(() => ({
+          time: audioEl.currentTime, src: audioEl.currentSrc,
+          link: document.querySelector('[data-test="footer-track-title"]').getAttribute('href'), clicks
+        }));
+        assert.equal(actual.time, 0);
+        assert.equal(actual.clicks.next, 1);
+        assert.equal(actual.clicks.seek, 0);
+        if (identity === 'track link') assert.ok(result.response.trackUrl.endsWith('/album/2'));
+        if (identity === 'media source') assert.ok(result.response.mediaSrc.endsWith('/tone.wav?track=two'));
+        return { before, response: result.response, actual };
+      });
+    }
+    await feedbackCase('unknown length before first play', '?narrow=1&media=detached', async (pg, pp) => {
+      await pp.click('#player-btn-fwd30');
+      assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
+      assert.equal(await pp.evaluate(() => __transport.length), 0);
+    }, false);
+    await feedbackCase('dead bar and empty helper', '?deadbar=1', async (pg, pp) => {
+      await pp.click('#player-btn-fwd30');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'exhausted');
+      assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 0);
+      assert.ok(await pp.evaluate(() => __hints.includes('Moving playback…')));
+      return { response: result.response };
+    }, false);
+    await feedbackCase('all routes refuse (synthetic ad-like state)', '?deadbar=1&session=noop', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pg.evaluate(blockFeedbackSeek);
+      await pp.click('#player-btn-fwd30');
+      await pp.waitForFunction(() => !document.getElementById('hint').hidden && document.getElementById('hint').textContent === 'Moving playback…');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'exhausted');
+      assert.equal(result.response.seeked, false);
+      assert.equal(await feedbackHint(pp), "This page isn't allowing seeking right now");
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 5);
+      assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+      await pp.screenshot({ path: join(outDir, `seek-feedback-${surface}.png`) });
+      return { response: result.response, screenshot: `results/${label}/seek-feedback-${surface}.png` };
+    });
+    // The ignored isolated-world assignment must fail verification, then retain the working footer fallback.
+    // With every other route refused as well it must finally show the seek refusal.
+    for (const blocked of [false, true]) {
+      await feedbackCase(blocked ? 'reachable assignment and all fallbacks ignored' : 'reachable assignment ignored; bar recovers',
+        blocked ? '?deadbar=1&session=noop' : '', async (pg, pp) => {
+          await feedbackSet(pg, pp, 5);
+          await pg.evaluate(() => document.body.append(audioEl));
+          if (blocked) await pg.evaluate(blockFeedbackSeek);
+          await pp.evaluate(async (url) => {
+            const [tab] = await chrome.tabs.query({ url });
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: () => {
+              const media = document.querySelector('audio');
+              const descriptor = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, 'currentTime');
+              Object.defineProperty(media, 'currentTime', { configurable: true, get() { return descriptor.get.call(this); }, set() {} });
+            } });
+          }, pg.url());
+          await pp.click('#player-btn-fwd30');
+          const result = await feedbackDone(pp);
+          assert.equal(result.response.status, blocked ? 'exhausted' : 'confirmed');
+          assert.equal(await feedbackHint(pp), blocked ? "This page isn't allowing seeking right now" : '');
+          assert.ok(Math.abs(await pg.evaluate(() => audioEl.currentTime) - (blocked ? 5 : 35)) < 0.2);
+          return { response: result.response };
+        });
+    }
+    await feedbackCase('end goes next; quick repeat held', '?tracks=1', async (pg, pp) => {
+      await feedbackSet(pg, pp, 45);
+      // Same event turn guarantees that the second click arrives before the confirmation.
+      await pp.evaluate(() => { document.getElementById('player-btn-fwd30').click(); document.getElementById('player-btn-fwd30').click(); });
+      assert.equal(await feedbackHint(pp), 'Waiting for the next track');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'confirmed');
+      assert.equal(await feedbackHint(pp), '');
+      const clicks = await pg.evaluate(() => window.clicks);
+      assert.equal(clicks.next, 1);
+      assert.equal(clicks.seek, 0);
+      return { clicks };
+    });
+    for (const button of ['#player-btn-fwd30', '#player-btn-next']) {
+      await feedbackCase(`dead Next (${button})`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, 45);
+        await pp.click(button);
+        const result = await feedbackDone(pp);
+        assert.equal(result.response.status, 'exhausted');
+        assert.equal(await feedbackHint(pp), "Tidal didn't move to the next track");
+        const clicks = await pg.evaluate(() => window.clicks);
+        assert.equal(clicks.next, 1);
+        assert.equal(clicks.seek, 0);
+        assert.equal(await pg.evaluate(() => audioEl.currentTime), 45);
+        return { clicks, response: result.response };
+      });
+    }
+    await feedbackCase('disabled Next ends paused queue', '?nextdisabled=1&session=1', async (pg, pp) => {
+      await feedbackSet(pg, pp, 45);
+      await pp.click('#player-btn-fwd30');
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'confirmed');
+      assert.equal(result.response.next, 'end');
+      assert.equal(await feedbackHint(pp), '');
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 60);
+    });
+    await feedbackCase('back at start', '', async (pg, pp) => {
+      await feedbackSet(pg, pp, 0);
+      await pp.click('#player-btn-back15');
+      assert.equal(await feedbackHint(pp), 'Already at the start');
+      assert.equal(await pp.evaluate(() => __transport.length), 0);
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 0);
+    });
+    await feedbackCase('closed target tab', '', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pg.close();
+      await pp.click('#player-btn-fwd30');
+      await feedbackDone(pp);
+      assert.equal(await feedbackHint(pp), "The Tidal tab isn't reachable. Open it and try again");
+      assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+    });
+    for (const mode of ['failed', 'missing', 'throw']) {
+      await feedbackCase(`${mode} transport reply`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, 5);
+        await pp.evaluate((mode) => { window.__replyMode = mode; }, mode);
+        await pp.click('#player-btn-fwd30');
+        assert.equal(await feedbackHint(pp), "The Tidal tab isn't reachable. Open it and try again");
+        assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+        assert.equal(await pg.evaluate(() => audioEl.currentTime), 5);
+      });
+    }
+    await feedbackCase('manual movement cancels without fallback or failure hint', '?deadbar=1&session=1', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pp.click('#player-btn-fwd30');
+      await sleep(450);
+      await pg.evaluate(() => { audioEl.currentTime = 12; });
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'cancelled');
+      assert.equal(await feedbackHint(pp), '');
+      assert.equal(await pg.evaluate(() => audioEl.currentTime), 12);
+      assert.equal(await pg.evaluate(() => clicks.sessionSeek), 0);
+    });
+  }
+  record('W-JUMP-FEEDBACK', 'Confirmed jumps clear feedback; every investigated silent failure is explained, without changing popup/panel height',
+    feedbackCases.every((c) => c.pass) ? 'PASS' : 'FAIL', { passed: feedbackCases.filter((c) => c.pass).length, total: feedbackCases.length, cases: feedbackCases });
 
   // ---- W-BRIDGE-PAUSE-TIME: with only Tidal's position report (no element known), paused time is not counted ----
   const pauseTime = await (async () => {
