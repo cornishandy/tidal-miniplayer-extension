@@ -425,6 +425,55 @@ try {
     nudgeBefore.y === nudgeAfter.y && nudgeBefore.x === nudgeAfter.x && sliderBefore.y === sliderAfter.y && /Modified/.test(badgeText) && updateShown ? 'PASS' : 'FAIL',
     { nudgeBefore, nudgeAfter, sliderBefore, sliderAfter, badgeText, updateShown });
 
+  // ---- W-EQ-RANGE-UI (1.5.8, E-02): Bass 0..28 and Mid/High −12..12 on the popup, the side panel and the fallback window
+  // (one popup.html). The ends survive nudges, Update, neutral/restore and a reopen; a stored 14 / 6 / 0 preset keeps its
+  // numbers. Runs on its own pages and puts the stored presets back exactly as they were. ----
+  const getStore = (pg, keys) => pg.evaluate((k) => new Promise((r) => chrome.storage.local.get(k, r)), keys);
+  const rangeSnap = await getStore(popup, ['presets', 'currentPreset', 'currentParams']);
+  const rp = adopt(await openPopup());
+  const rangeOf = (pg) => pg.evaluate(() => Object.fromEntries(['bass', 'mid', 'high'].map((b) => { const el = document.getElementById(`slider-${b}`); return [b, [Number(el.min), Number(el.max), Number(el.step)]]; })));
+  const shownOf = (pg) => pg.evaluate(() => Object.fromEntries(['bass', 'mid', 'high'].map((b) => [b, [Number(document.getElementById(`slider-${b}`).value), document.getElementById(`val-${b}`).textContent]])));
+  const setSlider = (pg, b, v) => pg.evaluate(([b, v]) => { const el = document.getElementById(`slider-${b}`); el.value = v; el.dispatchEvent(new Event('input')); }, [b, v]);
+  const nudge = async (pg, b, dir) => { await pg.click(`.eq-nudge-btn[data-target="slider-${b}"][data-action="${dir}"]`); await sleep(120); };
+  await rp.selectOption('#preset-select', 'Harness Preset');
+  await sleep(250);
+  const rangePopup = await rangeOf(rp);
+  await setSlider(rp, 'bass', 27.5); await nudge(rp, 'bass', 'up'); await nudge(rp, 'bass', 'up');
+  await setSlider(rp, 'mid', -11.5); await nudge(rp, 'mid', 'down'); await nudge(rp, 'mid', 'down');
+  await setSlider(rp, 'high', 12); await nudge(rp, 'high', 'up');
+  await sleep(200);
+  const endsShown = await shownOf(rp);
+  await rp.click('#btn-update-preset');
+  await sleep(600);
+  const storedEnds = (await getStore(rp, ['presets'])).presets?.['Harness Preset'] || null;
+  await rp.dblclick('#val-bass'); await sleep(200);
+  const neutralBass = Number(await rp.evaluate(() => document.getElementById('slider-bass').value));
+  await rp.dblclick('#val-bass'); await sleep(200);
+  const restoredBass = Number(await rp.evaluate(() => document.getElementById('slider-bass').value));
+  const oldPreset = { bass: 14, hpf: 20, mid: 6, high: 0, gain: 1, semitones: 0, autoBalance: true, bypass: false };
+  await rp.evaluate((op) => new Promise((r) => chrome.storage.local.get('presets', (d) => chrome.storage.local.set({ presets: { ...(d.presets || {}), 'Old 14-6-0': op } }, r))), oldPreset);
+  const other = {};
+  for (const [label, path] of [['popup', 'popup.html'], ['panel', 'popup.html?panel=1'], ['window', 'popup.html?undocked=true']]) {
+    const pg = adopt(await openPopup(path));
+    await pg.selectOption('#preset-select', 'Harness Preset'); await sleep(250);
+    const ends = await shownOf(pg);
+    await pg.selectOption('#preset-select', 'Old 14-6-0'); await sleep(250);
+    other[label] = { range: await rangeOf(pg), ends, old: await shownOf(pg) };
+    await pg.close();
+  }
+  const storedOld = (await getStore(rp, ['presets'])).presets?.['Old 14-6-0'] || null;
+  await rp.close();
+  await popup.evaluate((snap) => new Promise((r) => chrome.storage.local.set(snap, r)), rangeSnap);
+  await sleep(300);
+  const wantRange = { bass: [0, 28, 0.5], mid: [-12, 12, 0.5], high: [-12, 12, 0.5] };
+  const endsOk = (e) => e.bass[0] === 28 && e.mid[0] === -12 && e.high[0] === 12 && e.bass[1] === '+28.0 dB' && /12\.0 dB$/.test(e.mid[1]) && e.high[1] === '+12.0 dB';
+  record('W-EQ-RANGE-UI', 'Doubled ranges (1.5.8) on the popup, side panel and fallback window: Bass 0..28, Mid/High −12..12 in 0.5 dB steps; nudges stop at the ends; Update stores 28 / −12 / +12; neutral/restore returns to 28; every surface shows the stored ends after reopening; a stored 14 / 6 / 0 preset shows and stays 14 / 6 / 0',
+    JSON.stringify(rangePopup) === JSON.stringify(wantRange) && endsOk(endsShown) && storedEnds?.bass === 28 && storedEnds.mid === -12 && storedEnds.high === 12
+      && neutralBass === 0 && restoredBass === 28
+      && Object.values(other).every((o) => JSON.stringify(o.range) === JSON.stringify(wantRange) && endsOk(o.ends) && o.old.bass[0] === 14 && o.old.mid[0] === 6 && o.old.high[0] === 0)
+      && !!storedOld && Object.keys(storedOld).length === Object.keys(oldPreset).length && Object.entries(oldPreset).every(([k, v]) => storedOld[k] === v) ? 'PASS' : 'FAIL',
+    { rangePopup, endsShown, storedEnds, neutralBass, restoredBass, other, storedOld });
+
   // ---- W-KEYBOARD: Tab reaches every control with a visible focus ring; arrows and Space operate sliders and buttons ----
   await popup.selectOption('#preset-select', 'Harness Preset');
   await sleep(250);
@@ -808,6 +857,45 @@ try {
         && warmState?.eff?.ceiling === 'warm' && warmState.warm === 1 && warmState.clean === 0 && warmState.meters?.ceiling >= 1
         && Math.abs(cleanAgain.peak - hot.peak) <= 0.004 && Math.abs(cleanAgain.hz1k - hot.hz1k) <= 0.3 && cleanState?.clean === 1 ? 'PASS' : 'FAIL',
       { warmFlat, flat, warm, hot140: hot, cleanAgain, colourDb: +colour.toFixed(1), warmState, cleanState }, 'objective-audio');
+
+    // ---- W-AUDIO-EXTREME (1.5.8, E-02): the doubled ends. Bass +28 really lifts 60 Hz beyond +14, Mid/High reach
+    // ±12 dB, and at the worst case (bass +28, mid/high +12, 250 %) every combination of the switches stays finite and
+    // under the sample ceiling. The defaults are not changed here; W-DYN-BASELINE above still holds the 1.4.0 sound. ----
+    const quiet = { ...BASE, gain: 0.5, autoBalance: false };
+    const b14 = await scenario({ ...quiet, bass: 14 });
+    const b28 = await scenario({ ...quiet, bass: 28 });
+    const ends = await scenario({ ...quiet, bass: 0, mid: 12, high: 12 });
+    const cuts = await scenario({ ...quiet, bass: 0, mid: -12, high: -12 });
+    const flatQ = await scenario({ ...quiet, bass: 0 });
+    const extremeP = { ...BASE, bass: 28, mid: 12, high: 12, gain: 2.5 };
+    const combos = [];
+    for (const limiter of ['fast', 'lookahead']) for (const ceiling of ['clean', 'warm']) {
+      combos.push({ autoBalance: false, dyn: { ...DEFAULT_DYN, limiter, ceiling } });
+      for (const leveler of ['full', 'slow', 'bass']) combos.push({ autoBalance: true, dyn: { ...DEFAULT_DYN, leveler, limiter, ceiling } });
+    }
+    combos.push({ autoBalance: true, dyn: { ...DEFAULT_DYN, match: true } });
+    const extreme = [];
+    for (const c of combos) {
+      await setDyn(c.dyn);
+      const r = await scenario({ ...extremeP, autoBalance: c.autoBalance }, 800);
+      extreme.push({ ...c, peak: r?.peak, hz60: r?.hz60, hz1k: r?.hz1k, ok: !!r && [r.peak, r.hz60, r.hz1k, r.hz8k].every(Number.isFinite) && r.peak <= 0.967 });
+    }
+    await setDyn(DEFAULT_DYN);
+    // The screen at the worst case with AUTO on: a bar's aria-valuenow stays inside its declared 0..12 while the figure and
+    // the screen-reader text carry the true reading, which can be larger.
+    await setParams({ ...extremeP, autoBalance: true });
+    await sleep(1400);
+    const extremeMeters = await popup.evaluate(() => ['comp', 'match', 'limiter', 'ceiling'].map((k) => {
+      const bar = document.getElementById(`meter-${k}`), val = document.getElementById(`val-${k}`);
+      return { k, now: +bar.getAttribute('aria-valuenow'), max: +bar.getAttribute('aria-valuemax'), text: bar.getAttribute('aria-valuetext'), shown: val.textContent };
+    }));
+    const lift = b14 && b28 ? +(b28.hz60 - b14.hz60).toFixed(1) : null;
+    record('W-AUDIO-EXTREME', 'Doubled ranges (1.5.8): bass +28 lifts 60 Hz at least 10 dB beyond +14 with 1 kHz within 1 dB; mid and high +12 lift 1 kHz and 8 kHz by 10 dB or more and −12 cuts them by 10 dB or more; at bass +28, mid/high +12, 250 % all 17 switch combinations stay finite and at or under 0.967; meter aria-valuenow stays within 0..12 and the screen-reader text matches the figure',
+      lift !== null && lift >= 10 && Math.abs(b28.hz1k - b14.hz1k) <= 1 && ends && cuts && flatQ
+        && ends.hz1k - flatQ.hz1k >= 10 && ends.hz8k - flatQ.hz8k >= 10 && flatQ.hz1k - cuts.hz1k >= 10 && flatQ.hz8k - cuts.hz8k >= 10
+        && extreme.length === 17 && extreme.every((e) => e.ok)
+        && extremeMeters.every((m) => m.now >= 0 && m.now <= m.max && m.max === 12 && m.text === m.shown) ? 'PASS' : 'FAIL',
+      { b14, b28, liftBeyond14: lift, flatQ, ends, cuts, extreme, extremeMeters }, 'objective-audio');
 
     // W-DYN-METERS-UI: the screen's bars and figures follow the engine while the EQ works (AUTO on, worst case: the leveler,
     // the limiter and the ceiling all show work), the match reads 0.0 dB while off, and a menu change and the MATCH tag persist.

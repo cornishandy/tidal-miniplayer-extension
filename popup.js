@@ -116,8 +116,10 @@ function stopFrames() {
 }
 
 // ---------- Dynamics meters ----------
-// Each bar is how much that stage is turning the music down right now, 0 to 12 dB (the match bar: the size of its
-// trim, signed in the figure). Values fall at about 20 dB/s on screen so short limiter hits stay visible.
+// Each bar is how much that stage is turning the music down right now, full at 12 dB (the match bar: the size of its
+// trim, signed in the figure). The figure is the true reading and keeps counting past 12 dB; so does the screen-reader
+// text, while aria-valuenow stays inside the declared 0 to 12 (1.5.8). Values fall at about 20 dB/s on screen so short
+// limiter hits stay visible.
 const METER_MAX_DB = 12;
 const METER_FALL_PER_FRAME = 1.4;
 function updateMeters(dyn) {
@@ -128,6 +130,7 @@ function updateMeters(dyn) {
       m.bar.firstElementChild.style.width = '0%';
       m.bar.classList.remove('warn', 'heavy');
       m.bar.setAttribute('aria-valuenow', '0');
+      m.bar.removeAttribute('aria-valuetext');
       m.val.textContent = 'idle';
       m.val.classList.add('idle');
       continue;
@@ -139,9 +142,10 @@ function updateMeters(dyn) {
     m.bar.firstElementChild.style.width = `${pct.toFixed(1)}%`;
     m.bar.classList.toggle('warn', m.shown >= 3 && m.shown < 8);
     m.bar.classList.toggle('heavy', m.shown >= 8);
-    m.bar.setAttribute('aria-valuenow', m.shown.toFixed(1));
+    m.bar.setAttribute('aria-valuenow', Math.min(METER_MAX_DB, m.shown).toFixed(1));
     const signed = key === 'match' ? raw : -size;
     m.val.textContent = `${signed > 0.05 ? '+' : signed < -0.05 ? '−' : ''}${Math.abs(signed).toFixed(1)} dB`;
+    m.bar.setAttribute('aria-valuetext', m.val.textContent);
     m.val.classList.remove('idle');
   }
   if (dyn && dyn.available === false && !dynUnavailableTold) {

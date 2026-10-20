@@ -624,7 +624,7 @@ input:checked + .slider-round:before {
 }
 
 /* Dynamics rows (AUTO, MATCH, LIM, CEIL): the stage's name and its mode menu in the label cell, a live bar where the
-   slider would be, and the figure at the right. The bar is how much the stage is turning the music down (0 to 12 dB). */
+   slider would be, and the figure at the right. The bar is how much the stage is turning the music down (full at 12 dB). */
 .dyn-label {
   display: flex;
   align-items: center;

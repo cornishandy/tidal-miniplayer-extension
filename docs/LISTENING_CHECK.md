@@ -17,7 +17,17 @@ Written 2026-10-03 at your request ("tell me more about what good is here and wh
 
 Bold = the default = the 1.4.0 sound. The modes are engine settings, not preset values: switching presets does not change them, so you can compare a mode across presets. They persist.
 
-**How to compare.** Pick the heaviest preset you use, play a track with a kick, a voice and hi-hats. 1) Watch the AUTO bar during the loud part: steady amber or red is the leveler working hard. 2) Switch Leveler to Bass only; the voice and the hats should stop dipping with the kick; then try Slow release. 3) Switch MATCH on and leave it on while comparing anything else, so loudness stops fooling you. 4) At high Master settings, switch Limiter to Look-ahead and listen to the kick's attack; then Ceiling to Warm. Report in the same words as before: which switch, which preset, which track, roughly when, and which row of the table it sounded like.
+**How to compare.** Pick the heaviest preset you use, play a track with a kick, a voice and hi-hats. 1) Watch the AUTO bar during the loud part: steady amber or red is the leveler working hard. 2) Switch Leveler to Bass only; the voice and the hats should dip much less with the kick, but it also turns the boosted bass down, which you may not want (you didn't, for music: 2026-10-19); then try Slow release. 3) Try MATCH on while comparing, so loudness stops fooling you; it can run out of room at very large boosts or cuts. 4) At high Master settings, switch Limiter to Look-ahead and listen to the kick's attack; then Ceiling to Warm. Report in the same words as before: which switch, which preset, which track, roughly when, and which row of the table it sounded like.
+
+## Big settings (1.5.8, decision E-02)
+
+Since 1.5.8 Bass goes to +28 dB and Mid and High to −12 / +12 dB (they were +14 and ±6), here and in Movie Sound. Nothing else changed: the same filters, the same switches with the same defaults, and your presets keep their numbers, so anything you could set before sounds exactly as it did.
+
+Keep the modes you already like. The larger numbers give you more room to adjust; they do not guarantee more bass at the output. Start from familiar settings at a low, comfortable volume (turn the iFi down first), then raise one band a little at a time. For music, listen for bass weight and kick punch; for films, listen for dialogue staying clear during impacts. If you hear fizz, flattened kicks or voices dipping, lower the boost first. Lowering Master eases the limiter, but it comes after the leveler and cannot undo that stage's pumping. Bass only is optional: it reduces bass-driven dips in voices, but it also turns the bass down. MATCH can run out of adjustment at very large boosts or cuts; it does not guarantee equal loudness.
+
+Measured silently at Master 250 % (Sol, 2026-10-19, offline renders): with the default switches a steady deep bass note carries about 5.3 % distortion at the new maximum (3.4 % at the old one), and voices dip about 29 dB under bass hits with Bass and Mid at the new maximum (17 dB at the old one). Very sharp peaks can still pass the −0.3 dBFS ceiling slightly between samples; that was already true before 1.5.8. New options that keep a big boost without squashing it are being researched (your "Research first", 2026-10-19); nothing new is built until you choose.
+
+The bars are full at 12 dB; the figure beside each one keeps counting above that. The response drawing above the EQ is approximate and runs off its ±24 dB scale at very large settings.
 
 ## Why there is a check at all
 
@@ -55,7 +65,7 @@ Kept at your request of 2026-10-04 ("let's remember that note"). With MATCH on, 
 
 1. **AUTO off, Master at 100 % or below.** Punchier; the limiter and the ceiling alone keep you safe. If it still sounds clean, you may not want the leveler at all for that preset.
 2. **HPF from 30 up to 40 Hz on the heavy presets.** Tighter bass, more headroom, less work for the leveler. Most music has nothing useful below 40 Hz.
-3. **Turn Master down as you turn Bass up.** Roughly: every +6 dB of bass, take Master to about 70 %. Then nothing limits at all and the boost is pure tone, not loudness.
+3. **Turn Master down as you turn Bass up.** It eases the limiter, so more of the boost is tone rather than loudness. It comes after the leveler, though, so it cannot undo the leveler's pumping, and Master's lowest setting (50 %, −6 dB) cannot offset a large boost (1.5.8: up to +28 dB).
 4. **Compare "Deep Sub-Bass" with "Clean DJ (Anti-Distortion)"** on the same track. The second is built around headroom (HPF 35, bass +4.5); the difference you hear is the trade-off in this document.
 
 ## Alternatives in the design (your call of 2026-10-04: built as switches, see the table at the top)
@@ -63,7 +73,7 @@ Kept at your request of 2026-10-04 ("let's remember that note"). With MATCH on, 
 | Option | What it does | Pro | Con | 1.5.0 |
 |---|---|---|---|---|
 | Slower leveler release | Let go in 600 ms instead of 200 ms | Less pumping on dense bass | Slower recovery after a loud passage | Leveler → Slow release |
-| Bass-only (multiband) leveler | Level only below 150 Hz | Voice and hats never duck; the usual design for bass boosters | The kick can sound a little less tied to the rest | Leveler → Bass only |
+| Bass-only (multiband) leveler | Level only below 150 Hz | Voice and hats duck much less (the limiter can still turn the whole mix down); the usual design for bass boosters | It turns the boosted bass down too (no make-up gain), so a big boost is partly taken back; the kick can sound a little less tied to the rest | Leveler → Bass only |
 | Automatic gain compensation | Keep the loudness where the untouched tab had it | You hear tone, not loudness; the limiter rests | The trim follows the music over a few seconds (section changes can be heard as a slow level change) | MATCH tag |
 | Look-ahead limiter | See peaks 5 ms early and turn down before them | Cleaner peaks, nothing left for the ceiling | 5 ms of delay while selected | Limiter → Look-ahead |
 | Gentle saturation instead of a hard ceiling | Round the loudest peaks deliberately | Some like the warmth on bass | It is distortion by design; not transparent | Ceiling → Warm |
