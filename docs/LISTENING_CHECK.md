@@ -31,7 +31,7 @@ Earlier measurements at Master 250 % (Sol, 2026-10-19, silent offline renders of
 
 The bars are full at 12 dB; the figure beside each one keeps counting above that. The response drawing above the EQ is approximate and runs off its ±24 dB scale at very large settings.
 
-From 1.5.10, a red `cut N dB` under LOW, MID or HI reports how much of that band's requested boost is being taken back in the measured audio, with a red slider tick at the value minus the cut; it needs sound in that band and hides while idle, bypassed or pitch-shifted.
+From 1.5.10, a red `cut N dB` under LOW, MID or HI reports how much of that band's requested boost is being taken back in the measured audio, with a red slider tick at the value minus the cut. A band's cut never reads below the limiter's reduction plus the full-band Leveler's, minus MATCH gain. It needs sound in that band and hides while idle, bypassed or pitch-shifted.
 
 ## Why there is a check at all
 
