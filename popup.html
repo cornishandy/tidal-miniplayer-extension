@@ -76,9 +76,9 @@
 
         <!-- Physics: the live spectrum of the processed audio (grey = in, colour = out) and the settings' response curve -->
         <div class="physics">
-          <div class="phys-hdr"><span>PHYSICS</span><em id="physics-readout" title="Top: live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear). Bottom: an approximate drawing of the response your settings make (±24 dB; very large settings run off the top)."></em></div>
+          <div class="phys-hdr"><span>PHYSICS</span><em id="physics-readout" title="Top: live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear). Bottom: Approximate EQ before dynamics (±24 dB; very large settings run off the top)."></em></div>
           <canvas id="live-canvas" class="phys-canvas live" role="img" aria-label="Live spectrum of the audio: grey is what the tab sends, colour is what you hear"></canvas>
-          <canvas id="bode-canvas" class="phys-canvas bode" role="img" aria-label="Approximate frequency response of the current settings; very large settings run off the scale"></canvas>
+          <canvas id="bode-canvas" class="phys-canvas bode" role="img" aria-label="Approximate EQ before dynamics; very large settings run off the scale"></canvas>
         </div>
 
         <!-- The stages, top to bottom in the order the audio passes through them (your request of 2026-10-04).
@@ -130,9 +130,16 @@
             <span class="eq-val" id="val-high" title="Double-click: neutral / restore">+2.0 dB</span>
           </div>
 
+          <div class="eq-row dyn-row" data-band="room">
+            <span class="band-tag static" title="Optional bass room processing. Pick Off to remove it.">ROOM</span>
+            <div class="eq-label dyn-label"><span>Room</span><select id="mode-room" class="mode-select" aria-label="Room mode"><option value="off" title="Room processing is off.">Off</option><option value="unmud" title="Reduces thick, boomy sound when bass is loud. Can also thin low voices.">Unmud</option><option value="centre" title="Makes very wide bass more centred. Some film effects may sound narrower.">Centre bass</option><option value="both" title="Unmud and Centre bass are on together.">Both</option></select></div>
+            <div class="gr-meter" id="meter-room" role="meter" aria-label="Unmud, actual 250 Hz dip" aria-valuemin="0" aria-valuemax="3" aria-valuenow="0"><i></i></div>
+            <span class="eq-val dyn-val idle" id="val-room" title="Unmud's 250 Hz dip; the bar is full at 3 dB. Centre bass has no activity meter.">idle</span>
+          </div>
+
           <div class="eq-row dyn-row" data-band="comp">
             <button class="band-tag" aria-pressed="true" data-band="comp" title="Auto-Balancing on. Click to switch it off.">AUTO</button>
-            <div class="eq-label dyn-label" title="Auto-Balancing (AUTO): a leveler that turns the music down when the boosted signal gets loud, so heavy presets stay listenable. Full band: the original, the whole mix is levelled (and lifted a little by Chrome's compressor). Slow release: the same, but it lets go three times more slowly, so it breathes less between kicks. Bass only: only what is below 150 Hz is levelled, so bass hits pull voices and hi-hats down much less (the limiter can still turn the whole mix down); it also turns the boosted bass down. The bar shows how much it is turning down right now."><span>Leveler</span><select id="mode-leveler" class="mode-select" aria-label="Leveler mode"><option value="full">Full band</option><option value="slow">Slow release</option><option value="bass">Bass only</option></select></div>
+            <div class="eq-label dyn-label" title="Auto-Balancing (AUTO): a leveler that turns the music down when the boosted signal gets loud, so heavy presets stay listenable. Full band: the original, the whole mix is levelled (and lifted a little by Chrome's compressor). Slow release: the same, but it lets go three times more slowly, so it breathes less between kicks. Bass only: only what is below 150 Hz is levelled, so bass hits pull voices and hi-hats down much less (the limiter can still turn the whole mix down); it also turns the boosted bass down. The bar shows how much it is turning down right now."><span>Leveler</span><select id="mode-leveler" class="mode-select" aria-label="Leveler mode"><option value="full">Full band</option><option value="slow">Slow release</option><option value="bass">Bass only</option><option value="peaks" title="Softens the tallest bass hits. Other sounds can still dip. Adds about 5 ms of delay and lowers overall level by 8 dB.">Bass peaks</option></select></div>
             <div class="gr-meter" id="meter-comp" role="meter" aria-label="Leveler, how much it is turning down" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><i></i></div>
             <span class="eq-val dyn-val idle" id="val-comp" title="How much the leveler is turning the music down right now. The bar is full at 12 dB; the figure keeps counting above that.">idle</span>
           </div>
@@ -155,7 +162,7 @@
 
           <div class="eq-row dyn-row" data-band="limiter">
             <span class="band-tag static" title="Safety limiter: always on, it cannot be switched off.">LIM</span>
-            <div class="eq-label dyn-label" title="Safety limiter, always on: catches peaks above −0.3 dB. Fast: the original, reacts within 1 ms, so the very fastest peaks slip past to the ceiling. Look-ahead: sees peaks 5 ms early and turns down smoothly before they arrive, so the ceiling has nothing to do; adds 5 ms of delay while selected. The bar shows how much it is turning down."><span>Limiter</span><select id="mode-limiter" class="mode-select" aria-label="Limiter mode"><option value="fast">Fast</option><option value="lookahead">Look-ahead</option></select></div>
+            <div class="eq-label dyn-label" title="Safety limiter, always on: catches peaks above −0.3 dB. Fast: the original, reacts within 1 ms, so the very fastest peaks slip past to the ceiling. Look-ahead: sees peaks 5 ms early and turns down smoothly before they arrive, so the ceiling has nothing to do; adds 5 ms of delay while selected. The bar shows how much it is turning down."><span>Limiter</span><select id="mode-limiter" class="mode-select" aria-label="Limiter mode"><option value="fast">Fast</option><option value="lookahead">Look-ahead</option><option value="truepeak" title="Catches peaks between audio samples. Adds about 6 ms of delay.">True peak</option></select></div>
             <div class="gr-meter" id="meter-limiter" role="meter" aria-label="Limiter, how much it is turning down" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><i></i></div>
             <span class="eq-val dyn-val idle" id="val-limiter" title="How much the limiter is turning the peaks down right now. The bar is full at 12 dB; the figure keeps counting above that.">idle</span>
           </div>

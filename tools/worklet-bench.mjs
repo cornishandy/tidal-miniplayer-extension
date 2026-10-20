@@ -59,11 +59,18 @@ for (const fs of rates) {
     ['pitch-shifter (0 st)', bench(pitch['pitch-shifter'], fs, 1, { semitones: new Float32Array([0]) })],
     ['band-leveler', bench(dyn['band-leveler'], fs, 1, {})],
     ['loudness-match', bench(dyn['loudness-match'], fs, 2, {})],
-    ['lookahead-limiter', bench(dyn['lookahead-limiter'], fs, 1, {})]
+    ['lookahead-limiter', bench(dyn['lookahead-limiter'], fs, 1, {})],
+    ['bass-peaks', bench(dyn['bass-peaks'], fs, 1, {})],
+    ['unmud', bench(dyn.unmud, fs, 2, {})],
+    ['centre-bass', bench(dyn['centre-bass'], fs, 1, {})],
+    ['true-peak', bench(dyn['true-peak'], fs, 1, {})]
   ];
   const sum = new Float64Array(runs[0][1].length);
   for (const [, t] of runs) for (let i = 0; i < sum.length; i++) sum[i] += t[i];
-  runs.push(['all four, same block', sum]);
+  runs.push(['all active + unused legacy worklets, conservative sum', sum]);
+  const shifted = bench(pitch['pitch-shifter'], fs, 1, { semitones: new Float32Array([2]) });
+  const pitched = Float64Array.from(sum, (v,i) => v - runs[0][1][i] + shifted[i]);
+  runs.push(['worst selectable + Pitch +2, conservative sum', pitched]);
   for (const [name, t] of runs) {
     const warm = Array.from(t.slice(Math.floor(t.length * 0.1))).sort((a, b) => a - b); // skip JIT warm-up
     const over = warm.filter((x) => x > budgetMs).length;
@@ -72,5 +79,6 @@ for (const fs of rates) {
       max_ms: +warm[warm.length - 1].toFixed(3), load_pct: +(100 * meanMs / budgetMs).toFixed(1), blocks_over_budget_per_s: +(over / (warm.length * N / fs)).toFixed(2) });
   }
 }
-console.table(rows);
+if (process.env.BENCH_JSON) console.log(JSON.stringify({ node: process.version, seconds, rows }, null, 2));
+else console.table(rows);
 console.log(`node ${process.version}; ${seconds} s of audio per stage and rate; block = ${N} frames.`);

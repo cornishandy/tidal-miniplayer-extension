@@ -25,7 +25,7 @@ Since 1.5.8 Bass goes to +28 dB and Mid and High to −12 / +12 dB (they were +1
 
 Keep the modes you already like. The larger numbers give you more room to adjust; they do not guarantee more bass at the output. Start from familiar settings at a low, comfortable volume (turn the iFi down first), then raise one band a little at a time. For music, listen for bass weight and kick punch; for films, listen for dialogue staying clear during impacts. If you hear fizz, flattened kicks or voices dipping, lower the boost first. Lowering Master eases the limiter, but it comes after the leveler and cannot undo that stage's pumping. Bass only is optional: it reduces bass-driven dips in voices, but it also turns the bass down. MATCH can run out of adjustment at very large boosts or cuts; it does not guarantee equal loudness.
 
-Measured silently at Master 250 % (Sol, 2026-10-19, offline renders): with the default switches a steady deep bass note carries about 5.3 % distortion at the new maximum (3.4 % at the old one), and voices dip about 29 dB under bass hits with Bass and Mid at the new maximum (17 dB at the old one). Very sharp peaks can still pass the −0.3 dBFS ceiling slightly between samples; that was already true before 1.5.8. New options that keep a big boost without squashing it are being researched (your "Research first", 2026-10-19); nothing new is built until you choose.
+Measured silently at Master 250 % (Sol, 2026-10-19, offline renders): with the default switches a steady deep bass note carries about 5.3 % distortion at the new maximum (3.4 % at the old one), and voices dip about 29 dB under bass hits with Bass and Mid at the new maximum (17 dB at the old one). Very sharp peaks can still pass the −0.3 dBFS ceiling slightly between samples; that was already true before 1.5.8. The selectable alternatives authorized on 19 October are described below; they do not change these default-mode measurements.
 
 The bars are full at 12 dB; the figure beside each one keeps counting above that. The response drawing above the EQ is approximate and runs off its ±24 dB scale at very large settings.
 
@@ -87,3 +87,36 @@ Guide: pumping points to Bass only or Slow release; fizz at peaks to Look-ahead;
 2. Play a bass-heavy track you know well, at the volume you normally use, for a minute. Then a track with a clear voice and hi-hats.
 3. Listen for the table above. Flip the AUTO switch off and on while a loud passage plays; flip AUDIO EQ off and on.
 4. Report one of: "clean"; or the preset, the track, roughly when, and which row of the table it sounded like.
+
+## Optional bass controls — 1.6.0 (D-09)
+
+These are for a later comparison when you are ready; this build was tested without sound. Keep your amp at a comfortable fixed setting. Bass peaks lowers overall level by 8 dB: avoid turning the amp up to compensate while switching between modes.
+
+Try them in this order, one change at a time:
+
+1. **Bass peaks** in Leveler: leaves ordinary bass alone and softens its tallest hits. It keeps more of the extra bass than Bass only. Voices can still dip, and it lowers the whole output by 8 dB. AUTO's bar shows the extra bass-peak reduction, not that fixed reserve. Adds about 5 ms of buffering while selected; AUTO off removes it.
+2. **Unmud** in Room: when deep bass is loud, dips the thick 250 Hz region by at most 3 dB. It can thin low voices. Its bar is full at 3 dB. **Unmud alone does not prevent voice ducking**; it makes room in tone, not enough peak headroom for the whole mix.
+3. **True peak** in Limiter: sees peaks between samples and turns down smoothly before they arrive. Adds about 6 ms; both Clean and Warm remain available afterward. LIM shows gain reduction, not a true-peak level meter. Clean gives the closest measured match to the low-distortion prototype; Warm deliberately adds colour and has looser distortion/voice bounds.
+4. **Centre bass** in Room: narrows unusually wide bass. Mono is untouched; side bass approaches an 8 dB reduction very deep down, is 4 dB down at 100 Hz and nearly unchanged by 1 kHz. Anti-phase bass is reduced, not recovered as centre content. Some film effects narrow. Centre alone has no activity meter (“—”). **Both** combines it with Unmud; the bar still measures only Unmud.
+
+At Master 250%, HPF 20 Hz, High 0, MATCH off, silent production renders reproduced the research's useful figures:
+
+| Bass / Mid | Bass peaks + limiter / ceiling | Surviving 60 Hz boost | Music / film-body dip | Normal / hot 60 Hz THD+N |
+|---|---|---:|---:|---:|
+| 14 / 6 | True peak / Clean | 12.87 dB | −0.005 / −0.14 dB | 0.002 / 0.028% |
+| 28 / 12 | Fast / Clean | 17.06 dB | −0.64 / −0.68 dB | 0.030 / 2.05% |
+| 28 / 12 | Look-ahead / Clean | 17.06 dB | −1.01 / −1.75 dB | 0.030 / 0.048% |
+| 28 / 12 | True peak / Clean | 17.06 dB | −0.97 / −1.59 dB | 0.030 / 0.062% |
+| 28 / 12 | True peak / Warm | 15.88 dB | −1.34 / −3.40 dB | 4.52 / 6.39% |
+
+These are 48 kHz synthetic fixtures, not judgments of speech intelligibility. Both 48 and 96 kHz pass the specified bounds. “Surviving boost” compares Bass to Bass 0 at the same Mid/trim/Master; it is not absolute input-to-output gain. Normal/hot amplitudes are 0.1/0.8. Post-ceiling independent 4×/8× tests include impulses at all block offsets, high-frequency phase sweeps, hot tones, pink noise and stereo-only peaks. Fast/Clean's historical intersample overshoot remains; True peak is the selectable protection for that.
+
+Unmud's isolated full cut is −3.00 dB at 250 Hz, −0.132 dB at 60 Hz and −0.143 dB at 1 kHz. Its pre-shelf key uses stereo power, so inverted bass triggers the same dip. Centre bass's mono null is exact in the fixture. True peak's linked-attack fixture has maximum adjacent jumps 0.002356 / 0.001178 at 48/96 kHz, within the tone's natural slope.
+
+Switches crossfade over 40 ms. A brief deliberate dip lets a temporary alignment delay be removed without a click; rapid changes coalesce to the latest setting. New stages are disconnected and parked when off, so they add no buffering then. Full + Fast has 12 ms native compressor predelay; Bass peaks + True peak has 10.708/10.354 ms at 48/96 kHz. Warm adds a measured 192 samples (4/2 ms), in addition to those totals. Capture, device buffers and IIR phase are separate.
+
+Saving or updating a custom preset includes Room and the new values. An older snapshot with saved switches but no Room restores Room Off. An EQ-only preset leaves all switches as they are. A failed new stage mutes the engine and shows an error until you stop and restart; it does not silently switch to a louder alternative.
+
+Headroom is deferred: recovering 26–40 dB automatically after you have raised the amp risks a loud surprise. A persistent hold with explicit confirmation needs a separate design first.
+
+The Node CPU comparison (M1 Pro, 10 seconds per stage/rate, including unused legacy worklets) measured the new stages plus MATCH at 0.400/0.406 ms mean per 128 frames at 48/96 kHz; p99 was 0.489/0.539 ms. Including active Pitch +2 gave 0.447/0.462 ms mean and 1.002/2.318 ms p99. The 96 kHz frame budget is 1.333 ms: that existing Pitch-heavy combination exceeds it at p99 in Node. Pitch remains unchanged and is locked off in Movie mode. These are conservative JS cost comparisons; native stages and real Chrome/DAC scheduling remain unmeasured, so they do not establish dropout-free playback. A separate authorised real-time check is needed for that claim.

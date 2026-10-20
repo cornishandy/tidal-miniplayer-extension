@@ -67,3 +67,16 @@ Kept at your request ("keep all the open items available"). Each has its questio
 | Low-delay switch & Pitch lock for video (L-01 in 1.5.5, L-02 in 1.5.6) | 2026-10-11 | Your check: play a video with the EQ on and Pitch at 0. The MOVIE button should read MOVIE · AUTO and the sound should sit closer to the picture. Click it to force the large buffer (MOVIE · OFF) or the short one (MOVIE · ON). Shift-click returns to automatic. Music with no video should stay on the large buffer (MOVIE) | — |
 | Jumps on a narrow Tidal page; +30 s near the end goes to the next track (J-01, J-02, built in 1.5.3) | 2026-10-11 | Your check on real Tidal: +30 with the panel wide, and +30 in the last 30 s | — |
 | EQ after a restart or a tab reload: one icon click turns it on (E-01, built in 1.5.4) | 2026-10-11 | Your check: after a Chrome restart, turn AUDIO EQ on in the panel; if refused, click OK, then the icon once; the switch should flip to on within a second and the panel stay open | — |
+
+## D-09 additions — 1.6.0
+
+| Surface or contract | Implementation and verification |
+|---|---|
+| Room row and new entries | Popup/panel/window share one HTML; 150/100 px cells, unchanged font sizes; W-BR-UI covers 300–480 px panel, longest modes, Saved/Modified states, Room meters and Movie Sound desktop/narrow columns; W-NO-DEAD-SPACE and W-PANEL-LAYOUT remain release checks |
+| Remembering all switches | Room plus peaks/truepeak in every normaliser, Modified, preset snapshots and Movie validator; presetRev CAS retained; unit preset-switches and Movie follow-chrome cover legacy snapshots, EQ-only entries, bad choices, Save/Update/Reset/reopen and stale/rapid operations |
+| Frozen default | W-DYN-BASELINE retained; W-BR-GOLDEN compares full extension Float32 renders to 27ac887; W-BR-MOVIE-GOLDEN compares Movie Sound to d0f171b; W-BR-RESTORE checks settled probes, peaks and zero extra buffering after turning everything new off |
+| Actual DSP and protection | W-BR-BOUNDS (144 long renders), W-BR-MATRIX (384 combinations), W-BR-TRUEPEAK (post-ceiling independent 4×/8×), W-BR-UNMUD, W-BR-CENTRE, W-BR-ATTACK, W-BR-ENDURANCE; byte-identical worklets and cross-app graph comparison |
+| Transitions, parking and failure | W-BR-SWITCH: every selector pair and 100 rapid changes, complementary gains including ceiling, buffering alignment, intentional versus unplanned gaps, no new callbacks after off; W-BR-FAIL-CLOSED; Node missing-input/park/reset/mono/2³¹ tests |
+| Headroom | Deferred under D-09; no menu entry or processor; unsafe automatic volume return needs a separate hold-and-confirm design |
+
+This is implementation evidence. Andy's look/listening and the coordinator's independent code/final reviews are pending; no live installation was performed.

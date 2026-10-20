@@ -542,3 +542,21 @@ test('60 s of Bass peaks + Unmud + Centre bass + True peak stays finite', () => 
   assert.equal(nonFinite, 0);
   assert.ok(peak > 0 && peak < 2, `peak ${peak}`);
 });
+
+test('all D-09 processors park/reset, drain missing input, handle mono and cross 2^31 without stale audio', () => {
+  for(const fs of [48000,96000]) for(const name of ['unmud','centre-bass','bass-peaks','true-peak']) {
+    const reg=load(fs),p=new reg[name](),x=blockPair(),y=blockPair();x[0].fill(.5);x[1].fill(-.25);
+    const ins=name==='unmud'?[x,x]:[x];
+    for(let b=0;b<20;b++)p.process(ins,[y]);
+    for(let b=0;b<100;b++)p.process(name==='unmud'?[[],[]]:[[]],[y]);
+    assertFinite(y[0],name+' empty');assertFinite(y[1],name+' empty R');
+    p.port.onmessage({data:{type:'park'}});assert.equal(p.process(ins,[y]),false);
+    assert.ok(y.every(ch=>ch.every(v=>Math.abs(v)<=1e-7)),name+' park leaked audio');
+    const fresh=new reg[name]();if('n'in fresh)fresh.n=2**31-64;
+    for(let b=0;b<10;b++) { fresh.process(name==='unmud'?[[x[0]],[x[0]]]:[[x[0]]],[y]);assertFinite(y[0],name+' mono');assertFinite(y[1],name+' mono R'); }
+    const noOutput=new reg[name]();noOutput.port.onmessage({data:{type:'park'}});assert.equal(noOutput.process([], [[]]),false,name+' park without output');
+    const reset=new reg[name]();reset.port.onmessage({data:{type:'park'}});reset.process(ins,[y]);
+    reset.parkRequested=false;const z=blockPair();reset.process(name==='unmud'?[z,z]:[z],[y]);
+    assert.ok(y.every(ch=>ch.every(v=>Math.abs(v)<=1e-7)),name+' replayed after reset');
+  }
+});

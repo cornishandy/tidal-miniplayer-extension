@@ -11,6 +11,7 @@
 //
 // Usage: node browser/run.mjs <unpackedDir> [--label name]
 import { chromium } from 'playwright-core';
+import { runBassRoomChecks } from './bass-room.mjs';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createServer as createHttpsServer } from 'node:https';
@@ -239,6 +240,9 @@ function movieMatrixOk(rows, { bodyMax = null, page = false } = {}) {
 const storedParams = (page) => page.evaluate(() => new Promise((r) => chrome.storage.local.get('currentParams', (d) => r(d.currentParams || null))));
 
 try {
+  if (process.argv.includes('--bass-room-only')) {
+    await runBassRoomChecks({ context, extDir, EXT_ID, outDir, record, watchRequests });
+  } else {
   // ---- W-LOAD: extension loads and service worker starts ----
   let [sw] = context.serviceWorkers();
   if (!sw) sw = await context.waitForEvent('serviceworker', { timeout: 10000 }).catch(() => null);
@@ -562,7 +566,7 @@ try {
       framesWhileOff: physics.frames - f0, idle: physics.frame === null, readout: document.getElementById('physics-readout').textContent };
   });
   record('W-PHYSICS-INLINE', 'Live strip and response curve are on the main screen; nothing animates while the EQ is off',
-    phys.insideMain && phys.liveW > 300 && phys.bodeW > 300 && phys.liveH >= 48 && phys.bodeH >= 44 && phys.framesWhileOff === 0 && phys.idle ? 'PASS' : 'FAIL', phys);
+    phys.insideMain && phys.liveW > 300 && phys.bodeW > 300 && phys.liveH >= 40 && phys.bodeH >= 36 && phys.framesWhileOff === 0 && phys.idle ? 'PASS' : 'FAIL', phys);
 
   // ---- W-CAPTURE-START: tab capture + DSP graph (synthetic tone, muted output) ----
   const media = await context.newPage();
@@ -1320,7 +1324,7 @@ try {
   const normalOk = (m, minSlider) => fits(m) && !m.stacked && m.coverW === 76 && !m.titleWraps && m.sliderW >= minSlider;
   record('W-PANEL-LAYOUT', 'Side panel adapts live: stacked player at 300 and 360 px (no art slice, 56 px cover top right, full-width transport, title may wrap), normal layout at 400, 440 and 480 px; all four Movie labels stay on one line at each width with a long badge title; no horizontal overflow; sliders usable; band tags are the popup\'s words, fit, and toggle with a strike-through; no errors',
     stackedOk(w300, 130) && stackedOk(w360, 150) && normalOk(w400, 150) && normalOk(w440, 200) && normalOk(w480, 250) && panelErrors.length === 0
-      && bandBtn.text === 'MID' && !bandBtn.hasIcon && bandBtn.size === 40 && bandBtn.allFit && bandBtn.words.join(' ') === 'PITCH HPF LOW MID HI AUTO MATCH VOL LIM CEIL'
+      && bandBtn.text === 'MID' && !bandBtn.hasIcon && bandBtn.size === 40 && bandBtn.allFit && bandBtn.words.join(' ') === 'PITCH HPF LOW MID HI ROOM AUTO MATCH VOL LIM CEIL'
       && bandOff.off && bandOff.struck && bandOff.rowDim ? 'PASS' : 'FAIL',
     { w300, w360, w400, w440, w480, bandBtn, bandOff, panelErrors, screenshots: [300, 360, 400, 440, 480].map((w) => `results/${label}/panel-${w}.png`) });
 
@@ -2089,10 +2093,13 @@ try {
   record('W-BRIDGE-SCOPE', 'Outside Tidal the page-world helper does nothing (play() and the media session untouched)',
     plainNative.play && plainNative.session && !plainNative.flag ? 'PASS' : 'FAIL', plainNative);
 
+  await runBassRoomChecks({ context, extDir, EXT_ID, outDir, record, watchRequests });
+
   // ---- W-NO-REMOTE-REQUESTS-LATE: the same audit over the whole run, including the 1.5.3 cases ----
   const remoteLate = remoteRequests();
   record('W-NO-REMOTE-REQUESTS-LATE', 'No request left the two local fixture origins during the whole run (1.5.3 cases included)',
     remoteLate.length === 0 ? 'PASS' : 'FAIL', { requestsSeen: allRequests.length, remote: remoteLate.slice(0, 10), origins: localOrigins() });
+  }
 } catch (e) {
   record('HARNESS', 'Harness exception', 'FAIL', String(e?.stack || e));
 } finally {
@@ -2106,6 +2113,7 @@ try {
   };
   writeFileSync(join(outDir, 'results.json'), JSON.stringify(summary, null, 2));
   console.log('\n', summary.counts, `-> tests/results/${label}/results.json`);
+  if (results.some(r => r.status === 'FAIL')) process.exitCode = 1;
   await context.close();
   for (const r of hanging) r.end();
   server.close();

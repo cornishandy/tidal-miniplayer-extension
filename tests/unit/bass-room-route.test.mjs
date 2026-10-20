@@ -44,7 +44,7 @@ function load() {
       port: {
         onmessage: null,
         posts: [],
-        postMessage(data) { this.posts.push(data); },
+        postMessage(data) { this.posts.push(data); if (data.type === 'park' && this.onmessage) this.onmessage({ data: { parked: true } }); },
         close() { this.closed = true; }
       },
       connect(dest, out = 0, inp = 0) {
@@ -56,7 +56,7 @@ function load() {
         this._edges.push({ dest, out, inp });
       },
       disconnect(dest) {
-        if (dest === undefined) { this._edges.length = 0; return; }
+        if (dest == null) { this._edges.length = 0; return; }
         const i = this._edges.findIndex((e) => e.dest === dest);
         if (i < 0) throw new Error('not connected');
         this._edges.splice(i, 1);
@@ -162,7 +162,8 @@ function load() {
       wired: false,
       live: false,
       _br: null,
-      dynError: null
+      dynError: null,
+      outputSum: makeNode('output')
     };
     g.autoBalanceComp.release = { value: 0.2 };
     return g;
@@ -376,7 +377,7 @@ test('centre and both, and true peak replaces the limiter then leaves it', () =>
   env.assertSums(g, 'all off');
 });
 
-test('a failed bass-peaks or true-peak create falls back visibly and does not leave the new node in the graph', () => {
+test('a failed optional stage reports an error and latches output mute until restart', () => {
   const env = load();
   const g = env.graph();
   settle(env, g);
@@ -388,7 +389,9 @@ test('a failed bass-peaks or true-peak create falls back visibly and does not le
   assert.equal(g._br.peaks, null);
   assert.equal(g._br.postSpliced, false);
   assert.match(env.api.err(), /Bass peaks/);
-  assert.equal(env.held(g.autoBalanceWetGain), 1, 'fallback was not Full band');
+  assert.equal(g._br.fatal, true);
+  assert.equal(env.held(g.outputSum), 0);
+  assert.equal(env.held(g.directPassThroughGain), 0);
   const tp = load();
   const g2 = tp.graph();
   settle(tp, g2);
@@ -399,8 +402,11 @@ test('a failed bass-peaks or true-peak create falls back visibly and does not le
   assert.equal(g2._br.tpFailed, true);
   assert.equal(g2._br.appliedLimiter, 'lookahead');
   assert.match(tp.api.err(), /True peak/);
-  assert.equal(tp.held(g2.lookaheadGain), 1);
-  assert.equal(tp.held(g2.limiterFastGain), 0);
+  assert.equal(g2._br.fatal,true);
+  assert.equal(tp.held(g2.outputSum),0);
+  tp.api.setDyn({room:'off',leveler:'full',limiter:'fast'});tp.api.apply(g2,{immediate:true});
+  assert.equal(tp.held(g2.outputSum),0,'a later default must not release the failure mute');
+  assert.equal(tp.held(g2.directPassThroughGain), 0);
   assert.equal(g2.volumeGain.to(g2.masterLimiter), true);
   const room = load();
   const g3 = room.graph();
@@ -429,4 +435,12 @@ test('AUTO off does not run bass peaks; room still can', () => {
   assert.equal(g._br.appliedRoom, 'unmud');
   assert.equal(env.held(g.autoBalanceBypassGain), 1, 'AUTO off keeps the dry leveler');
   assert.equal(env.held(g.autoBalanceWetGain), 0);
+});
+
+test('a parked node error is ignored, but an active processorerror latches the visible mute', () => {
+  const e=load(),g=e.graph();settle(e,g);e.api.setDyn({room:'unmud',leveler:'full',limiter:'fast'});e.api.apply(g,{immediate:true});
+  const retired=g._br.unmud;e.api.setDyn({room:'off'});e.api.apply(g,{immediate:true});retired.onprocessorerror();
+  assert.equal(g._br.fatal,false,'a retired node muted the current graph');
+  e.api.setDyn({room:'unmud'});e.api.apply(g,{immediate:true});g._br.unmud.onprocessorerror();
+  assert.equal(g._br.fatal,true);assert.equal(e.held(g.outputSum),0);assert.match(e.api.err(),/output muted/);
 });

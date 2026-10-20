@@ -267,14 +267,15 @@ const DEFAULT_PRESETS = { ...FACTORY_PRESETS };
 // key is the sound in force. Factory definitions never carry it. A preset saved or updated from 1.5.8 may
 // store its own copy; a stored preset without that field is never rewritten to add one. The defaults are
 // the 1.4.0 chain.
-const DEFAULT_DYNAMICS = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+const DEFAULT_DYNAMICS = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' };
 function normaliseDynamics(d) {
   const x = d || {};
   return {
-    leveler: ['full', 'slow', 'bass'].includes(x.leveler) ? x.leveler : 'full',
+    leveler: ['full', 'slow', 'bass', 'peaks'].includes(x.leveler) ? x.leveler : 'full',
     match: x.match === true,
-    limiter: ['fast', 'lookahead'].includes(x.limiter) ? x.limiter : 'fast',
-    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean'
+    limiter: ['fast', 'lookahead', 'truepeak'].includes(x.limiter) ? x.limiter : 'fast',
+    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean',
+    room: ['off', 'unmud', 'centre', 'both'].includes(x.room) ? x.room : 'off'
   };
 }
 
@@ -324,7 +325,7 @@ function askOffscreen(message) {
     chrome.runtime.sendMessage(message, (res) => {
       const err = chrome.runtime.lastError;
       if (err) resolve({ ok: false, error: err.message || String(err) });
-      else resolve({ ok: true, res: res ?? null });
+      else resolve({ ok: res?.success !== false, error: res?.error || null, res: res ?? null });
     });
   });
 }
@@ -333,10 +334,11 @@ function askOffscreen(message) {
 // document's own acknowledgement, and is false when that document is closed or rejects the message.
 async function tellOffscreen(params, dynamics) {
   const acks = [];
-  if (params && typeof params === 'object') {
+  if (params && dynamics) {
+    acks.push(await askOffscreen({ target: 'offscreen', type: 'APPLY_ENGINE_STATE', params, dynamics }));
+  } else if (params && typeof params === 'object') {
     acks.push(await askOffscreen({ target: 'offscreen', type: 'UPDATE_AUDIO_PARAMS', params }));
-  }
-  if (dynamics) {
+  } else if (dynamics) {
     acks.push(await askOffscreen({ target: 'offscreen', type: 'SET_DYNAMICS', dynamics }));
   }
   const failed = acks.find((ack) => !ack.ok);

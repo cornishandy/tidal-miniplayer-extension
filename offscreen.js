@@ -69,7 +69,7 @@ let pitchHoldTimer = null;
 // Dynamics alternatives (1.5.0, decision D-01): switchable stages beside the 1.4.0 ones. The defaults route exactly
 // as 1.4.0 did; every alternative is a parallel path opened by a gain, so the default sound is unchanged (W-DYN-BASELINE).
 const DYN_WORKLET = 'dynamics.worklet.js';
-const DEFAULT_DYNAMICS = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+const DEFAULT_DYNAMICS = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' };
 let currentDynamics = { ...DEFAULT_DYNAMICS };
 let dynError = null;                                       // set if the worklet module could not be loaded
 let levelerOut = null;                                     // the sum of whichever leveler path is open
@@ -131,10 +131,11 @@ function normaliseDynamics(d) {
   };
 }
 
-// The modes actually in force. A missing worklet falls back audibly and sets dynError (no silent louder path).
+// Legacy modes retain their original fallback. A failed new stage latches a visible output mute until restart.
 // Bass peaks runs only while AUTO is on; the menu value is still reported. Room does not depend on AUTO.
 function effectiveDynamics() {
   const d = normaliseDynamics(currentDynamics);
+  if (br.fatal) return { ...d, match: d.match && !!matchNode };
   let leveler = d.leveler;
   let limiter = d.limiter;
   let room = d.room;
@@ -245,9 +246,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(latencyFields({ success: true, currentParams }));
       return true;
 
+    case 'APPLY_ENGINE_STATE':
+      if (message.target !== 'offscreen') return false;
+      currentDynamics = normaliseDynamics(message.dynamics);
+      updateParams(message.params);
+      sendResponse({ success: !br.fatal, error: dynError, dynamics: currentDynamics });
+      return true;
+
     case 'SET_DYNAMICS':
       updateDynamics(message.dynamics);
-      sendResponse({ success: true, dynamics: currentDynamics });
+      sendResponse({ success: !br.fatal, error: dynError, dynamics: currentDynamics });
       return true;
 
     case 'GET_AUDIO_STATUS':
@@ -716,6 +724,7 @@ function installGraph(g) {
     const timers = br.timers;
     Object.assign(br, g._br);
     br.timers = timers;
+    g._br = br;
   }
   unmudNode = br.unmud;
   centreNode = br.centre;
@@ -874,12 +883,12 @@ const BASS_DIP_UP = 0.02;
 
 function emptyBass() {
   return {
-    gen: 0, timers: [], key: '', phase: 'idle',
+    gen: 0, timers: [], retirement: { retired: 0, pending: 0, acked: 0, timedOut: 0 }, key: '', phase: 'idle', pending: null, ctx: null, graph: null, fatal: false, closed: false,
     unmud: null, centre: null, peaks: null, truepeak: null,
     roomDry: null, roomWet: null, peaksDry: null, peaksWet: null, tpGain: null, preLim: null,
-    pad: { bypass: null, peaksDry: null, lookahead: null, fast: null, truepeak: null },
+    pad: { clean: null, warm: null, band: null, bypass: null, peaksDry: null, lookahead: null, fast: null, truepeak: null },
     roomSpliced: false, postSpliced: false, split: false,
-    appliedRoom: 'off', appliedPeaks: false, appliedLimiter: 'fast', appliedLeveler: 'full',
+    appliedCeiling: 'clean', appliedRoom: 'off', appliedPeaks: false, appliedLimiter: 'fast', appliedLeveler: 'full',
     peaksFailed: false, tpFailed: false, roomFailed: false, callbacks: 0
   };
 }
@@ -897,10 +906,10 @@ function bassWant(g, slot) {
   if (leveler === 'bass' && !(g && g.bandLevelerNode)) leveler = 'full';
   if (leveler === 'peaks' && !peaks) leveler = compOff ? 'bypass' : 'full';
   const room = s.roomFailed ? 'off' : d.room;
-  return { room, peaks, truepeak, limiter, leveler, compOff };
+  return { room, peaks, truepeak, limiter, leveler, compOff, ceiling: d.ceiling };
 }
 
-function wantKey(w) { return w.room + '|' + (w.peaks ? 1 : 0) + '|' + (w.truepeak ? 1 : 0); }
+function wantKey(w) { return [w.room, w.peaks, w.truepeak, w.leveler, w.limiter, w.ceiling].join('|'); }
 
 function heldGain(p, now) {
   if (!p) return 0;
@@ -948,10 +957,26 @@ function clearLater(slot) {
   slot.timers.length = 0;
 }
 
+// Wall-clock timers may run ahead of the audio clock (especially playback buffers).
+// Never change a live wire until its scheduled fade has actually reached zero.
 function later(slot, sec, fn) {
   const gen = slot.gen;
-  const id = setTimeout(() => { if (slot.gen === gen) fn(); }, Math.max(0, sec * 1000));
-  slot.timers.push(id);
+  const target = (slot.ctx ? slot.ctx.currentTime : 0) + sec;
+  const tick = () => {
+    if (slot.gen !== gen) return;
+    const remaining = slot.ctx ? target - slot.ctx.currentTime : 0;
+    if (remaining > 0.000001 && slot.ctx.state !== 'closed') { schedule(Math.max(1, remaining * 1000)); return; }
+    fn();
+  };
+  const schedule = (ms) => {
+    const id = setTimeout(() => {
+      const i = slot.timers.indexOf(id);
+      if (i >= 0) slot.timers.splice(i, 1);
+      tick();
+    }, ms);
+    slot.timers.push(id);
+  };
+  schedule(Math.max(0, sec * 1000));
 }
 
 function makeGain(ctx, value) {
@@ -961,15 +986,36 @@ function makeGain(ctx, value) {
 }
 
 function dropNode(node) {
-  if (!node) return;
-  try { node.disconnect(); } catch (_) {}
-  try {
-    if (node.port) {
-      node.port.onmessage = null;
-      try { node.port.postMessage({ type: 'park' }); } catch (_) {}
-      try { node.port.close(); } catch (_) {}
+  if (!node || node._brDropping) return;
+  node._brDropping = true;
+  let sink = null, finished = false, timeout = null;
+  const counters = node._brWorklet && node._brOwner && node._brOwner().retirement;
+  const ctx = node._brContext;
+  const close = (acknowledged = false) => {
+    if (finished) return;
+    finished = true;
+    if (timeout !== null) globalThis.clearTimeout(timeout);
+    try { node.disconnect(); } catch (_) {}
+    try { if (sink) sink.disconnect(); } catch (_) {}
+    if (node.port) { node.port.onmessage = null; try { node.port.close(); } catch (_) {} }
+    if (counters) {
+      counters.pending--;
+      if (acknowledged) counters.acked++;
+      else if (ctx && ctx.state !== 'closed') counters.timedOut++;
     }
-  } catch (_) {}
+  };
+  if (!node._brWorklet || !node.port) { close(); return; }
+  if (counters) { counters.retired++; counters.pending++; }
+  // Keep the terminal process block renderable even if its old fade gain is
+  // disconnected during this cleanup. This silent sink lasts only until park ACK.
+  if (ctx && ctx.state !== 'closed' && ctx.destination) {
+    sink = makeGain(ctx, 0);
+    node.connect(sink); sink.connect(ctx.destination);
+  }
+  node.port.onmessage = event => { if (event.data && event.data.parked) close(true); };
+  // A wall-clock deadline, independent of transition/audio-clock scheduling.
+  timeout = globalThis.setTimeout(() => close(false), 250);
+  try { node.port.postMessage({ type: 'park' }); } catch (_) { close(false); }
 }
 
 function syncBassGlobals(slot) {
@@ -981,8 +1027,12 @@ function syncBassGlobals(slot) {
 
 function noteDynFail(g, slot, failFlag, errText) {
   slot[failFlag] = true;
-  if (!dynError) dynError = errText;
-  if (g && !g.dynError) g.dynError = errText;
+  slot.fatal = true;
+  errText = errText.split(';')[0] + '; output muted. Stop and restart the engine.';
+  dynError = errText;
+  if (g) g.dynError = errText;
+  if (g && g.meters) g.meters.error = errText;
+  for (const node of [g && g.outputSum, g && g.directPassThroughGain]) rampGain(node, 0, 0, g && g.audioCtx);
 }
 
 function makeWorklet(g, slot, field, proc, inputs, failFlag, errText) {
@@ -997,14 +1047,23 @@ function makeWorklet(g, slot, field, proc, inputs, failFlag, errText) {
     return null;
   }
   slot[field] = node;
+  node._brWorklet = true;
+  node._brOwner = () => g._br || slot;
+  node._brContext = g.audioCtx;
+  node.onprocessorerror = () => {
+    const active = g._br || slot;
+    if (active.closed || active[field] !== node) return;
+    noteDynFail(g, active, failFlag, proc + ' processor failed');
+  };
   syncBassGlobals(slot);
   return node;
 }
 
 function levelerDests(g) {
   const out = [];
+  const pad = g._br && g._br.pad;
   if (g.autoBalanceComp) out.push(g.autoBalanceComp);
-  if (g.autoBalanceBypassGain) out.push(g.autoBalanceBypassGain);
+  if (g.autoBalanceBypassGain) out.push(pad && pad.bypass || g.autoBalanceBypassGain);
   if (g.bandLevelerNode) out.push(g.bandLevelerNode);
   return out;
 }
@@ -1016,28 +1075,43 @@ function limiterFeeds(g) {
   return out;
 }
 
-function setPad(slot, key, fromNode, toNode, samples, ctx) {
+// Alignment belongs BEFORE a branch's fade gain. Delaying the gain envelope as
+// well as audio destroys complementary fades and leaves an unprimed silent gap.
+function padFeeds(slot, key) {
+  const g = slot.graph;
+  if (!g) return [];
+  if (key === 'bypass') return slot.roomSpliced ? [slot.roomDry, slot.roomWet].filter(Boolean) : [g.highNode];
+  if (key === 'clean') return [g.outputCeiling];
+  if (key === 'warm') return [g.warmShaper];
+  if (key === 'band') return [g.bandLevelerNode];
+  if (key === 'peaksDry') return [g.volumeGain];
+  if (key === 'fast') return [g.masterLimiter];
+  if (key === 'lookahead') return [g.lookaheadNode];
+  return [slot.truepeak];
+}
+function setPad(slot, key, fade, dest, samples, ctx) {
   const have = slot.pad[key];
+  const feeds = padFeeds(slot, key).filter(Boolean);
   if (!(samples > 0)) {
-    if (have && fromNode && toNode) {
-      try { fromNode.disconnect(have); } catch (_) {}
+    if (have) {
+      for (const feed of feeds) { try { feed.disconnect(have); } catch (_) {} }
       try { have.disconnect(); } catch (_) {}
-      try { fromNode.connect(toNode); } catch (_) {}
+      if (fade) for (const feed of feeds) { try { feed.connect(fade); } catch (_) {} }
     }
     slot.pad[key] = null;
-    return;
+    return 0;
   }
-  if (!fromNode || !toNode || !ctx || typeof ctx.createDelay !== 'function') return;
-  if (have) {
-    try { have.delayTime.value = samples / ctx.sampleRate; } catch (_) {}
-    return;
+  if (!fade || !ctx || typeof ctx.createDelay !== 'function') return 0;
+  if (have) return 0;
+  const delay = ctx.createDelay(1);
+  delay.delayTime.value = samples / ctx.sampleRate;
+  for (const feed of feeds) {
+    try { feed.disconnect(fade); } catch (_) {}
+    feed.connect(delay);
   }
-  const d = ctx.createDelay(1);
-  d.delayTime.value = samples / ctx.sampleRate;
-  try { fromNode.disconnect(toNode); } catch (_) {}
-  fromNode.connect(d);
-  d.connect(toNode);
-  slot.pad[key] = d;
+  delay.connect(fade);
+  slot.pad[key] = delay;
+  return samples / ctx.sampleRate;
 }
 
 function ensurePreLim(g, slot) {
@@ -1053,17 +1127,19 @@ function ensurePreLim(g, slot) {
 }
 
 function tearPost(g, slot) {
+  setPad(slot, 'fast', g.limiterFastGain, g.limiterOut, 0, g.audioCtx);
+  setPad(slot, 'lookahead', g.lookaheadGain, g.limiterOut, 0, g.audioCtx);
   // Reconnect the 1.4.0 limiter feeds only after a splice. Doing it on a fresh default graph
   // connects volumeGain to nodes it is already wired to, and Chrome throws InvalidAccessError.
   if (slot.postSpliced && g.volumeGain) {
     for (const dest of limiterFeeds(g)) { try { g.volumeGain.connect(dest); } catch (_) {} }
-    try { g.volumeGain.disconnect(slot.preLim); } catch (_) {}
-    try { g.volumeGain.disconnect(slot.peaks); } catch (_) {}
-    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    try { if (slot.preLim) g.volumeGain.disconnect(slot.preLim); } catch (_) {}
+    try { if (slot.peaks) g.volumeGain.disconnect(slot.peaks); } catch (_) {}
+    try { if (slot.peaksDry) g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
   }
   if (slot.preLim && g.masterLimiter) { try { slot.preLim.disconnect(g.masterLimiter); } catch (_) {} }
   if (slot.preLim && g.lookaheadNode) { try { slot.preLim.disconnect(g.lookaheadNode); } catch (_) {} }
-  if (slot.preLim && slot.truepeak) { try { slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
+  if (slot.preLim && slot.truepeak) { try { if (slot.truepeak) slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
   dropNode(slot.peaks); dropNode(slot.truepeak);
   dropNode(slot.peaksDry); dropNode(slot.peaksWet); dropNode(slot.tpGain); dropNode(slot.preLim);
   for (const key of ['peaksDry', 'lookahead', 'fast', 'truepeak']) {
@@ -1079,11 +1155,11 @@ function tearRoom(g, slot) {
   const dests = levelerDests(g);
   if (slot.roomSpliced && g.highNode) {
     for (const dest of dests) { try { g.highNode.connect(dest); } catch (_) {} }
-    try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
-    try { g.highNode.disconnect(slot.unmud); } catch (_) {}
-    try { g.highNode.disconnect(slot.centre); } catch (_) {}
+    try { if (slot.roomDry) g.highNode.disconnect(slot.roomDry); } catch (_) {}
+    try { if (slot.unmud) g.highNode.disconnect(slot.unmud); } catch (_) {}
+    try { if (slot.centre) g.highNode.disconnect(slot.centre); } catch (_) {}
   }
-  if (g.hpfNode && slot.unmud) { try { g.hpfNode.disconnect(slot.unmud); } catch (_) {} }
+  if (g.hpfNode && slot.unmud) { try { if (slot.unmud) g.hpfNode.disconnect(slot.unmud); } catch (_) {} }
   dropNode(slot.unmud); dropNode(slot.centre); dropNode(slot.roomDry); dropNode(slot.roomWet);
   slot.unmud = slot.centre = slot.roomDry = slot.roomWet = null;
   slot.roomSpliced = false;
@@ -1099,17 +1175,18 @@ function wireRoomChain(g, slot, mode) {
   if (!slot.roomWet) slot.roomWet = makeGain(ctx, 0);
   try { if (slot.unmud) slot.unmud.disconnect(); } catch (_) {}
   try { if (slot.centre) slot.centre.disconnect(); } catch (_) {}
-  try { if (g.highNode) g.highNode.disconnect(slot.unmud); } catch (_) {}
-  try { if (g.highNode) g.highNode.disconnect(slot.centre); } catch (_) {}
+  try { if (g.highNode) if (slot.unmud) g.highNode.disconnect(slot.unmud); } catch (_) {}
+  try { if (g.highNode) if (slot.centre) g.highNode.disconnect(slot.centre); } catch (_) {}
   let tail = g.highNode;
   if (needUnmud) {
     g.highNode.connect(slot.unmud);
     if (g.hpfNode) {
-      try { g.hpfNode.disconnect(slot.unmud); } catch (_) {}
+      try { if (slot.unmud) g.hpfNode.disconnect(slot.unmud); } catch (_) {}
       g.hpfNode.connect(slot.unmud, 0, 1);
     }
     tail = slot.unmud;
   } else if (slot.unmud) {
+    if (g.hpfNode) { try { if (slot.unmud) g.hpfNode.disconnect(slot.unmud); } catch (_) {} }
     dropNode(slot.unmud); slot.unmud = null;
   }
   if (needCentre) {
@@ -1127,7 +1204,7 @@ function wireRoomChain(g, slot, mode) {
 
 function spliceRoomDry(g, slot, ctx, gain) {
   if (!slot.roomDry) slot.roomDry = makeGain(ctx, gain);
-  else slot.roomDry.gain.value = gain;
+
   const dests = levelerDests(g);
   for (const dest of dests) { try { slot.roomDry.connect(dest); } catch (_) {} }
   if (!slot.roomSpliced && g.highNode) {
@@ -1146,10 +1223,9 @@ function ensurePeaksSplit(g, slot, ctx) {
   if (!slot.peaksDry) slot.peaksDry = makeGain(ctx, heldGain(slot.peaksDry && slot.peaksDry.gain, ctx.currentTime) || 1);
   if (slot.split) return true;
   const vg = g.volumeGain;
-  try { vg.disconnect(slot.preLim); } catch (_) {}
-  vg.connect(slot.peaksDry);
-  if (slot.pad.peaksDry) slot.peaksDry.connect(slot.pad.peaksDry);
-  else slot.peaksDry.connect(slot.preLim);
+  try { if (slot.preLim) vg.disconnect(slot.preLim); } catch (_) {}
+  vg.connect(slot.pad.peaksDry || slot.peaksDry);
+  slot.peaksDry.connect(slot.preLim);
   vg.connect(slot.peaks);
   slot.peaks.connect(slot.peaksWet);
   slot.peaksWet.connect(slot.preLim);
@@ -1184,14 +1260,32 @@ function levelerDelay(kind, fs) {
 function commitBassRoom(g, { immediate = false } = {}) {
   if (!g || !g.wired || !g._br) return;
   const slot = g._br;
+  slot.ctx = g.audioCtx;
+  slot.graph = g;
   const want = bassWant(g, slot);
-  const key = wantKey(want);
-  if (slot.key === key) return;
-  slot.key = key;
+  if (slot.fatal) return;
+  if (slot.phase === 'run') { slot.pending = want; return; }
+  if (slot.key === wantKey(want)) return;
+  startBassRequest(g, slot, want, immediate || !g.live);
+}
+
+function startBassRequest(g, slot, want, immediate) {
+  slot.managesLeveler = want.peaks || slot.appliedPeaks || want.leveler !== slot.appliedLeveler;
+  slot.managesLimiter = want.truepeak || slot.appliedLimiter === 'truepeak' || want.limiter !== slot.appliedLimiter;
+  slot.key = wantKey(want);
   slot.gen++;
   clearLater(slot);
-  if (immediate || !g.live) applyBassSettled(g, slot, want);
+  if (immediate) applyBassSettled(g, slot, want);
   else runBassLive(g, slot, want);
+}
+
+function bassFinished(g, slot, want) {
+  slot.phase = 'idle';
+  slot.key = wantKey(want);
+  syncBassGlobals(slot);
+  const pending = slot.pending;
+  slot.pending = null;
+  if (pending && wantKey(pending) !== slot.key && !slot.fatal) startBassRequest(g, slot, pending, false);
 }
 
 function applyBassSettled(g, slot, want) {
@@ -1206,7 +1300,7 @@ function applyBassSettled(g, slot, want) {
       want = { ...want, room: 'off' };
     } else {
       rampGain(slot.roomWet, 1, 0, ctx);
-      try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+      try { if (slot.roomDry) g.highNode.disconnect(slot.roomDry); } catch (_) {}
       try { slot.roomDry.disconnect(); } catch (_) {}
     }
   }
@@ -1225,13 +1319,12 @@ function applyBassSettled(g, slot, want) {
   rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, 0, ctx);
   rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, 0, ctx);
   rampGain(slot.tpGain, want.truepeak ? 1 : 0, 0, ctx);
+  slot.appliedCeiling = want.ceiling;
   slot.appliedRoom = want.room;
   slot.appliedPeaks = !!want.peaks;
   slot.appliedLimiter = want.truepeak ? 'truepeak' : want.limiter;
   slot.appliedLeveler = want.leveler;
-  slot.phase = 'idle';
-  slot.key = wantKey(want);
-  syncBassGlobals(slot);
+  bassFinished(g, slot, want);
 }
 
 function buildPostSettled(g, slot, want) {
@@ -1242,11 +1335,11 @@ function buildPostSettled(g, slot, want) {
     rampGain(slot.peaksWet, 1, 0, ctx);
     rampGain(slot.peaksDry, 0, 0, ctx);
     setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
-    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    try { if (slot.peaksDry) g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
     try { slot.peaksDry.disconnect(); } catch (_) {}
   } else if (slot.split) {
-    try { g.volumeGain.disconnect(slot.peaks); } catch (_) {}
-    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    try { if (slot.peaks) g.volumeGain.disconnect(slot.peaks); } catch (_) {}
+    try { if (slot.peaksDry) g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
     dropNode(slot.peaks); dropNode(slot.peaksDry); dropNode(slot.peaksWet);
     slot.peaks = slot.peaksDry = slot.peaksWet = null;
     slot.split = false;
@@ -1255,7 +1348,7 @@ function buildPostSettled(g, slot, want) {
   } else if (!ensurePreLim(g, slot)) return false;
   if (!want.truepeak) {
     setPad(slot, 'truepeak', slot.tpGain, g.limiterOut, 0, ctx);
-    if (slot.preLim && slot.truepeak) { try { slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
+    if (slot.preLim && slot.truepeak) { try { if (slot.truepeak) slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
     dropNode(slot.truepeak); dropNode(slot.tpGain);
     slot.truepeak = slot.tpGain = null;
   }
@@ -1273,28 +1366,17 @@ function runBassLive(g, slot, want) {
   const roomLive = slot.appliedRoom !== 'off' || !!slot.roomSpliced;
   if (slot.appliedRoom !== want.room || roomLive !== roomOn) pending.push((done) => liveRoom(g, slot, want, ctx, done));
   if (slot.appliedPeaks !== !!want.peaks || !!slot.split !== !!want.peaks) pending.push((done) => livePeaks(g, slot, want, ctx, done));
-  if ((slot.appliedLimiter === 'truepeak') !== !!want.truepeak || !!slot.truepeak !== !!want.truepeak) pending.push((done) => liveTruepeak(g, slot, want, ctx, done));
+  else if (!want.peaks && slot.appliedLeveler !== want.leveler) pending.push((done) => liveLegacyLeveler(g, slot, want, ctx, done));
+  if (slot.appliedLimiter !== want.limiter || (slot.appliedLimiter === 'truepeak') !== !!want.truepeak || !!slot.truepeak !== !!want.truepeak) pending.push((done) => liveTruepeak(g, slot, want, ctx, done));
+  if (slot.appliedCeiling !== want.ceiling) pending.push((done) => liveCeiling(g, slot, want, ctx, done));
   if (!pending.length) { finishBass(g, slot, want, ctx); return; }
   let left = pending.length;
   for (const start of pending) start(() => { if (--left === 0) finishBass(g, slot, want, ctx); });
 }
 
-function retargetBass(g, slot, want, ctx) {
-  if (slot.appliedPeaks !== want.peaks || want.peaks) rampLeveler(g, levelerTarget(want), BASS_FADE, ctx);
-  if (slot.roomDry && slot.roomWet) {
-    rampGain(slot.roomDry, want.room === 'off' ? 1 : 0, BASS_FADE, ctx);
-    rampGain(slot.roomWet, want.room === 'off' ? 0 : 1, BASS_FADE, ctx);
-  }
-  if (slot.peaksDry && slot.peaksWet) {
-    rampGain(slot.peaksDry, want.peaks ? 0 : 1, BASS_FADE, ctx);
-    rampGain(slot.peaksWet, want.peaks ? 1 : 0, BASS_FADE, ctx);
-  }
-  rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, BASS_FADE, ctx);
-  rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, BASS_FADE, ctx);
-  rampGain(slot.tpGain, want.truepeak ? 1 : 0, BASS_FADE, ctx);
-}
 
 function finishBass(g, slot, want, ctx) {
+  if (slot.fatal) { slot.phase = 'idle'; slot.pending = null; return; }
   const now = ctx ? ctx.currentTime : 0;
   const near = (node, v) => !node || Math.abs(heldGain(node.gain, now) - v) < 0.02;
   if (slot.roomDry && slot.roomWet) {
@@ -1318,7 +1400,7 @@ function finishBass(g, slot, want, ctx) {
   if (want.room === 'off') {
     if (!slot.roomWet || near(slot.roomWet, 0)) tearRoom(g, slot);
   } else if (slot.roomDry && near(slot.roomDry, 0)) {
-    try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+    try { if (slot.roomDry) g.highNode.disconnect(slot.roomDry); } catch (_) {}
     try { slot.roomDry.disconnect(); } catch (_) {}
   }
   if (!want.peaks && slot.split && (!slot.peaksWet || near(slot.peaksWet, 0))) {
@@ -1329,8 +1411,8 @@ function finishBass(g, slot, want, ctx) {
     setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
     if (!want.truepeak) tearPost(g, slot);
     else {
-      try { g.volumeGain.disconnect(slot.peaks); } catch (_) {}
-      try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+      try { if (slot.peaks) g.volumeGain.disconnect(slot.peaks); } catch (_) {}
+      try { if (slot.peaksDry) g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
       dropNode(slot.peaks); dropNode(slot.peaksDry); dropNode(slot.peaksWet);
       slot.peaks = slot.peaksDry = slot.peaksWet = null;
       slot.split = false;
@@ -1339,7 +1421,7 @@ function finishBass(g, slot, want, ctx) {
   }
   if (want.peaks && slot.peaksDry && near(slot.peaksDry, 0)) {
     setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
-    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    try { if (slot.peaksDry) g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
     try { slot.peaksDry.disconnect(); } catch (_) {}
   }
   if (slot.pad.bypass && near(g.autoBalanceBypassGain, 0)) setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, 0, ctx);
@@ -1355,7 +1437,7 @@ function finishBass(g, slot, want, ctx) {
   }
   if (!want.truepeak && slot.truepeak && near(slot.tpGain, 0)) {
     setPad(slot, 'truepeak', slot.tpGain, g.limiterOut, 0, ctx);
-    if (slot.preLim) { try { slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
+    if (slot.preLim) { try { if (slot.truepeak) slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
     dropNode(slot.truepeak); dropNode(slot.tpGain);
     slot.truepeak = slot.tpGain = null;
     if (!want.peaks) tearPost(g, slot);
@@ -1363,26 +1445,51 @@ function finishBass(g, slot, want, ctx) {
   if (want.peaks && !slot.peaks) want = { ...want, peaks: false, leveler: want.compOff ? 'bypass' : 'full' };
   if (want.truepeak && !slot.truepeak) want = { ...want, truepeak: false, limiter: g.lookaheadNode ? 'lookahead' : 'fast' };
   if (want.room !== 'off' && !slot.unmud && !slot.centre) want = { ...want, room: 'off' };
-  rampLeveler(g, levelerTarget(want), 0, ctx);
-  rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, 0, ctx);
-  rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, 0, ctx);
-  rampGain(slot.tpGain, want.truepeak ? 1 : 0, 0, ctx);
+  if (slot.managesLeveler) rampLeveler(g, levelerTarget(want), 0, ctx);
+  if (slot.managesLimiter) {
+    rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, 0, ctx);
+    rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, 0, ctx);
+    rampGain(slot.tpGain, want.truepeak ? 1 : 0, 0, ctx);
+  }
+  slot.appliedCeiling = want.ceiling;
   slot.appliedRoom = want.room;
   slot.appliedPeaks = !!want.peaks;
   slot.appliedLimiter = want.truepeak ? 'truepeak' : want.limiter;
   slot.appliedLeveler = want.leveler;
-  slot.phase = 'idle';
-  slot.key = wantKey(want);
-  syncBassGlobals(slot);
+  bassFinished(g, slot, want);
 }
 
 function dipRemove(slot, ctx, node, atZero, after) {
   rampGain(node, 0, BASS_DIP_DOWN, ctx);
   later(slot, BASS_DIP_DOWN + 0.004, () => {
-    atZero();
-    rampGain(node, 1, BASS_DIP_UP, ctx);
-    later(slot, BASS_DIP_UP + 0.004, after);
+    const prime = atZero() || 0;
+    later(slot, prime + 128 / ctx.sampleRate, () => {
+      rampGain(node, 1, BASS_DIP_UP, ctx);
+      later(slot, BASS_DIP_UP + 0.004, after);
+    });
   });
+}
+
+function liveLegacyLeveler(g, slot, want, ctx, done) {
+  const fs = ctx.sampleRate, from = slot.appliedLeveler, to = want.leveler;
+  const source = from === 'bass' ? g.bandLevelerGain : from === 'bypass' ? g.autoBalanceBypassGain : g.autoBalanceWetGain;
+  const target = to === 'bass' ? g.bandLevelerGain : to === 'bypass' ? g.autoBalanceBypassGain : g.autoBalanceWetGain;
+  const fromKey = from === 'bass' ? 'band' : 'bypass', toKey = to === 'bass' ? 'band' : 'bypass';
+  const fromN = levelerDelay(from, fs), toN = levelerDelay(to, fs);
+  const cross = () => {
+    rampLeveler(g, levelerTarget(want), BASS_FADE, ctx);
+    later(slot, BASS_FADE + 0.004, () => {
+      if (fromN < toN && slot.pad[fromKey]) setPad(slot, fromKey, source, g.levelerOut, 0, ctx);
+      if (fromN > toN && slot.pad[toKey]) dipRemove(slot, ctx, target, () => setPad(slot, toKey, target, g.levelerOut, 0, ctx), done);
+      else done();
+    });
+  };
+  if (fromN > toN) {
+    setPad(slot, toKey, target, g.levelerOut, fromN - toN, ctx);
+    later(slot, (fromN - toN + 256) / fs, cross);
+  } else if (toN > fromN) {
+    dipRemove(slot, ctx, source, () => setPad(slot, fromKey, source, g.levelerOut, toN - fromN, ctx), cross);
+  } else cross();
 }
 
 function liveRoom(g, slot, want, ctx, done) {
@@ -1392,11 +1499,11 @@ function liveRoom(g, slot, want, ctx, done) {
     rampGain(slot.roomWet, 0, BASS_FADE, ctx);
     later(slot, BASS_FADE + 0.004, () => {
       if (!wireRoomChain(g, slot, want.room)) { tearRoom(g, slot); done(); return; }
-      rampGain(slot.roomDry, 0, BASS_FADE, ctx);
-      rampGain(slot.roomWet, 1, BASS_FADE, ctx);
-      later(slot, BASS_FADE + 0.004, () => {
-        try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
-        slot.appliedRoom = want.room;
+      later(slot, 0.025, () => { rampGain(slot.roomDry, 0, BASS_FADE, ctx); rampGain(slot.roomWet, 1, BASS_FADE, ctx); });
+      later(slot, BASS_FADE + 0.029, () => {
+        try { if (slot.roomDry) g.highNode.disconnect(slot.roomDry); } catch (_) {}
+        slot.appliedCeiling = want.ceiling;
+  slot.appliedRoom = want.room;
         done();
       });
     });
@@ -1411,12 +1518,12 @@ function liveRoom(g, slot, want, ctx, done) {
   }
   spliceRoomDry(g, slot, ctx, 1);
   if (!wireRoomChain(g, slot, want.room)) { tearRoom(g, slot); slot.appliedRoom = 'off'; done(); return; }
-  rampGain(slot.roomDry, 0, BASS_FADE, ctx);
-  rampGain(slot.roomWet, 1, BASS_FADE, ctx);
-  later(slot, BASS_FADE + 0.004, () => {
-    try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+  later(slot, 0.025, () => { rampGain(slot.roomDry, 0, BASS_FADE, ctx); rampGain(slot.roomWet, 1, BASS_FADE, ctx); });
+  later(slot, BASS_FADE + 0.029, () => {
+    try { if (slot.roomDry) g.highNode.disconnect(slot.roomDry); } catch (_) {}
     try { slot.roomDry.disconnect(); } catch (_) {}
-    slot.appliedRoom = want.room;
+    slot.appliedCeiling = want.ceiling;
+  slot.appliedRoom = want.room;
     done();
   });
 }
@@ -1434,7 +1541,7 @@ function livePeaks(g, slot, want, ctx, done) {
       rampGain(slot.peaksWet, 1, BASS_FADE, ctx);
       later(slot, BASS_FADE + 0.004, () => {
         setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
-        try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+        try { if (slot.peaksDry) g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
         try { slot.peaksDry.disconnect(); } catch (_) {}
         if (slot.pad.bypass) {
           dipRemove(slot, ctx, g.autoBalanceBypassGain, () => setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, 0, ctx), () => {
@@ -1449,14 +1556,17 @@ function livePeaks(g, slot, want, ctx, done) {
     rampGain(slot.peaksDry, 0, BASS_DIP_DOWN, ctx);
     later(slot, BASS_DIP_DOWN + 0.004, () => {
       setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, N, ctx);
-      rampGain(slot.peaksDry, 1, BASS_DIP_UP, ctx);
-      later(slot, BASS_DIP_UP + 0.004, arm);
+      later(slot, (N + 128) / fs, () => {
+        rampGain(slot.peaksDry, 1, BASS_DIP_UP, ctx);
+        later(slot, BASS_DIP_UP + 0.004, arm);
+      });
     });
     return;
   }
   if (!slot.split) { slot.appliedPeaks = false; slot.appliedLeveler = want.leveler; rampLeveler(g, levelerTarget(want), BASS_FADE, ctx); done(); return; }
   if (!slot.peaksDry) slot.peaksDry = makeGain(ctx, 0);
-  try { g.volumeGain.connect(slot.peaksDry); } catch (_) {}
+  try { g.volumeGain.connect(slot.pad.peaksDry || slot.peaksDry); } catch (_) {}
+  slot.peaksDry.connect(slot.preLim);
   setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, N, ctx);
   const toN = levelerDelay(want.leveler, fs);
   const cross = () => {
@@ -1474,6 +1584,27 @@ function livePeaks(g, slot, want, ctx, done) {
   if (toN > 0) {
     dipRemove(slot, ctx, g.autoBalanceBypassGain, () => setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, toN, ctx), cross);
   } else cross();
+}
+
+// Chromium's 4x WaveShaper resampler adds 192 samples, measured by the
+// offline impulse test at 48/96 kHz. Keep the old steady-state path; align only the fade.
+function liveCeiling(g, slot, want, ctx, done) {
+  const from = slot.appliedCeiling, to = want.ceiling;
+  const old = from === 'warm' ? g.ceilingWarmGain : g.ceilingCleanGain;
+  const next = to === 'warm' ? g.ceilingWarmGain : g.ceilingCleanGain;
+  const fromN = from === 'warm' ? 192 : 0, toN = to === 'warm' ? 192 : 0;
+  const cross = () => {
+    rampGain(old, 0, BASS_FADE, ctx); rampGain(next, 1, BASS_FADE, ctx);
+    later(slot, BASS_FADE + .004, () => {
+      if (slot.pad[from]) setPad(slot, from, old, g.outputSum, 0, ctx);
+      if (slot.pad[to]) dipRemove(slot, ctx, next, () => setPad(slot, to, next, g.outputSum, 0, ctx), done);
+      else done();
+    });
+  };
+  if (fromN > toN) {
+    setPad(slot, to, next, g.outputSum, fromN - toN, ctx);
+    later(slot, (fromN - toN + 256) / ctx.sampleRate, cross);
+  } else dipRemove(slot, ctx, old, () => setPad(slot, from, old, g.outputSum, toN - fromN, ctx), cross);
 }
 
 function limiterGain(g, slot, kind) {
@@ -1510,13 +1641,13 @@ function liveTruepeak(g, slot, want, ctx, done) {
   };
   if (toN < fromN) {
     setPad(slot, padKey, toNode, dest, fromN - toN, ctx);
-    cross();
+    later(slot, Math.max(fromN, toN) / fs + 256 / fs, cross);
   } else if (fromN < toN) {
     dipRemove(slot, ctx, fromNode, () => setPad(slot, fromKey, fromNode, dest, toN - fromN, ctx), () => {
       rampGain(fromNode, 1, BASS_DIP_UP, ctx);
       later(slot, BASS_DIP_UP + 0.004, cross);
     });
-  } else cross();
+  } else later(slot, toN / fs + 256 / fs, cross);
 }
 
 function releaseBassRoom() {
@@ -1538,14 +1669,15 @@ function bassRoomProbe() {
   const posts = [gv(br.peaksDry), gv(br.peaksWet)].filter((v) => v != null);
   const lims = [gv(limiterFastGain), gv(lookaheadGain), gv(br.tpGain)].filter((v) => v != null);
   const rooms = [gv(br.roomDry), gv(br.roomWet)].filter((v) => v != null);
+  const ceilings = [gv(ceilingCleanGain), gv(ceilingWarmGain)];
   return {
     unmud: !!unmudNode, centre: !!centreNode, peaks: !!bassPeaksNode, truepeak: !!truePeakNode,
     room: br.appliedRoom, peaksOn: br.appliedPeaks, limiter: br.appliedLimiter, leveler: br.appliedLeveler,
-    callbacks: br.callbacks, failed: { room: br.roomFailed, peaks: br.peaksFailed, truepeak: br.tpFailed },
+    callbacks: br.callbacks, retirement: { ...br.retirement }, failed: { room: br.roomFailed, peaks: br.peaksFailed, truepeak: br.tpFailed },
     delays: Object.keys(br.pad).filter((k) => br.pad[k]),
     error: dynError,
-    gains: { roomDry: gv(br.roomDry), roomWet: gv(br.roomWet), peaksDry: gv(br.peaksDry), peaksWet: gv(br.peaksWet), tp: gv(br.tpGain), wet: gv(autoBalanceWetGain), bypass: gv(autoBalanceBypassGain), band: gv(bandLevelerGain), fast: gv(limiterFastGain), la: gv(lookaheadGain) },
-    sums: { leveler: sum(leveler), post: posts.length ? sum(posts) : null, limiter: sum(lims), room: rooms.length ? sum(rooms) : null }
+    gains: { roomDry: gv(br.roomDry), roomWet: gv(br.roomWet), peaksDry: gv(br.peaksDry), peaksWet: gv(br.peaksWet), tp: gv(br.tpGain), wet: gv(autoBalanceWetGain), bypass: gv(autoBalanceBypassGain), band: gv(bandLevelerGain), fast: gv(limiterFastGain), la: gv(lookaheadGain), clean: gv(ceilingCleanGain), warm: gv(ceilingWarmGain) },
+    sums: { leveler: sum(leveler), post: posts.length ? sum(posts) : null, limiter: sum(lims), room: rooms.length ? sum(rooms) : null, ceiling: sum(ceilings) }
   };
 }
 
@@ -1556,7 +1688,7 @@ function applyRoutingState({ immediate = false } = {}) {
     dspPathGain, directPassThroughGain, autoBalanceWetGain, autoBalanceBypassGain, bandLevelerGain, autoBalanceComp,
     matchWetGain, matchDryGain, lookaheadGain, limiterFastGain, ceilingWarmGain, ceilingCleanGain, pitchWetGain, pitchDryGain,
     bandLevelerNode, matchNode, lookaheadNode,
-    highNode, hpfNode, volumeGain, levelerOut, masterLimiter, limiterOut,
+    highNode, hpfNode, volumeGain, levelerOut, masterLimiter, limiterOut, outputSum, outputCeiling, warmShaper,
     movieMode: currentMovieMode,
     makeDyn: dynMake, wired: true, live: !immediate, _br: br
   }, { immediate });
@@ -1575,6 +1707,7 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   const set = (node, value) => {
     if (!node) return;
     const param = node.gain || node;
+    param._brFade = null;
     if (immediate || !audioCtx || typeof param.setTargetAtTime !== 'function') param.value = value;
     else param.setTargetAtTime(value, now, rampTime);
   };
@@ -1603,8 +1736,8 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   // release instead of 0.2 s) or the bass-only leveler. Bass peaks bypasses the compressor (linear fade below).
   const slot = g._br || br;
   const want = bassWant(g, slot);
-  const ownLeveler = !!(want.peaks || slot.appliedPeaks);
-  const ownLimiter = !!(want.truepeak || slot.appliedLimiter === 'truepeak');
+  const ownLeveler = !!(want.peaks || slot.appliedPeaks || slot.phase === 'run' || (g.wired && slot.key && want.leveler !== slot.appliedLeveler));
+  const ownLimiter = !!(want.truepeak || slot.appliedLimiter === 'truepeak' || slot.phase === 'run' || (g.wired && slot.key && want.limiter !== slot.appliedLimiter));
   const useBand = !isCompBypassed && !want.peaks && dyn.leveler === 'bass' && !!g.bandLevelerNode;
   if (!(ownLeveler && !immediate)) {
     if (want.peaks && !isCompBypassed) {
@@ -1634,8 +1767,11 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
       set(g.limiterFastGain, want.limiter === 'lookahead' ? 0.0 : 1.0);
     }
   }
-  set(g.ceilingWarmGain, dyn.ceiling === 'warm' ? 1.0 : 0.0);
-  set(g.ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
+  const ownCeiling = !immediate && g.wired && slot.key && (slot.phase === 'run' || slot.appliedCeiling !== dyn.ceiling);
+  if (!ownCeiling) {
+    set(g.ceilingWarmGain, dyn.ceiling === 'warm' ? 1.0 : 0.0);
+    set(g.ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
+  }
 
   // The shifter is in the path only while a shift is set and it is producing audio (it adds about 0.14 s of delay);
   // 0 st is a true bypass, and the shifter is parked then. Movie mode (1.5.6, L-02) locks Pitch off for video sync.
@@ -1644,6 +1780,7 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   set(g.pitchWetGain, pitchOpen ? 1.0 : 0.0);
   set(g.pitchDryGain, pitchOpen ? 0.0 : 1.0);
   if (g.wired) commitBassRoom(g, { immediate });
+  if (slot.fatal) { rampGain(g.outputSum, 0, 0, audioCtx); rampGain(g.directPassThroughGain, 0, 0, audioCtx); }
 }
 
 // Re-route once the audio clock has passed the hold. A timer runs on the computer's clock and the audio clock lags it by

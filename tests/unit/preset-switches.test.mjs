@@ -13,9 +13,9 @@ const linkSrc = readFileSync(join(root, 'movie-sound-link.js'), 'utf8');
 const ORIGIN = 'http://127.0.0.1:8791';
 
 const EQ = { bass: 3, hpf: 20, mid: 1, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false };
-const MOVIE = { leveler: 'bass', match: true, limiter: 'lookahead', ceiling: 'warm' };
-const MUSIC = { leveler: 'slow', match: false, limiter: 'fast', ceiling: 'clean' };
-const DEFAULT_DYN = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+const MOVIE = { leveler: 'bass', match: true, limiter: 'lookahead', ceiling: 'warm', room: 'off' };
+const MUSIC = { leveler: 'slow', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' };
+const DEFAULT_DYN = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' };
 
 function pick(bag, keys) {
   if (keys == null) return { ...bag };
@@ -163,10 +163,11 @@ const settingsOf = (link) => link.posted.filter((p) => p.data.type === 'chrome-e
 const norm = (d) => {
   const x = d || {};
   return {
-    leveler: ['full', 'slow', 'bass'].includes(x.leveler) ? x.leveler : 'full',
+    leveler: ['full', 'slow', 'bass', 'peaks'].includes(x.leveler) ? x.leveler : 'full',
     match: x.match === true,
-    limiter: ['fast', 'lookahead'].includes(x.limiter) ? x.limiter : 'fast',
-    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean'
+    limiter: ['fast', 'lookahead', 'truepeak'].includes(x.limiter) ? x.limiter : 'fast',
+    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean',
+    room: ['off', 'unmud', 'centre', 'both'].includes(x.room) ? x.room : 'off'
   };
 };
 const factoriesIn = (src) => {
@@ -197,10 +198,10 @@ test('save and update store normalised switches and strip them out of currentPar
   await bg.ready();
   bg.setOffscreen(true);
   bg.local.dynamics = { ...DEFAULT_DYN };
-  const odd = { leveler: 'BASS', match: 1, limiter: 'lookahead', ceiling: 'warm' };
+  const odd = { leveler: 'BASS', match: 1, limiter: 'lookahead', ceiling: 'warm', room: 'off' };
   const saved = await bg.send({ type: 'SAVE_PRESET', name: 'Movie night', params: { ...EQ, dynamics: { junk: true } }, dynamics: odd, ...viewOf(bg) });
   assert.equal(saved.success, true);
-  assert.deepEqual(saved.dynamics, { leveler: 'full', match: false, limiter: 'lookahead', ceiling: 'warm' });
+  assert.deepEqual(saved.dynamics, { leveler: 'full', match: false, limiter: 'lookahead', ceiling: 'warm', room: 'off' });
   assert.equal(bg.local.presets['Movie night'].dynamics.leveler, 'full');
   assert.equal('junk' in bg.local.presets['Movie night'], false);
   assert.equal('dynamics' in bg.local.currentParams, false);
@@ -283,7 +284,7 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   assert.deepEqual(bg.local.presets.Movie, beforeMovie, 'picking a preset does not rewrite its entry');
   assert.equal(bg.session.presetSwitchBaseline, undefined);
   const told = bg.offscreenMsgs.slice(offStart).map((m) => m.type);
-  assert.deepEqual(told, ['UPDATE_AUDIO_PARAMS', 'SET_DYNAMICS']);
+  assert.deepEqual(told, ['APPLY_ENGINE_STATE']);
 
   const legacyBefore = snapshot(bg.local.dynamics);
   const entryBefore = snapshot(bg.local.presets.Legacy);
@@ -984,4 +985,40 @@ test('reversed pick replies keep the newer preset, then Save stores that preset\
   await popup.idle();
   assert.equal(bg.local.presets['Toggle then Save'].dynamics.leveler, 'bass');
   assert.equal(bg.local.presets['Toggle then Save'].bass, 2);
+});
+
+test('D-09: Room and peak modes save, update, reset and reopen without backfilling legacy entries', async () => {
+  const bg = await seedSurfaces();
+  bg.setOffscreen(true);
+  const old = { ...EQ, dynamics: { leveler:'bass', match:true, limiter:'lookahead', ceiling:'warm' } };
+  bg.local.presets.OldSwitches = structuredClone(old);
+  const untouched = snapshot(bg.local.presets);
+  const popup = openPopup(bg); await popup.idle();
+  popup.mode('room','both'); popup.mode('leveler','peaks'); popup.mode('limiter','truepeak'); await popup.idle();
+  popup.save('Bass room'); await popup.idle();
+  const saved = bg.local.presets['Bass room'].dynamics;
+  assert.equal(saved.room,'both'); assert.equal(saved.leveler,'peaks'); assert.equal(saved.limiter,'truepeak');
+  popup.mode('room','centre'); await popup.idle(); assert.match(popup.state().badge,/Modified/);
+  popup.reset(); await popup.idle(); assert.equal(popup.state().dynamics.room,'both');
+  popup.mode('room','unmud'); await popup.idle(); popup.update(); await popup.idle();
+  assert.equal(bg.local.presets['Bass room'].dynamics.room,'unmud');
+  const reopened = openPopup(bg); await reopened.idle(); assert.equal(reopened.state().dynamics.room,'unmud');
+  reopened.select('OldSwitches'); await reopened.idle(); assert.equal(reopened.state().dynamics.room,'off');
+  assert.deepEqual(bg.local.presets.OldSwitches, old, 'legacy snapshot was backfilled');
+  reopened.mode('room','both'); await reopened.idle(); reopened.select('Legacy'); await reopened.idle();
+  assert.equal(reopened.state().dynamics.room,'both','EQ-only selection changed Room');
+  for (const [name, preset] of Object.entries(untouched)) assert.deepEqual(bg.local.presets[name],preset);
+  assert.ok(bg.offscreenMsgs.some(m=>m.type==='APPLY_ENGINE_STATE'&&m.dynamics?.room==='both'));
+});
+
+test('D-09: every normaliser rejects unknown Room/peak choices and defaults an old snapshot to Room off', async () => {
+  const bg=loadBackground();await bg.ready();
+  for(const room of ['off','unmud','centre','both']){
+    const dynamics={leveler:'peaks',limiter:'truepeak',ceiling:'clean',match:false,room};
+    const reply=await bg.send({type:'SET_DYNAMICS',dynamics});assert.deepEqual(reply.dynamics,dynamics);
+  }
+  const bad=await bg.send({type:'SET_DYNAMICS',dynamics:{room:'headroom',leveler:'headroom',limiter:'unknown'}});
+  assert.deepEqual(bad.dynamics,DEFAULT_DYN);
+  const legacy=await bg.send({type:'SET_DYNAMICS',dynamics:{leveler:'bass',limiter:'lookahead',ceiling:'warm',match:true}});
+  assert.equal(legacy.dynamics.room,'off');
 });

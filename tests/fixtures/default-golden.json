@@ -1,0 +1,18 @@
+{
+  "source": "27ac887:offscreen.js",
+  "fixture": "pink, 1 second + 1 second drain, stereo; Bass 5/Mid 1.5/High 2/Master 1, HPF 20, Full/Fast/Clean/MATCH off",
+  "channels": 2,
+  "layout": "planar little-endian Float32",
+  "rates": [
+    {
+      "rate": 48000,
+      "bytes": 768000,
+      "hash": "13aa9bd66ec289299b1b2c113cae6e5405a13e0c16bee288d35d6299232ca72e"
+    },
+    {
+      "rate": 96000,
+      "bytes": 1536000,
+      "hash": "5156606466fb4128a78b422a7b21d73ecc83974e40fc86b3b883ef9a66b03c98"
+    }
+  ]
+}

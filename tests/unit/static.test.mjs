@@ -98,9 +98,9 @@ test('keyboard and screen-reader access: sliders and icon-only controls have nam
   assert.match(popup, /id="toggle-eq-power" aria-label="Audio EQ"/);
   assert.equal((popup.match(/class="band-tag" aria-pressed="true"/g) || []).length, 7, 'every band button starts as pressed (on)');
   assert.match(popup, /class="band-tag" aria-pressed="false" data-band="match"/, 'the loudness match starts off (1.5.0 default = the 1.4.0 chain)');
-  assert.equal((popup.match(/<span class="band-tag static" title="[^"]+"/g) || []).length, 2, 'LIM and CEIL are labelled, always-on tags');
+  assert.equal((popup.match(/<span class="band-tag static" title="[^"]+"/g) || []).length, 3, 'ROOM, LIM and CEIL are labelled, always-on tags');
   for (const m of popup.matchAll(/<select[^>]*class="mode-select"[^>]*>/g)) assert.match(m[0], /aria-label="[^"]+"/, `mode menu without a name: ${m[0]}`);
-  for (const m of popup.matchAll(/<div class="gr-meter"[^>]*>/g)) assert.match(m[0], /role="meter" aria-label="[^"]+" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"/, `meter without a name or range: ${m[0]}`);
+  for (const m of popup.matchAll(/<div class="gr-meter"[^>]*>/g)) assert.match(m[0], /role="meter" aria-label="[^"]+" aria-valuemin="0" aria-valuemax="(?:12|3)" aria-valuenow="0"/, `meter without a name or range: ${m[0]}`);
   assert.match(popup, /id="hint" role="status" aria-live="polite"/);
 });
 
@@ -134,18 +134,18 @@ test('dynamics (1.5.0, D-01): the alternatives ship as switchable stages, the 1.
   for (const name of ['band-leveler', 'loudness-match', 'lookahead-limiter']) assert.match(worklet, new RegExp(`registerProcessor\\('${name}'`), `${name} not registered`);
   assert.match(readFileSync(join(root, 'tools/build.mjs'), 'utf8'), new RegExp(`'${m[1].replace(/\./g, '\\.')}'`), 'the worklet is not in the build list');
   // The frozen 1.4.0 stages (the user's rule of 2026-10-04): these numbers may not move without the user's OK.
-  assert.match(offscreen, /DEFAULT_DYNAMICS = \{ leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' \}/, 'the defaults are the 1.4.0 chain');
+  assert.match(offscreen, /DEFAULT_DYNAMICS = \{ leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' \}/, 'the defaults are the 1.4.0 chain');
   assert.match(offscreen, /autoBalanceComp\.threshold\.value = -18;\s*autoBalanceComp\.knee\.value = 20;\s*autoBalanceComp\.ratio\.value = 3\.5;\s*autoBalanceComp\.attack\.value = 0\.01;\s*autoBalanceComp\.release\.value = 0\.2;/);
   assert.match(offscreen, /masterLimiter\.threshold\.value = -0\.3;[^]*?masterLimiter\.knee\.value = 0\.0;\s*masterLimiter\.ratio\.value = 20\.0;\s*masterLimiter\.attack\.value = 0\.001;\s*masterLimiter\.release\.value = 0\.05;/);
   assert.match(offscreen, /CEILING_KNEE = 0\.93;/);
   assert.match(offscreen, /CEILING_MAX = 0\.966;/);
   assert.match(offscreen, /hpfNode\.Q\.value = 0\.707;[^]*?bassNode\.frequency\.value = 120;[^]*?midNode\.frequency\.value = 1000;\s*midNode\.Q\.value = 0\.8;[^]*?highNode\.frequency\.value = 5000;/);
   const background = readFileSync(join(root, 'background.js'), 'utf8');
-  assert.match(background, /DEFAULT_DYNAMICS = \{ leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' \}/);
+  assert.match(background, /DEFAULT_DYNAMICS = \{ leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' \}/);
   // Rows top to bottom in signal order (the user's request of 2026-10-04); the modes are engine settings, not preset fields.
   const popup = readFileSync(join(root, 'popup.html'), 'utf8');
   const order = [...popup.matchAll(/<div class="eq-row[^"]*" data-band="([a-z]+)">/g)].map((x) => x[1]);
-  assert.deepEqual(order, ['pitch', 'hpf', 'bass', 'mid', 'high', 'comp', 'match', 'gain', 'limiter', 'ceiling']);
+  assert.deepEqual(order, ['pitch', 'hpf', 'bass', 'mid', 'high', 'room', 'comp', 'match', 'gain', 'limiter', 'ceiling']);
   for (const id of ['mode-leveler', 'mode-limiter', 'mode-ceiling']) assert.match(popup, new RegExp(`id="${id}"`));
   assert.doesNotMatch(background, /leveler: 'full'[^}]*\}[^]*?FACTORY_PRESETS = \{/, 'dynamics must not be baked into the factory presets');
   for (const preset of Object.values(FACTORY_PRESET_VALUES(background))) assert.ok(!('leveler' in preset) && !('limiter' in preset) && !('ceiling' in preset) && !('match' in preset), 'a factory preset carries a dynamics mode');

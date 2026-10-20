@@ -571,11 +571,11 @@ input:checked + .slider-round:before {
 }
 
 .phys-canvas.live {
-  height: 48px;
+  height: 40px;
 }
 
 .phys-canvas.bode {
-  height: 44px;
+  height: 36px;
 }
 
 /* Sliders */
@@ -640,7 +640,9 @@ input:checked + .slider-round:before {
 
 /* Dynamics rows (AUTO, MATCH, LIM, CEIL): the stage's name and its mode menu in the label cell, a live bar where the
    slider would be, and the figure at the right. The bar is how much the stage is turning the music down (full at 12 dB). */
-.dyn-label {
+.eq-label.dyn-label {
+  width: 150px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -656,7 +658,9 @@ input:checked + .slider-round:before {
   font-weight: 500;
   height: 18px;
   padding: 0 2px;
-  max-width: 80px;
+  width: 100px;
+  max-width: 100px;
+  flex-shrink: 0;
   background: var(--bg-surface, #1e1e26);
   color: var(--text-main, #fff);
   border: 1px solid rgba(255, 255, 255, 0.16);

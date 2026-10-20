@@ -234,6 +234,9 @@ class PhysicsView {
     ctx.textAlign = 'left';
     ctx.fillStyle = '#555';
     ctx.fillText('0 dB', 3, zeroY - 3);
+    ctx.textAlign = 'right';
+    ctx.fillText('Approximate EQ before dynamics', w - 4, 10);
+    ctx.textAlign = 'left';
 
     // |H(f)| in dB, ±24 dB visible
     const pts = [];

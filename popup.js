@@ -15,7 +15,7 @@ let movieAlertText = '';
 let movieAlertTimer = null;
 // Dynamics modes (1.5.0, D-01). From 1.5.8 (R-28) Save and Update may store a copy on the preset.
 // The top-level `dynamics` value is still the sound in force. The defaults are the 1.4.0 chain.
-const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
+const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean', room: 'off' };
 let dynamics = { ...DYN_DEFAULT };
 let switchBaseline = null; // saved switches on the selected preset, or null when that preset has none
 let presetUiGen = 0; // a newer select, save, update, delete or reset ignores a stale reply
@@ -25,6 +25,7 @@ let heardPresetRev = 0; // highest revision heard, including from another screen
 let presetOpsInFlight = 0;
 let presetViewWatching = false;
 let dynUnavailableTold = false;
+let dynLastError = '';
 const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
 const isPanel = query.get('panel') === '1';       // Chrome's side panel (Stay open)
@@ -88,7 +89,11 @@ const pitchNudges = [...document.querySelectorAll('.eq-nudge-btn[data-target="sl
 const modeLeveler = document.getElementById('mode-leveler');
 const modeLimiter = document.getElementById('mode-limiter');
 const modeCeiling = document.getElementById('mode-ceiling');
+const modeRoom = document.getElementById('mode-room');
+const MODE_TITLES = {"peaks": "Softens the tallest bass hits. Other sounds can still dip. Adds about 5 ms of delay and lowers overall level by 8 dB.", "truepeak": "Catches peaks between audio samples. Adds about 6 ms of delay.", "unmud": "Reduces thick, boomy sound when bass is loud. Can also thin low voices.", "centre": "Makes very wide bass more centred. Some film effects may sound narrower.", "both": "Unmud and Centre bass are on together.", "off": "Room processing is off."};
+const defaultModeTitles = new Map();
 const meters = {
+  room: { bar: document.getElementById('meter-room'), val: document.getElementById('val-room'), shown: 0 },
   comp: { bar: document.getElementById('meter-comp'), val: document.getElementById('val-comp'), shown: 0 },
   match: { bar: document.getElementById('meter-match'), val: document.getElementById('val-match'), shown: 0 },
   limiter: { bar: document.getElementById('meter-limiter'), val: document.getElementById('val-limiter'), shown: 0 },
@@ -132,6 +137,7 @@ function stopFrames() {
 const METER_MAX_DB = 12;
 const METER_FALL_PER_FRAME = 1.4;
 function updateMeters(dyn) {
+  if (!dyn) { dynUnavailableTold = false; dynLastError = ''; }
   for (const [key, m] of Object.entries(meters)) {
     if (!m.bar || !m.val) continue;
     if (!dyn) {
@@ -144,36 +150,60 @@ function updateMeters(dyn) {
       m.val.classList.add('idle');
       continue;
     }
+    const roomMode = dyn.roomMode || dynamics.room;
+    if (key === 'room' && (roomMode === 'unmud' || roomMode === 'both')) m.val.title = "Unmud's actual 250 Hz dip. The bar is full at 3 dB.";
+    if (key === 'room' && (roomMode === 'off' || roomMode === 'centre')) {
+      m.shown = 0;
+      m.bar.firstElementChild.style.width = '0%';
+      m.bar.classList.remove('warn', 'heavy');
+      m.bar.setAttribute('aria-valuenow', '0');
+      m.val.textContent = roomMode === 'centre' ? '—' : 'off';
+      m.val.title = roomMode === 'centre' ? MODE_TITLES.centre + ' Unmud is off.' : MODE_TITLES.off;
+      m.bar.setAttribute('aria-valuetext', m.val.title);
+      m.val.classList.remove('idle');
+      continue;
+    }
+    const maxDb = key === 'room' ? 3 : METER_MAX_DB;
     const raw = Number(dyn[key === 'comp' ? 'leveler' : key]) || 0;
     const size = Math.abs(raw);
     m.shown = Math.max(size, m.shown - METER_FALL_PER_FRAME);
-    const pct = Math.max(0, Math.min(100, (m.shown / METER_MAX_DB) * 100));
+    const pct = Math.max(0, Math.min(100, (m.shown / maxDb) * 100));
     m.bar.firstElementChild.style.width = `${pct.toFixed(1)}%`;
     m.bar.classList.toggle('warn', m.shown >= 3 && m.shown < 8);
     m.bar.classList.toggle('heavy', m.shown >= 8);
-    m.bar.setAttribute('aria-valuenow', Math.min(METER_MAX_DB, m.shown).toFixed(1));
+    m.bar.setAttribute('aria-valuenow', Math.min(maxDb, m.shown).toFixed(1));
     const signed = key === 'match' ? raw : -size;
     m.val.textContent = `${signed > 0.05 ? '+' : signed < -0.05 ? '−' : ''}${Math.abs(signed).toFixed(1)} dB`;
     m.bar.setAttribute('aria-valuetext', m.val.textContent);
     m.val.classList.remove('idle');
   }
-  if (dyn && dyn.available === false && !dynUnavailableTold) {
+  if (dyn && dyn.available === false && (!dynUnavailableTold || dyn.error !== dynLastError)) {
     dynUnavailableTold = true;
-    showHint('The alternative stages (Bass only, Loudness match, Look-ahead) could not be loaded in this Chrome; the original stages are in use.', 8000);
+    dynLastError = dyn.error;
+    showHint(dyn.error || 'An alternative stage could not be loaded. Stop and restart the EQ before continuing.', 8000);
   }
 }
 
 function normaliseDyn(d) {
   const x = d || {};
   return {
-    leveler: ['full', 'slow', 'bass'].includes(x.leveler) ? x.leveler : 'full',
+    leveler: ['full', 'slow', 'bass', 'peaks'].includes(x.leveler) ? x.leveler : 'full',
     match: x.match === true,
-    limiter: ['fast', 'lookahead'].includes(x.limiter) ? x.limiter : 'fast',
-    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean'
+    limiter: ['fast', 'lookahead', 'truepeak'].includes(x.limiter) ? x.limiter : 'fast',
+    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean',
+    room: ['off', 'unmud', 'centre', 'both'].includes(x.room) ? x.room : 'off'
   };
 }
 
 function applyDynamicsToUI() {
+  if (modeRoom) modeRoom.value = dynamics.room;
+  if (meters.room.val) meters.room.val.title = dynamics.room === 'centre' ? MODE_TITLES.centre + ' Unmud is off.' : dynamics.room === 'off' ? MODE_TITLES.off : "Unmud's actual 250 Hz dip. The bar is full at 3 dB.";
+  for (const el of [modeLeveler, modeLimiter, modeRoom]) {
+    if (!el) continue;
+    if (!defaultModeTitles.has(el)) defaultModeTitles.set(el, el.parentElement ? el.parentElement.title : '');
+    const value = el === modeRoom ? dynamics.room : el === modeLeveler ? dynamics.leveler : dynamics.limiter;
+    el.title = MODE_TITLES[value] || defaultModeTitles.get(el);
+  }
   if (modeLeveler) modeLeveler.value = dynamics.leveler;
   if (modeLimiter) modeLimiter.value = dynamics.limiter;
   if (modeCeiling) modeCeiling.value = dynamics.ceiling;
@@ -197,6 +227,7 @@ function sendDynamicsUpdate() {
 
 if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate(); };
 if (modeLimiter) modeLimiter.onchange = () => { dynamics.limiter = modeLimiter.value; sendDynamicsUpdate(); };
+if (modeRoom) modeRoom.onchange = () => { dynamics.room = modeRoom.value; sendDynamicsUpdate(); };
 if (modeCeiling) modeCeiling.onchange = () => { dynamics.ceiling = modeCeiling.value; sendDynamicsUpdate(); };
 window.addEventListener('unload', stopFrames);
 let resizeTimer = null;
@@ -777,15 +808,15 @@ function stripDynamics(preset) {
 function sameSwitches(a, b) {
   const x = normaliseDyn(a);
   const y = normaliseDyn(b);
-  return x.leveler === y.leveler && x.match === y.match && x.limiter === y.limiter && x.ceiling === y.ceiling;
+  return x.leveler === y.leveler && x.match === y.match && x.limiter === y.limiter && x.ceiling === y.ceiling && x.room === y.room;
 }
 
 function bumpPresetUi() { return ++presetUiGen; }
 function presetUiCurrent(gen) { return gen === presetUiGen; }
 
 const SWITCH_LABELS = {
-  saved: ['EQ + switches', 'Picking this preset or pressing Reset also sets Leveler, MATCH, Limiter and Ceiling.'],
-  custom: ['EQ only', 'Picking this preset sets the EQ only; Leveler, MATCH, Limiter and Ceiling stay as they are. Press Update to save the current switches with it.'],
+  saved: ['EQ + switches', 'Picking this preset or pressing Reset also sets Room, Leveler, MATCH, Limiter and Ceiling.'],
+  custom: ['EQ only', 'Picking this preset sets the EQ only; Room, Leveler, MATCH, Limiter and Ceiling stay as they are. Press Update to save the current switches with it.'],
   factory: ['EQ only', 'Default presets set the EQ only. Save a copy to keep switches with it.']
 };
 const RESET_TITLE_SWITCHES = "Restore this preset's saved EQ and switches";
