@@ -93,12 +93,16 @@ function loadBackground() {
     scripting: { executeScript: async () => [] },
     windows: { getLastFocused: async () => ({ id: 1 }), create: async () => ({ id: 2 }), update: async () => {}, remove: async () => {} }
   };
-  const sandbox = {
-    console, Math, Number, Object, Array, Error, String, Boolean, Date, Promise, isFinite, Infinity, Map, Set,
-    setTimeout, clearTimeout, setInterval, clearInterval, chrome
+  const boot = () => {
+    const sandbox = {
+      console, Math, Number, Object, Array, Error, String, Boolean, Date, Promise, isFinite, Infinity, Map, Set,
+      setTimeout, clearTimeout, setInterval, clearInterval, chrome
+    };
+    vm.createContext(sandbox);
+    vm.runInContext(backgroundSrc, sandbox, { filename: 'background.js' });
+    return sandbox;
   };
-  vm.createContext(sandbox);
-  vm.runInContext(backgroundSrc, sandbox, { filename: 'background.js' });
+  let sandbox = boot();
   function send(message) {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('no response for ' + message.type)), 3000);
@@ -117,6 +121,9 @@ function loadBackground() {
     releaseOneSet() { const w = setWaiters.shift(); if (w) w(); },
     setOffscreen(v) { offscreenOpen = v; },
     install: () => onInstalled(),
+    // MV3 stops an idle worker; the next message starts a fresh one. Memory (the write queue) is gone,
+    // chrome.storage is not.
+    async restart() { sandbox = boot(); this.sandbox = sandbox; await new Promise((r) => setTimeout(r, 30)); },
     async ready() { await new Promise((r) => setTimeout(r, 30)); }
   };
 }
@@ -185,11 +192,9 @@ async function until(fn, label) {
 
 function snapshot(bag) { return structuredClone(bag); }
 
-function viewOf(bg) {
-  return {
-    expectedRev: Number.isInteger(bg.local.presetRev) ? bg.local.presetRev : 0,
-    expectedPreset: bg.local.currentPreset || 'Punchy Bass & Clarity'
-  };
+// Direct sends act as one up-to-date screen: its id, and the revision stored now.
+function viewOf(bg, surfaceId = 'test-surface') {
+  return { surfaceId, viewRev: Number.isInteger(bg.local.stateRev) ? bg.local.stateRev : 0 };
 }
 
 test('save and update store normalised switches and strip them out of currentParams', async () => {
@@ -270,10 +275,10 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   const beforeMovie = snapshot(bg.local.presets.Movie);
   const start = bg.localSets.length;
   const offStart = bg.offscreenMsgs.length;
-  const applied = await bg.send({ type: 'APPLY_PRESET', presetName: 'Movie', params: { ...EQ, bass: 1, dynamics: { junk: true } }, dynamics: MOVIE });
+  const applied = await bg.send({ type: 'APPLY_PRESET', presetName: 'Movie', params: { ...EQ, bass: 1, dynamics: { junk: true } }, dynamics: MOVIE, ...viewOf(bg) });
   const sets = bg.localSets.slice(start);
   assert.equal(sets.length, 1);
-  assert.deepEqual(Object.keys(sets[0]).sort(), ['currentParams', 'currentPreset', 'dynamics', 'presetRev']);
+  assert.deepEqual(Object.keys(sets[0]).sort(), ['currentParams', 'currentPreset', 'dynamics', 'lastWriter', 'stateRev']);
   assert.equal('dynamics' in sets[0].currentParams, false);
   assert.deepEqual(sets[0].dynamics, MOVIE);
   assert.equal(applied.dynamicsApplied, true);
@@ -289,7 +294,7 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   const entryBefore = snapshot(bg.local.presets.Legacy);
   const mark = bg.localSets.length;
   const offMark = bg.offscreenMsgs.length;
-  const legacyApply = await bg.send({ type: 'APPLY_PRESET', presetName: 'Legacy', params: legacy });
+  const legacyApply = await bg.send({ type: 'APPLY_PRESET', presetName: 'Legacy', params: legacy, ...viewOf(bg) });
   const legacySets = bg.localSets.slice(mark);
   assert.equal(legacySets.length, 1);
   assert.equal('dynamics' in legacySets[0], false);
@@ -334,7 +339,7 @@ test('picking or resetting a preset with switches is one local set; a legacy pre
   assert.equal('dynamics' in bg.local.presets['Punchy Bass & Clarity'], false);
 });
 
-test('a slider does not put the switches back, and the last preset write wins', async () => {
+test('a slider does not put the switches back or rename the preset, and the last preset write wins', async () => {
   const bg = loadBackground();
   await bg.ready();
   bg.setOffscreen(true);
@@ -342,24 +347,28 @@ test('a slider does not put the switches back, and the last preset write wins', 
     A: { ...EQ, bass: 1, dynamics: { ...MOVIE } },
     B: { ...EQ, bass: 2, dynamics: { ...MUSIC } }
   };
+  bg.local.currentPreset = 'B';
   bg.local.dynamics = { ...DEFAULT_DYN };
-  await bg.send({ type: 'SET_DYNAMICS', dynamics: MOVIE });
+  await bg.send({ type: 'EDIT_DYNAMICS', dynamics: MOVIE, ...viewOf(bg) });
   const off = bg.offscreenMsgs.length;
   const mark = bg.localSets.length;
-  await bg.send({ type: 'UPDATE_AUDIO_PARAMS', params: { ...EQ, bass: 4, dynamics: { leveler: 'bass', match: false, limiter: 'fast', ceiling: 'clean' } }, presetName: 'A' });
+  await bg.send({ type: 'EDIT_PARAMS', params: { ...EQ, bass: 4, dynamics: { leveler: 'bass', match: false, limiter: 'fast', ceiling: 'clean' } }, presetName: 'A', ...viewOf(bg) });
   assert.deepEqual(bg.local.dynamics, MOVIE);
   assert.equal(bg.local.currentParams.bass, 4);
   assert.equal('dynamics' in bg.local.currentParams, false);
   assert.equal('dynamics' in bg.localSets[bg.localSets.length - 1], false);
   assert.equal(bg.localSets.length, mark + 1);
-  assert.equal('presetRev' in bg.localSets[bg.localSets.length - 1], false);
-  assert.equal(bg.local.presetRev, undefined);
+  // One set: the EQ, the revision and the writer. A stale `presetName` is ignored: a slider never renames the preset.
+  assert.deepEqual(Object.keys(bg.localSets.at(-1)).sort(), ['currentParams', 'lastWriter', 'stateRev']);
+  assert.equal(bg.local.currentPreset, 'B');
+  assert.equal(bg.local.stateRev, 2);
+  assert.equal(bg.local.lastWriter, 'test-surface');
   assert.deepEqual(bg.offscreenMsgs.slice(off).map((m) => m.type), ['UPDATE_AUDIO_PARAMS']);
 
   bg.hold(true);
-  const first = bg.send({ type: 'APPLY_PRESET', presetName: 'A', params: { ...EQ, bass: 1 }, dynamics: MOVIE });
+  const first = bg.send({ type: 'APPLY_PRESET', presetName: 'A', params: { ...EQ, bass: 1 }, dynamics: MOVIE, ...viewOf(bg) });
   await until(() => bg.setWaiters.length === 1, 'first apply held');
-  const second = bg.send({ type: 'APPLY_PRESET', presetName: 'B', params: { ...EQ, bass: 2 }, dynamics: MUSIC });
+  const second = bg.send({ type: 'APPLY_PRESET', presetName: 'B', params: { ...EQ, bass: 2 }, dynamics: MUSIC, ...viewOf(bg) });
   assert.equal(bg.setWaiters.length, 1, 'the second apply waits until the first write finishes');
   bg.releaseOneSet();
   await until(() => bg.setWaiters.length === 1, 'second apply held');
@@ -390,13 +399,13 @@ test('Movie Sound never sees one preset\'s EQ with another\'s switches', async (
   assert.equal(settingsOf(link).length, 1);
 
   bg.hold(true);
-  const applyA = bg.send({ type: 'APPLY_PRESET', presetName: 'A', params: { ...EQ, bass: 1 }, dynamics: MOVIE });
+  const applyA = bg.send({ type: 'APPLY_PRESET', presetName: 'A', params: { ...EQ, bass: 1 }, dynamics: MOVIE, ...viewOf(bg) });
   await until(() => bg.setWaiters.length === 1, 'A held');
   await link.advance(500);
   assert.equal(settingsOf(link).length, 1, 'a held write is invisible to Movie Sound');
   bg.releaseOneSet();
   await applyA;
-  const applyB = bg.send({ type: 'APPLY_PRESET', presetName: 'B', params: { ...EQ, bass: 2 }, dynamics: MUSIC });
+  const applyB = bg.send({ type: 'APPLY_PRESET', presetName: 'B', params: { ...EQ, bass: 2 }, dynamics: MUSIC, ...viewOf(bg) });
   await until(() => bg.setWaiters.length === 1, 'B held');
   await link.advance(100);
   bg.releaseOneSet();
@@ -418,7 +427,7 @@ test('Movie Sound never sees one preset\'s EQ with another\'s switches', async (
   assert.equal(last.currentPreset, 'B');
   assert.deepEqual(norm(last.dynamics), MUSIC);
 
-  const legacyApply = bg.send({ type: 'APPLY_PRESET', presetName: 'Legacy', params: legacy });
+  const legacyApply = bg.send({ type: 'APPLY_PRESET', presetName: 'Legacy', params: legacy, ...viewOf(bg) });
   await legacyApply;
   await link.advance(100);
   assert.deepEqual(bg.local.dynamics, MUSIC, 'a legacy preset leaves the switches in force');
@@ -436,7 +445,7 @@ test('a switch then Save stores the new switches, not the ones still in flight',
   bg.local.presets = {};
   bg.local.dynamics = { ...DEFAULT_DYN };
   bg.hold(true);
-  const stale = bg.send({ type: 'SET_DYNAMICS', dynamics: DEFAULT_DYN });
+  const stale = bg.send({ type: 'EDIT_DYNAMICS', dynamics: DEFAULT_DYN, ...viewOf(bg) });
   await until(() => bg.setWaiters.length === 1, 'stale switch held');
   const save = bg.send({ type: 'SAVE_PRESET', name: 'Snap', params: EQ, dynamics: MOVIE, ...viewOf(bg) });
   assert.equal(bg.setWaiters.length, 1);
@@ -497,7 +506,8 @@ test('APPLY_PRESET publishes the stored preset, not the caller cache', async () 
     type: 'APPLY_PRESET',
     presetName: 'B',
     params: { ...EQ, bass: 99 },
-    dynamics: MOVIE
+    dynamics: MOVIE,
+    ...viewOf(bg)
   });
   assert.equal(applied.success, true);
   assert.equal(applied.saved, true);
@@ -519,7 +529,7 @@ test('a queued preset read happens after writes that were already waiting', asyn
   bg.hold(true);
   const reset = bg.send({ type: 'RESET_DEFAULT_PRESETS', currentPreset: 'Movie', ...viewOf(bg) });
   await until(() => bg.setWaiters.length === 1, 'reset held');
-  const edit = bg.send({ type: 'SET_DYNAMICS', dynamics: { ...MOVIE, leveler: 'full' } });
+  const edit = bg.send({ type: 'EDIT_DYNAMICS', dynamics: { ...MOVIE, leveler: 'full' }, ...viewOf(bg) });
   const read = bg.send({ type: 'READ_PRESET_STATE' });
   bg.releaseOneSet();
   await until(() => bg.setWaiters.length === 1, 'switch held');
@@ -543,6 +553,7 @@ function openPopup(bg, search = '') {
   const pending = new Set();
   const replies = [];
   const held = new Set();
+  const sent = [];
   const docListeners = {};
   const winListeners = {};
   class El {
@@ -611,6 +622,7 @@ function openPopup(bg, search = '') {
       ...bg.chrome.runtime,
       onMessage: { addListener() {} },
       sendMessage(message, cb) {
+        sent.push(structuredClone(message));
         const p = bg.send(structuredClone(message)).then((res) => {
           if (!cb) return;
           const deliver = () => cb(res);
@@ -665,6 +677,18 @@ function openPopup(bg, search = '') {
     },
     held,
     replies,
+    sent,
+    slider(id, value) {
+      const el = get('slider-' + id);
+      el.value = value;
+      el.oninput({ target: el });
+    },
+    remove() { get('btn-delete-preset').onclick(); },
+    releaseAll(type) {
+      const mine = replies.filter((r) => r.type === type);
+      for (const r of mine) replies.splice(replies.indexOf(r), 1);
+      for (const r of mine) r.deliver();
+    },
     save(name) {
       sandbox.saveName = name;
       get('btn-save-preset').onclick();
@@ -791,8 +815,19 @@ test('a side panel refreshes on focus, and a stale Update writes nothing', async
   assert.equal(bg.local.presets.B.dynamics.leveler, 'full');
   assert.equal(bg.local.presets.B.bass, 2);
   const savedB = snapshot(bg.local.presets.B);
+  // The panel's Update made it the last writer, and the popup has not painted that: its pick writes
+  // nothing, and it shows the stored state with the hint. Picked again, it goes through.
+  const beforePick = bg.localSets.length;
   popup.select('A');
   await popup.idle();
+  assert.equal(bg.localSets.length, beforePick);
+  assert.equal(bg.local.currentPreset, 'B');
+  assert.equal(popup.state().name, 'B');
+  assert.equal(popup.state().dynamics.leveler, 'full');
+  assert.equal(popup.get('hint').textContent, 'Another window changed your presets, so this one has been refreshed. Please try again.');
+  popup.select('A');
+  await popup.idle();
+  assert.equal(bg.local.currentPreset, 'A');
   assert.equal(panel.state().name, 'B');
   panel.update();
   await panel.idle();
@@ -847,15 +882,22 @@ test('a late Save reply cannot make Update copy the other preset onto the saved 
   await popup.idle();
   assert.equal(bg.local.presets['Saved A'].bass, 1);
   assert.deepEqual(bg.local.presets['Saved A'].dynamics, MOVIE);
+  // The panel paints the Save when focused (its pick would otherwise be refused), then picks B.
+  panel.focus();
+  await panel.idle();
+  assert.equal(panel.state().name, 'Saved A');
   panel.select('B');
   await panel.idle();
+  assert.equal(bg.local.currentPreset, 'B');
   assert.equal(popup.state().name, 'A');
   assert.equal(popup.state().params.bass, 1);
   assert.deepEqual(popup.state().dynamics, MOVIE);
   popup.release('SAVE_PRESET');
   await popup.idle();
-  assert.equal(popup.state().name, 'A');
+  // The late reply paints only the Save it acknowledges: the name and the controls are Saved A's.
+  assert.equal(popup.state().name, 'Saved A');
   assert.equal(popup.state().params.bass, 1);
+  assert.deepEqual(popup.state().dynamics, MOVIE);
   popup.update();
   await popup.idle();
   assert.equal(bg.local.presets['Saved A'].bass, 1);
@@ -885,8 +927,11 @@ test('a delayed preset read does not let Save publish the preset another screen 
   popup.release('RESET_DEFAULT_PRESETS');
   await popup.idle();
   assert.equal(popup.replies[0].type, 'READ_PRESET_STATE');
+  panel.focus();
+  await panel.idle();
   panel.select('B');
   await panel.idle();
+  assert.equal(bg.local.currentPreset, 'B');
   assert.equal(popup.state().name, 'A');
   assert.equal(popup.state().dynamics.leveler, 'full');
   popup.release('READ_PRESET_STATE');
@@ -917,8 +962,11 @@ test('a delayed Reset reply does not repaint a newer selection, and Save is refu
   popup.held.add('RESET_DEFAULT_PRESETS');
   popup.reset();
   await popup.idle();
+  panel.focus();
+  await panel.idle();
   panel.select('B');
   await panel.idle();
+  assert.equal(bg.local.currentPreset, 'B');
   assert.equal(popup.state().name, 'A');
   const sets = bg.localSets.length;
   popup.release('RESET_DEFAULT_PRESETS');
@@ -984,4 +1032,439 @@ test('reversed pick replies keep the newer preset, then Save stores that preset\
   await popup.idle();
   assert.equal(bg.local.presets['Toggle then Save'].dynamics.leveler, 'bass');
   assert.equal(bg.local.presets['Toggle then Save'].bass, 2);
+});
+
+// Round 3: one write rule. A write is accepted from the screen that wrote last, or from a screen whose
+// controls show the stored revision; anything else writes nothing and that screen repaints the stored state.
+
+const linkKept = (link) => {
+  for (const post of settingsOf(link)) {
+    if (post.currentPreset === 'A') assert.deepEqual(norm(post.dynamics), MOVIE, 'A with its own switches');
+    if (post.currentPreset === 'B') assert.deepEqual(norm(post.dynamics), MUSIC, 'B with its own switches');
+  }
+};
+
+test('a write without its screen id and revision, or from a screen that is out of date, is refused and writes nothing', async () => {
+  const bg = await seedSurfaces();
+  const base = snapshot(bg.local);
+  const writes = [
+    { type: 'EDIT_PARAMS', params: { ...EQ, bass: 7 } },
+    { type: 'EDIT_DYNAMICS', dynamics: MUSIC },
+    { type: 'APPLY_PRESET', presetName: 'B' },
+    { type: 'SET_ACTIVE_PRESET', presetName: 'B' },
+    { type: 'SAVE_PRESET', name: 'Untagged', params: EQ, dynamics: MUSIC },
+    { type: 'UPDATE_PRESET', name: 'A', params: EQ, dynamics: MUSIC },
+    { type: 'DELETE_PRESET', name: 'A' },
+    { type: 'RESET_DEFAULT_PRESETS', currentPreset: 'A' },
+    { type: 'RESET_DEFAULT_PRESETS' }
+  ];
+  for (const msg of writes) {
+    for (const tag of [{}, { surfaceId: 'one' }, { viewRev: 0 }, { surfaceId: '', viewRev: 0 }, { surfaceId: 'one', viewRev: '0' }]) {
+      const mark = bg.localSets.length;
+      const res = await bg.send({ ...msg, ...tag });
+      assert.equal(res.success, false, msg.type);
+      assert.equal(res.error, 'stale-view', msg.type);
+      assert.equal(res.stateRev, 0);
+      assert.equal(res.state.currentPreset, 'A');
+      assert.equal(bg.localSets.length, mark, msg.type + ' must not write');
+    }
+  }
+  assert.deepEqual(bg.local, base);
+  // Accepted: the revision and the writer go out in the write's own set.
+  const ok = await bg.send({ type: 'EDIT_DYNAMICS', dynamics: MUSIC, surfaceId: 'one', viewRev: 0 });
+  assert.equal(ok.success, true);
+  assert.equal(ok.stateRev, 1);
+  assert.deepEqual(bg.localSets.at(-1), { dynamics: MUSIC, stateRev: 1, lastWriter: 'one' });
+  // Another screen still showing revision 0 is refused. The last writer is not, whatever revision it sends.
+  const mark = bg.localSets.length;
+  const other = await bg.send({ type: 'EDIT_PARAMS', params: { ...EQ, bass: 7 }, surfaceId: 'two', viewRev: 0 });
+  assert.equal(other.error, 'stale-view');
+  assert.equal(other.state.stateRev, 1);
+  assert.deepEqual(other.state.dynamics, MUSIC);
+  assert.equal(bg.localSets.length, mark);
+  const again = await bg.send({ type: 'EDIT_PARAMS', params: { ...EQ, bass: 7 }, surfaceId: 'one', viewRev: 0 });
+  assert.equal(again.success, true);
+  assert.equal(again.stateRev, 2);
+  // A screen showing revision 2 may write, and becomes the last writer.
+  const current = await bg.send({ type: 'APPLY_PRESET', presetName: 'B', surfaceId: 'two', viewRev: 2 });
+  assert.equal(current.success, true);
+  assert.equal(current.stateRev, 3);
+  assert.equal(bg.local.lastWriter, 'two');
+  const refusedNow = await bg.send({ type: 'EDIT_DYNAMICS', dynamics: MOVIE, surfaceId: 'one', viewRev: 2 });
+  assert.equal(refusedNow.error, 'stale-view');
+  assert.deepEqual(bg.local.dynamics, MUSIC);
+});
+
+test('Sol r3 stale-slider: a screen that has not painted another screen\'s pick cannot move a slider', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  const link = attachLink(bg.chrome);
+  link.ask();
+  await link.advance(0);
+  q.select('B');
+  await q.idle();
+  const afterPick = snapshot(bg.local);
+  const mark = bg.localSets.length;
+  p.held.add('READ_PRESET_STATE');
+  p.focus();
+  await p.idle();
+  assert.equal(p.state().name, 'A');
+  p.slider('bass', 17);
+  await p.idle();
+  await link.advance(200);
+  assert.equal(bg.localSets.length, mark, 'the stale slider writes nothing');
+  assert.deepEqual(bg.local, afterPick);
+  const shown = p.state();
+  assert.equal(shown.name, 'B');
+  assert.equal(shown.params.bass, 2);
+  assert.deepEqual(shown.dynamics, MUSIC);
+  assert.equal(shown.hint, STALE_HINT);
+  const out = settingsOf(link).at(-1);
+  assert.equal(out.currentPreset, 'B');
+  assert.equal(out.currentParams.bass, 2);
+  assert.deepEqual(norm(out.dynamics), MUSIC);
+  linkKept(link);
+  p.releaseAll('READ_PRESET_STATE');
+  await p.idle();
+  assert.equal(p.state().name, 'B');
+  assert.equal(bg.localSets.length, mark);
+});
+
+test('Sol r3 stale-switch: a Ceiling change on a screen that has not painted another screen\'s pick writes nothing', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  const link = attachLink(bg.chrome);
+  link.ask();
+  await link.advance(0);
+  q.select('B');
+  await q.idle();
+  const afterPick = snapshot(bg.local);
+  const mark = bg.localSets.length;
+  p.held.add('READ_PRESET_STATE');
+  p.focus();
+  await p.idle();
+  p.mode('ceiling', 'clean');
+  await p.idle();
+  await link.advance(200);
+  assert.equal(bg.localSets.length, mark, 'the stale switch writes nothing');
+  assert.deepEqual(bg.local, afterPick);
+  assert.deepEqual(bg.local.dynamics, MUSIC, 'B keeps its leveler, MATCH and limiter');
+  const shown = p.state();
+  assert.equal(shown.name, 'B');
+  assert.deepEqual(shown.dynamics, MUSIC);
+  assert.equal(shown.hint, STALE_HINT);
+  const out = settingsOf(link).at(-1);
+  assert.equal(out.currentPreset, 'B');
+  assert.equal(out.currentParams.bass, 2);
+  assert.deepEqual(norm(out.dynamics), MUSIC);
+  linkKept(link);
+  p.releaseAll('READ_PRESET_STATE');
+  await p.idle();
+  assert.equal(bg.localSets.length, mark);
+});
+
+test('Sol r3 same-name: an edit on a screen that has not painted another screen\'s Update is refused before Update exists', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  q.slider('bass', 8);
+  await q.idle();
+  q.mode('leveler', 'slow');
+  await q.idle();
+  q.update();
+  await q.idle();
+  const updatedA = snapshot(bg.local.presets.A);
+  assert.equal(updatedA.bass, 8);
+  assert.equal(updatedA.dynamics.leveler, 'slow');
+  assert.equal(p.state().params.bass, 1);
+  assert.equal(p.run('viewRev'), 0);
+  assert.equal(bg.local.stateRev, 3);
+  p.held.add('READ_PRESET_STATE');
+  p.focus();
+  await p.idle();
+  const mark = bg.localSets.length;
+  p.mode('ceiling', 'clean');
+  await p.idle();
+  assert.equal(bg.localSets.length, mark, 'the stale switch writes nothing');
+  assert.deepEqual(bg.local.presets.A, updatedA);
+  const shown = p.state();
+  assert.equal(shown.name, 'A');
+  assert.equal(shown.params.bass, 8);
+  assert.equal(shown.dynamics.leveler, 'slow');
+  assert.equal(shown.dynamics.ceiling, 'warm');
+  assert.match(shown.badge, /Saved/);
+  assert.equal(shown.update, 'none', 'nothing is modified, so Update is not offered');
+  assert.equal(shown.hint, STALE_HINT);
+  // Pressed anyway, Update now stores what this screen shows: the stored A. Nothing newer is lost.
+  p.update();
+  await p.idle();
+  assert.deepEqual(bg.local.presets.A, updatedA);
+  p.releaseAll('READ_PRESET_STATE');
+  await p.idle();
+  assert.deepEqual(bg.local.presets.A, updatedA);
+});
+
+test('two up-to-date screens each move a slider: the second is refused, refreshed, then accepted', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  p.slider('bass', 5);
+  await p.idle();
+  assert.equal(bg.local.currentParams.bass, 5);
+  assert.equal(bg.local.lastWriter, p.run('surfaceId'));
+  let mark = bg.localSets.length;
+  q.slider('mid', 4);
+  await q.idle();
+  assert.equal(bg.localSets.length, mark, 'q had not painted p\'s slider');
+  assert.equal(bg.local.currentParams.mid, 1);
+  assert.equal(q.state().params.bass, 5);
+  assert.equal(q.state().params.mid, 1);
+  assert.equal(q.state().hint, STALE_HINT);
+  q.slider('mid', 4);
+  await q.idle();
+  assert.equal(bg.local.currentParams.bass, 5);
+  assert.equal(bg.local.currentParams.mid, 4);
+  assert.equal(bg.local.currentPreset, 'A');
+  assert.deepEqual(bg.local.dynamics, MOVIE);
+  assert.equal(bg.local.lastWriter, q.run('surfaceId'));
+  assert.notEqual(p.run('surfaceId'), q.run('surfaceId'));
+  // Now p is the one out of date.
+  mark = bg.localSets.length;
+  p.slider('high', 3);
+  await p.idle();
+  assert.equal(bg.localSets.length, mark);
+  assert.equal(bg.local.currentParams.high, 0);
+  assert.equal(p.state().params.mid, 4);
+  assert.equal(p.state().params.high, 0);
+  assert.equal(p.state().hint, STALE_HINT);
+});
+
+test('a drag across a refusal converges on the fresh view, and storage never mixes two presets', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  const link = attachLink(bg.chrome);
+  link.ask();
+  await link.advance(0);
+  const start = bg.localSets.length;
+  q.select('B');
+  await q.idle();
+  const afterPick = snapshot(bg.local);
+  const mark = bg.localSets.length;
+  // One message per input event, all sent before the first reply comes back.
+  p.held.add('EDIT_PARAMS');
+  for (const v of [10, 11, 12]) p.slider('bass', v);
+  await p.idle();
+  await link.advance(200);
+  assert.equal(p.replies.length, 3);
+  assert.equal(bg.localSets.length, mark);
+  assert.deepEqual(bg.local, afterPick);
+  // The first two refusals arrive after newer input and leave the screen alone; the last repaints it.
+  p.release('EDIT_PARAMS');
+  await p.idle();
+  p.release('EDIT_PARAMS');
+  await p.idle();
+  assert.equal(p.state().params.bass, 12);
+  assert.equal(p.state().hint, '');
+  p.release('EDIT_PARAMS');
+  await p.idle();
+  assert.equal(p.state().name, 'B');
+  assert.equal(p.state().params.bass, 2);
+  assert.deepEqual(p.state().dynamics, MUSIC);
+  assert.equal(p.state().hint, STALE_HINT);
+  // The next input event edits the fresh view.
+  p.held.delete('EDIT_PARAMS');
+  p.slider('bass', 13);
+  await p.idle();
+  await link.advance(200);
+  assert.equal(bg.local.currentPreset, 'B');
+  assert.equal(bg.local.currentParams.bass, 13);
+  assert.deepEqual(bg.local.dynamics, MUSIC);
+  assert.equal(bg.local.lastWriter, p.run('surfaceId'));
+  for (const set of bg.localSets.slice(start)) {
+    if (set.currentParams) assert.ok(![10, 11, 12].includes(set.currentParams.bass), 'a refused drag value was written');
+  }
+  linkKept(link);
+  const out = settingsOf(link).at(-1);
+  assert.equal(out.currentParams.bass, 13);
+  assert.deepEqual(norm(out.dynamics), MUSIC);
+});
+
+test('the last writer keeps writing across a worker restart; a screen that is out of date is still refused', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  // A drag whose replies have not come back: p's controls still carry revision 0.
+  p.held.add('EDIT_PARAMS');
+  p.slider('bass', 5);
+  await p.idle();
+  assert.equal(bg.local.stateRev, 1);
+  assert.equal(bg.local.lastWriter, p.run('surfaceId'));
+  const before = bg.sandbox;
+  await bg.restart();
+  assert.notEqual(bg.sandbox, before);
+  p.slider('bass', 6);
+  await p.idle();
+  assert.equal(p.sent.at(-1).viewRev, 0);
+  assert.equal(bg.local.currentParams.bass, 6, 'the restarted worker still knows the last writer');
+  assert.equal(bg.local.stateRev, 2);
+  p.releaseAll('EDIT_PARAMS');
+  await p.idle();
+  assert.equal(p.state().params.bass, 6);
+  assert.equal(p.state().hint, '');
+  assert.equal(p.run('viewRev'), 2);
+  const mark = bg.localSets.length;
+  q.slider('mid', 4);
+  await q.idle();
+  assert.equal(bg.localSets.length, mark);
+  assert.equal(q.state().params.bass, 6);
+  assert.equal(q.state().hint, STALE_HINT);
+});
+
+test('a late refusal does not paint over an edit accepted after the screen refreshed', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  q.select('B');
+  await q.idle();
+  p.held.add('EDIT_PARAMS');
+  p.slider('bass', 17);
+  await p.idle();
+  assert.equal(p.replies.length, 1, 'the refusal is late');
+  assert.equal(bg.local.currentParams.bass, 2);
+  p.focus();
+  await p.idle();
+  assert.equal(p.state().name, 'B');
+  assert.equal(p.state().params.bass, 2);
+  assert.equal(p.state().hint, '');
+  p.mode('leveler', 'bass');
+  await p.idle();
+  assert.equal(bg.local.dynamics.leveler, 'bass');
+  assert.equal(bg.local.lastWriter, p.run('surfaceId'));
+  const settled = snapshot(bg.local);
+  p.release('EDIT_PARAMS');
+  await p.idle();
+  assert.equal(p.state().dynamics.leveler, 'bass', 'the late refusal must not repaint B\'s slow leveler');
+  assert.equal(p.state().params.bass, 2);
+  assert.equal(p.state().hint, '');
+  assert.deepEqual(bg.local, settled);
+});
+
+test('every preset-state message from a screen carries its id and revision; a slider carries no preset name', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  await p.idle();
+  p.slider('bass', 4);
+  await p.idle();
+  p.mode('leveler', 'slow');
+  await p.idle();
+  p.select('B');
+  await p.idle();
+  p.save('Tagged');
+  await p.idle();
+  p.update();
+  await p.idle();
+  p.reset();
+  await p.idle();
+  p.remove();
+  await p.idle();
+  const id = p.run('surfaceId');
+  const kinds = ['EDIT_PARAMS', 'EDIT_DYNAMICS', 'APPLY_PRESET', 'SAVE_PRESET', 'UPDATE_PRESET', 'RESET_DEFAULT_PRESETS', 'DELETE_PRESET'];
+  const writes = p.sent.filter((m) => kinds.includes(m.type));
+  assert.deepEqual([...new Set(writes.map((m) => m.type))].sort(), [...kinds].sort());
+  for (const m of writes) {
+    assert.equal(m.surfaceId, id, m.type);
+    assert.ok(Number.isInteger(m.viewRev), m.type);
+    assert.equal('expectedRev' in m || 'expectedPreset' in m, false, m.type);
+  }
+  for (const m of writes.filter((x) => x.type === 'EDIT_PARAMS')) assert.equal('presetName' in m, false);
+  // The offscreen document answers an untargeted UPDATE_AUDIO_PARAMS or SET_DYNAMICS itself (it would apply a refused
+  // edit and reply before the worker). A screen therefore never sends those names; only the worker does, targeted.
+  const offscreenSrc = readFileSync(join(root, 'offscreen.js'), 'utf8');
+  for (const name of ['UPDATE_AUDIO_PARAMS', 'SET_DYNAMICS']) {
+    assert.match(offscreenSrc, new RegExp(`case '${name}':`), name + ' is answered by the offscreen document');
+    assert.equal(p.sent.some((m) => m.type === name && m.target !== 'offscreen'), false, name + ' sent from a screen');
+  }
+  assert.equal(/type: '(UPDATE_AUDIO_PARAMS|SET_DYNAMICS)'/.test(popupSrc), false, 'popup.js names an engine message');
+  assert.equal(bg.local.presets.Tagged, undefined, 'deleted again');
+  assert.equal(p.state().hint, '', 'one screen is never refused');
+});
+
+test('neither an unpainted refresh read nor an unpainted refusal makes a screen current (Sol r3 finding 2)', async () => {
+  const bg = await seedSurfaces();
+  const p = openPopup(bg);
+  const q = openPopup(bg, '?panel=1');
+  await p.idle();
+  await q.idle();
+  q.select('B');
+  await q.idle();
+  const afterPick = snapshot(bg.local);
+  const mark = bg.localSets.length;
+  p.held.add('READ_PRESET_STATE');
+  p.held.add('EDIT_PARAMS');
+  p.focus();
+  await p.idle();
+  p.slider('bass', 10);
+  await p.idle();
+  // The focus reads arrive after that edit, so they are not painted, and the screen still shows A.
+  p.releaseAll('READ_PRESET_STATE');
+  await p.idle();
+  assert.equal(p.state().name, 'A');
+  assert.equal(p.run('viewRev'), 0);
+  p.slider('bass', 11);
+  await p.idle();
+  // The first refusal arrives after a newer edit: not painted either.
+  p.release('EDIT_PARAMS');
+  await p.idle();
+  assert.equal(p.state().params.bass, 11);
+  assert.equal(p.run('viewRev'), 0);
+  p.slider('bass', 12);
+  await p.idle();
+  assert.equal(bg.localSets.length, mark, 'every edit from the view that was never painted is refused');
+  assert.deepEqual(bg.local, afterPick);
+  assert.ok(p.sent.filter((m) => m.type === 'EDIT_PARAMS').every((m) => m.viewRev === 0));
+  p.releaseAll('EDIT_PARAMS');
+  await p.idle();
+  assert.equal(p.state().name, 'B');
+  assert.equal(p.state().params.bass, 2);
+  assert.deepEqual(p.state().dynamics, MUSIC);
+  assert.equal(p.state().hint, STALE_HINT);
+  assert.equal(p.run('viewRev'), 1);
+});
+
+test('an absent or invalid stored revision counts as 0, install leaves it alone, and restore-defaults counts once', async () => {
+  for (const oldRev of [undefined, 0, 7, -5, 'invalid', 2.5]) {
+    const bg = await seedSurfaces();
+    if (oldRev !== undefined) bg.local.stateRev = oldRev;
+    await bg.install();
+    assert.deepEqual(bg.local.stateRev, oldRev, 'install does not write the revision');
+    assert.equal(bg.local.lastWriter, undefined);
+    const want = Number.isInteger(oldRev) && oldRev >= 0 ? oldRev : 0;
+    assert.equal((await bg.send({ type: 'READ_PRESET_STATE' })).stateRev, want);
+    assert.equal((await bg.send({ type: 'GET_STATE' })).stateRev, want);
+    const mark = bg.localSets.length;
+    const restored = await bg.send({ type: 'RESET_DEFAULT_PRESETS', surfaceId: 'opened', viewRev: want });
+    assert.equal(restored.success, true);
+    assert.equal(restored.stateRev, want + 1);
+    assert.equal(bg.localSets.length, mark + 1);
+    assert.equal(bg.local.stateRev, want + 1);
+    assert.ok(bg.local.presets.A && bg.local.presets.Legacy, 'custom presets are kept');
+    for (const [name, preset] of Object.entries(FACTORIES)) assert.deepEqual(bg.local.presets[name], preset);
+  }
 });

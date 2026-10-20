@@ -20,8 +20,13 @@ let dynamics = { ...DYN_DEFAULT };
 let switchBaseline = null; // saved switches on the selected preset, or null when that preset has none
 let presetUiGen = 0; // a newer select, save, update, delete or reset ignores a stale reply
 let surfaceEditSeq = 0; // slider and switch edits since this screen opened
-let paintedPresetRev = 0; // revision this screen last painted into the controls
-let heardPresetRev = 0; // highest revision heard, including from another screen, without painting it
+// R-28: the worker accepts a write from the screen that wrote last, or from a screen whose controls show the
+// latest revision. This screen's id, one per page load, and the revision its controls show. `viewRev` moves
+// only with this screen's own accepted writes and the reads it paints, never with another screen's event.
+const surfaceId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : `s${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+let viewRev = 0;
 let presetOpsInFlight = 0;
 let presetViewWatching = false;
 let dynUnavailableTold = false;
@@ -186,10 +191,13 @@ function noteSurfaceEdit() {
 }
 
 function sendDynamicsUpdate() {
-  noteSurfaceEdit();
+  const editAtSend = noteSurfaceEdit();
+  const gen = presetUiGen;
   dynamics = normaliseDyn(dynamics);
-  chrome.runtime.sendMessage({ type: 'SET_DYNAMICS', dynamics }, () => {
-    if (chrome.runtime.lastError) {}
+  chrome.runtime.sendMessage({ type: 'EDIT_DYNAMICS', dynamics, ...viewTag() }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (handleRefusal(res, gen, editAtSend)) return;
+    noteAccepted(res);
   });
   applyDynamicsToUI();
   checkPresetModificationState();
@@ -260,31 +268,36 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   if (chrome.runtime.lastError || !response) return;
 
   isCapturingActive = !!response.isCapturing;
-  presets = response.presets || {};
   factoryPresetNames = response.factoryPresets || [];
-  currentPresetName = response.currentPreset || "Punchy Bass & Clarity";
-  currentParams = normaliseBypass(stripDynamics(response.currentParams || presets[currentPresetName] || {}));
+  // A refusal reply can already have painted a newer state here; this older read must not replace it.
+  const openedRev = Number.isInteger(response.stateRev) ? response.stateRev : 0;
+  const opened = openedRev >= viewRev;
+  if (opened) {
+    viewRev = openedRev;
+    presets = response.presets || {};
+    currentPresetName = response.currentPreset || "Punchy Bass & Clarity";
+    currentParams = normaliseBypass(stripDynamics(response.currentParams || presets[currentPresetName] || {}));
+    // Hydrate only. A preset's saved switches are not applied again on open.
+    dynamics = normaliseDyn(response.dynamics);
+  }
   stayOpen = !!response.stayOpen;
   toggleStayOpen.checked = stayOpen;
-  // Hydrate only. A preset's saved switches are not applied again on open.
-  dynamics = normaliseDyn(response.dynamics);
-  const openedRev = Number.isInteger(response.presetRev) ? response.presetRev : 0;
-  if (openedRev >= heardPresetRev && openedRev >= paintedPresetRev) {
-    paintedPresetRev = openedRev;
-    if (openedRev > heardPresetRev) heardPresetRev = openedRev;
-  }
 
   updateEqPowerUI(isCapturingActive, response.capturedTabTitle);
   populatePresets(currentPresetName);
-  applyParamsToUI(currentParams);
-  applyDynamicsToUI();
+  if (opened) {
+    applyParamsToUI(currentParams);
+    applyDynamicsToUI();
+  }
   updateMovieModeUI(response, { checkSavedPitch: true });
 
-  const selected = presets[currentPresetName];
-  activePresetBaseline = selected ? { ...normaliseBypass(stripDynamics(selected)) } : null;
-  // EQ-only presets (legacy custom and factory) compare EQ only, so opening one does not
-  // treat the switches already in force as a saved baseline.
-  switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
+  if (opened) {
+    const selected = presets[currentPresetName];
+    activePresetBaseline = selected ? { ...normaliseBypass(stripDynamics(selected)) } : null;
+    // EQ-only presets (legacy custom and factory) compare EQ only, so opening one does not
+    // treat the switches already in force as a saved baseline.
+    switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
+  }
   checkPresetModificationState();
 
   physics.updateState(currentParams, isCapturingActive);
@@ -860,25 +873,27 @@ function applyLiveSelection(name) {
 
 const STALE_VIEW_HINT = 'Another window changed your presets, so this one has been refreshed. Please try again.';
 
-function rememberPresetRev(rev) {
-  if (Number.isInteger(rev) && rev > heardPresetRev) heardPresetRev = rev;
+// Every write of the preset state carries these.
+function viewTag() {
+  return { surfaceId, viewRev };
 }
 
 function replyRev(res) {
   if (!res) return null;
-  if (Number.isInteger(res.presetRev)) return res.presetRev;
-  if (res.state && Number.isInteger(res.state.presetRev)) return res.state.presetRev;
+  if (Number.isInteger(res.stateRev)) return res.stateRev;
+  if (res.state && Number.isInteger(res.state.stateRev)) return res.state.stateRev;
   return null;
 }
 
-// A reply that must not move the controls can still advance the revision we will send next,
-// and the preset cache, when it is not older than what this screen has already heard.
-function noteReply(res) {
+// This screen's own write was accepted, so viewRev moves up to its revision (never back), even when the reply
+// does not repaint. Anything these controls show beyond it is this screen's own later edits: accepted ones, or
+// refused ones, and a refusal means the stored revision had already moved past this one.
+function noteAccepted(res) {
+  if (!res || res.success !== true) return;
   const rev = replyRev(res);
-  if (rev == null) return;
-  const map = res.presets || (res.state && res.state.presets);
-  if (rev > heardPresetRev) heardPresetRev = rev;
-  if (map && rev >= heardPresetRev) presets = map;
+  if (rev == null || rev < viewRev) return;
+  viewRev = rev;
+  if (res.presets) presets = res.presets;
 }
 
 function mayPaint(res, gen, editAtSend) {
@@ -886,7 +901,7 @@ function mayPaint(res, gen, editAtSend) {
   if (!presetUiCurrent(gen)) return false;
   if (surfaceEditSeq !== editAtSend) return false;
   const rev = replyRev(res);
-  return rev != null && rev >= heardPresetRev;
+  return rev != null && rev >= viewRev;
 }
 
 function presetOpButtons() {
@@ -905,8 +920,12 @@ function unlockPresetOps() {
   }
 }
 
+// The stored state, from the worker's queue. Never painted over a newer state these controls already show.
 function paintPresetSnapshot(snap) {
   if (!snap) return;
+  const rev = Number.isInteger(snap.stateRev) ? snap.stateRev : null;
+  if (rev == null || rev < viewRev) return;
+  viewRev = rev;
   if (snap.presets) presets = snap.presets;
   const name = snap.currentPreset || currentPresetName;
   currentPresetName = name;
@@ -921,10 +940,6 @@ function paintPresetSnapshot(snap) {
   }
   const selected = presets[name];
   switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
-  if (Number.isInteger(snap.presetRev)) {
-    paintedPresetRev = snap.presetRev;
-    rememberPresetRev(snap.presetRev);
-  }
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
 }
@@ -941,53 +956,46 @@ function paintPickedReply(res) {
   } else {
     switchBaseline = null;
   }
-  if (Number.isInteger(res.presetRev)) {
-    paintedPresetRev = res.presetRev;
-    rememberPresetRev(res.presetRev);
-  }
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
 }
 
-function handleStaleView(res, gen, editAtSend) {
-  if (!res || res.error !== 'stale-view' || !res.state) return false;
-  const rev = Number.isInteger(res.state.presetRev) ? res.state.presetRev : null;
-  const fresh = presetUiCurrent(gen) && surfaceEditSeq === editAtSend && rev != null && rev >= heardPresetRev;
-  if (fresh) {
+// The worker refused this screen's write and wrote nothing. Paint the stored state it sent, with the hint,
+// unless this screen has made an edit or started a preset operation since that message: the newer one's own
+// reply settles the screen, so a drag converges and a late refusal never paints over a newer accepted edit.
+function handleRefusal(res, gen, editAtSend) {
+  if (!res || res.error !== 'stale-view') return false;
+  const rev = replyRev(res);
+  if (res.state && presetUiCurrent(gen) && surfaceEditSeq === editAtSend && rev != null && rev >= viewRev) {
     paintPresetSnapshot(res.state);
     showHint(STALE_VIEW_HINT);
-  } else {
-    noteReply(res);
   }
   return true;
 }
 
-// A newer local edit is already on screen. Read the queue and paint that, unless a newer
-// revision has been heard from another screen: then leave the controls alone.
+// A newer local edit is already on screen. Read the queue, which runs after that edit, and paint the result.
 function hydrateFromAuthoritativeState(gen) {
   const seq = surfaceEditSeq;
   chrome.runtime.sendMessage({ type: 'READ_PRESET_STATE' }, (res) => {
     if (!res?.success) return;
-    if (!presetUiCurrent(gen)) { noteReply(res); return; }
+    if (!presetUiCurrent(gen)) return;
     if (surfaceEditSeq !== seq) {
       hydrateFromAuthoritativeState(gen);
       return;
     }
-    if (!Number.isInteger(res.presetRev) || res.presetRev < heardPresetRev) { noteReply(res); return; }
     paintPresetSnapshot(res);
   });
 }
 
+// On focus or visibility: repaint when the stored state is newer than these controls, unless this screen
+// made an edit or started a preset operation after the read was sent.
 function refreshPresetView() {
   const gen = presetUiGen;
   const editAtSend = surfaceEditSeq;
   chrome.runtime.sendMessage({ type: 'READ_PRESET_STATE' }, (res) => {
     if (!res?.success) return;
-    if (!presetUiCurrent(gen) || surfaceEditSeq !== editAtSend || !Number.isInteger(res.presetRev) || res.presetRev < heardPresetRev) {
-      noteReply(res);
-      return;
-    }
-    if (res.presetRev === paintedPresetRev) return;
+    if (!presetUiCurrent(gen) || surfaceEditSeq !== editAtSend) return;
+    if (!Number.isInteger(res.stateRev) || res.stateRev <= viewRev) return;
     paintPresetSnapshot(res);
   });
 }
@@ -1001,29 +1009,22 @@ function watchPresetView() {
   window.addEventListener('focus', () => refreshPresetView());
 }
 
-// Another screen's write is recorded as a revision only. It does not move this screen's
-// selection, sliders, switches or Save/Update snapshot.
-function onPresetRevHeard(changes, area) {
-  if (area !== 'local' || !changes || !changes.presetRev) return;
-  rememberPresetRev(changes.presetRev.newValue);
-}
-
-chrome.storage.onChanged.addListener(onPresetRevHeard);
-
 presetSelect.onchange = () => {
   const gen = bumpPresetUi();
   const editAtSend = surfaceEditSeq;
   applyLiveSelection(presetSelect.value);
   if (!presets[currentPresetName]) return;
   lockPresetOps();
-  chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName }, (res) => {
+  chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName, ...viewTag() }, (res) => {
     unlockPresetOps();
-    if (!presetUiCurrent(gen)) { noteReply(res); return; }
+    if (handleRefusal(res, gen, editAtSend)) return;
+    noteAccepted(res);
+    if (!presetUiCurrent(gen)) return;
     if (surfaceEditSeq !== editAtSend) {
       hydrateFromAuthoritativeState(gen);
       return;
     }
-    if (!mayPaint(res, gen, editAtSend)) { noteReply(res); return; }
+    if (!mayPaint(res, gen, editAtSend)) return;
     paintPickedReply(res);
   });
   const savedSt = parseFloat(sliderPitch.value) || 0;
@@ -1043,26 +1044,21 @@ btnSavePreset.onclick = () => {
   if (isFactoryPresetNameUi(trimmed)) { showHint(FACTORY_NAME_HINT); return; }
   const gen = bumpPresetUi();
   const editAtSend = surfaceEditSeq;
-  const expectedRev = heardPresetRev;
-  const expectedPreset = currentPresetName;
   const p = getParamsFromUI();
   const dyn = normaliseDyn(dynamics);
   lockPresetOps();
   chrome.runtime.sendMessage({
-    type: 'SAVE_PRESET', name: trimmed, params: p, dynamics: dyn, expectedRev, expectedPreset
+    type: 'SAVE_PRESET', name: trimmed, params: p, dynamics: dyn, ...viewTag()
   }, (res) => {
     unlockPresetOps();
-    if (handleStaleView(res, gen, editAtSend)) return;
+    if (handleRefusal(res, gen, editAtSend)) return;
     if (res?.error === 'factory-name') { showHint(FACTORY_NAME_HINT); return; }
-    if (!mayPaint(res, gen, editAtSend)) { noteReply(res); return; }
+    noteAccepted(res);
+    if (!mayPaint(res, gen, editAtSend)) return;
     presets = res.presets;
     currentPresetName = res.savedName;
     activePresetBaseline = { ...p };
     switchBaseline = normaliseDyn(res.dynamics || dyn);
-    if (Number.isInteger(res.presetRev)) {
-      paintedPresetRev = res.presetRev;
-      rememberPresetRev(res.presetRev);
-    }
     populatePresets(res.savedName);
     checkPresetModificationState();
   });
@@ -1073,25 +1069,20 @@ btnUpdatePreset.onclick = () => {
   if (!currentPresetName || isFactoryPresetNameUi(currentPresetName)) return;
   const gen = bumpPresetUi();
   const editAtSend = surfaceEditSeq;
-  const expectedRev = heardPresetRev;
-  const expectedPreset = currentPresetName;
   const p = getParamsFromUI();
   const dyn = normaliseDyn(dynamics);
   lockPresetOps();
   chrome.runtime.sendMessage({
-    type: 'UPDATE_PRESET', name: currentPresetName, params: p, dynamics: dyn, expectedRev, expectedPreset
+    type: 'UPDATE_PRESET', name: currentPresetName, params: p, dynamics: dyn, ...viewTag()
   }, (res) => {
     unlockPresetOps();
-    if (handleStaleView(res, gen, editAtSend)) return;
+    if (handleRefusal(res, gen, editAtSend)) return;
     if (res?.error === 'factory-name') { showHint(FACTORY_NAME_HINT); return; }
-    if (!mayPaint(res, gen, editAtSend)) { noteReply(res); return; }
+    noteAccepted(res);
+    if (!mayPaint(res, gen, editAtSend)) return;
     presets = res.presets;
     activePresetBaseline = { ...p };
     switchBaseline = normaliseDyn(res.dynamics || dyn);
-    if (Number.isInteger(res.presetRev)) {
-      paintedPresetRev = res.presetRev;
-      rememberPresetRev(res.presetRev);
-    }
     checkPresetModificationState();
     if (btnUpdatePreset.style.display !== 'none') {
       const orig = btnUpdatePreset.textContent;
@@ -1107,26 +1098,22 @@ btnDeletePreset.onclick = () => {
   if (!confirm(`Delete preset "${currentPresetName}"?`)) return;
   const gen = bumpPresetUi();
   const editAtSend = surfaceEditSeq;
-  const expectedRev = heardPresetRev;
-  const expectedPreset = currentPresetName;
   lockPresetOps();
   chrome.runtime.sendMessage({
-    type: 'DELETE_PRESET', name: currentPresetName, expectedRev, expectedPreset
+    type: 'DELETE_PRESET', name: currentPresetName, ...viewTag()
   }, (res) => {
-    if (handleStaleView(res, gen, editAtSend)) { unlockPresetOps(); return; }
-    if (!mayPaint(res, gen, editAtSend)) { noteReply(res); unlockPresetOps(); return; }
+    if (handleRefusal(res, gen, editAtSend)) { unlockPresetOps(); return; }
+    noteAccepted(res);
+    if (!mayPaint(res, gen, editAtSend)) { unlockPresetOps(); return; }
     presets = res.presets;
-    if (Number.isInteger(res.presetRev)) {
-      paintedPresetRev = res.presetRev;
-      rememberPresetRev(res.presetRev);
-    }
     populatePresets(factoryPresetNames[0]);
     applyLiveSelection(factoryPresetNames[0]);
     if (!presets[currentPresetName]) { unlockPresetOps(); return; }
-    chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName }, (applyRes) => {
+    chrome.runtime.sendMessage({ type: 'APPLY_PRESET', presetName: currentPresetName, ...viewTag() }, (applyRes) => {
       unlockPresetOps();
-      if (!presetUiCurrent(gen) || surfaceEditSeq !== editAtSend) { noteReply(applyRes); return; }
-      if (!mayPaint(applyRes, gen, editAtSend)) { noteReply(applyRes); return; }
+      if (handleRefusal(applyRes, gen, editAtSend)) return;
+      noteAccepted(applyRes);
+      if (!mayPaint(applyRes, gen, editAtSend)) return;
       paintPickedReply(applyRes);
     });
   });
@@ -1141,22 +1128,21 @@ btnResetDefaults.onclick = () => {
   if (!confirm(question)) return;
   const gen = bumpPresetUi();
   const editAtSend = surfaceEditSeq;
-  const expectedRev = heardPresetRev;
-  const expectedPreset = currentPresetName;
   lockPresetOps();
   chrome.runtime.sendMessage({
-    type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName, expectedRev, expectedPreset
+    type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName, ...viewTag()
   }, (res) => {
     unlockPresetOps();
-    if (handleStaleView(res, gen, editAtSend)) return;
-    if (!presetUiCurrent(gen)) { noteReply(res); return; }
+    if (handleRefusal(res, gen, editAtSend)) return;
+    noteAccepted(res);
+    if (!presetUiCurrent(gen)) return;
     // A switch or slider edit after Reset is already queued behind it. Hydrate from storage
     // after that queue, instead of painting this reply over the newer edit.
     if (surfaceEditSeq !== editAtSend) {
       hydrateFromAuthoritativeState(gen);
       return;
     }
-    if (!mayPaint(res, gen, editAtSend)) { noteReply(res); return; }
+    if (!mayPaint(res, gen, editAtSend)) return;
     presets = res.presets;
     currentPresetName = res.selectedName;
     populatePresets(res.selectedName);
@@ -1170,10 +1156,6 @@ btnResetDefaults.onclick = () => {
       switchBaseline = normaliseDyn(res.dynamics);
     } else {
       switchBaseline = null;
-    }
-    if (Number.isInteger(res.presetRev)) {
-      paintedPresetRev = res.presetRev;
-      rememberPresetRev(res.presetRev);
     }
     checkPresetModificationState();
     physics.updateState(currentParams, isCapturingActive);
@@ -1264,10 +1246,13 @@ function getParamsFromUI() {
 }
 
 function sendAudioParamUpdate() {
-  noteSurfaceEdit();
+  const editAtSend = noteSurfaceEdit();
+  const gen = presetUiGen;
   currentParams = getParamsFromUI();
-  chrome.runtime.sendMessage({ type: 'UPDATE_AUDIO_PARAMS', params: currentParams, presetName: currentPresetName }, () => {
-    if (chrome.runtime.lastError) {}
+  chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: currentParams, ...viewTag() }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (handleRefusal(res, gen, editAtSend)) return;
+    noteAccepted(res);
   });
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
