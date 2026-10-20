@@ -390,11 +390,16 @@ async function writeSelection({ presetName, params, dynamics, extra, stamp }) {
   else if (params !== undefined) payload.currentParams = params;
   if (dynamics) payload.dynamics = normaliseDynamics(dynamics);
   await chrome.storage.local.set(payload);
-  const state = await readPresetSnapshot();
+  // Once committed, dispatch the written values before any fallible presentation read.
+  // If that later read fails, the screen recovers through READ_PRESET_STATE.
   const open = await isOffscreenOpen();
   const offscreen = open ? await tellOffscreen(payload.currentParams, payload.dynamics || null) : null;
+  const state = await readPresetSnapshot();
   return {
     ...state,
+    currentPreset: payload.currentPreset,
+    currentParams: payload.currentParams || state.currentParams,
+    dynamics: payload.dynamics || state.dynamics,
     dynamicsApplied: !!payload.dynamics,
     switchBaseline: payload.dynamics || null,
     applied: !!(offscreen && offscreen.ok),
@@ -1149,7 +1154,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'READ_PRESET_STATE': {
           // Queued behind earlier preset writes, so a screen that edited after Reset or pick
           // hydrates the state those writes left, not the reply that was already in flight.
-          const result = await enqueuePresetWrite(() => readPresetSnapshot());
+          // Recovery also repairs an interrupted engine dispatch before confirming that state.
+          const result = await enqueuePresetWrite(async () => {
+            const state = await readPresetSnapshot();
+            const open = await isOffscreenOpen();
+            const offscreen = open ? await tellOffscreen(state.currentParams, state.dynamics) : null;
+            return { ...state, applied: !!(offscreen && offscreen.ok), offscreen };
+          });
           sendResponse(result);
           break;
         }

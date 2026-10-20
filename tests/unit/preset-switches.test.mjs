@@ -1690,3 +1690,147 @@ test('minimal band edits override legacy aliases in live params without migratin
   p.get('tag-pitch').onclick(); await p.idle(); assert.equal(bg.local.currentParams.stageBypass.pitch, false);
   assert.deepEqual(bg.local.presets.Legacy, legacy);
 });
+
+// Real offscreen message handling, with audio creation and media capture forbidden.
+function attachSilentEngine(bg) {
+  let listener;
+  const delivered = [];
+  const box = {
+    console, Math, Number, Object, Array, Error, Date, Promise, Map, Set, Float32Array, Uint8Array, parseFloat, isFinite,
+    setTimeout: () => 0, clearTimeout() {},
+    AudioContext: class { constructor() { throw Error('Audio prohibited in unit tests'); } },
+    navigator: { mediaDevices: { getUserMedia() { throw Error('Capture prohibited in unit tests'); } } },
+    chrome: { runtime: {
+      onMessage: { addListener(fn) { listener = fn; } },
+      sendMessage: () => Promise.resolve(),
+      getURL: p => 'chrome-extension://id/' + p
+    } },
+    seedParams: snapshot(bg.local.currentParams), seedDynamics: snapshot(bg.local.dynamics)
+  };
+  vm.createContext(box);
+  vm.runInContext(readFileSync(join(root, 'offscreen.js'), 'utf8'), box, { filename: 'offscreen.js' });
+  vm.runInContext('currentParams = seedParams; currentDynamics = seedDynamics;', box);
+  const send = bg.chrome.runtime.sendMessage;
+  bg.chrome.runtime.sendMessage = (message, callback) => {
+    if (message.target !== 'offscreen') return send(message, callback);
+    delivered.push(snapshot(message));
+    return listener(snapshot(message), {}, callback || (() => {}));
+  };
+  return {
+    delivered,
+    state: () => JSON.parse(vm.runInContext('JSON.stringify({params:currentParams,dynamics:currentDynamics})', box)),
+    diverge: () => vm.runInContext("currentParams = {...currentParams, bass:28}; currentDynamics = {leveler:'full',match:false,limiter:'fast',ceiling:'clean'};", box)
+  };
+}
+
+const assertEngineMatches = (engine, stored) => {
+  // Factory EQ omits bypass; the unchanged engine retains the explicit neutral false.
+  assert.deepEqual(engine.state().params, { bypass: false, ...stored.currentParams }, 'engine EQ matches storage');
+  assert.deepEqual(engine.state().dynamics, stored.dynamics, 'engine switches match storage');
+};
+
+for (const operation of ['pick', 'reset', 'delete']) {
+  test(`Sol r5 ${operation}: a failed post-commit read cannot skip engine dispatch, recovery or the next Mid edit`, async () => {
+    const bg = await seedSurfaces(), engine = attachSilentEngine(bg), p = openPopup(bg);
+    await p.idle();
+    if (operation === 'reset') {
+      p.mode('leveler', 'full'); await p.idle();
+      p.slider('bass', 8); await p.idle();
+    }
+    const get = bg.chrome.storage.local.get, set = bg.chrome.storage.local.set;
+    let armed = false, failed = 0, engineAtRead, storedAtRead;
+    const writes = bg.localSets.length;
+    bg.chrome.storage.local.set = async payload => {
+      await set(payload);
+      if (payload.currentPreset) armed = true;
+    };
+    bg.chrome.storage.local.get = async keys => {
+      if (armed && Array.isArray(keys) && keys.includes('presets') && keys.includes('stateRev')) {
+        armed = false; failed++;
+        engineAtRead = engine.state(); storedAtRead = snapshot(bg.local);
+        throw Error('one rejected post-commit presentation read');
+      }
+      return get(keys);
+    };
+    ({ pick: () => p.select('B'), reset: () => p.reset(), delete: () => p.remove() })[operation]();
+    await p.idle();
+    bg.chrome.storage.local.get = get; bg.chrome.storage.local.set = set;
+    assert.equal(failed, 1, 'the post-commit fault fired exactly once');
+    assert.equal(bg.localSets.length, writes + 1, 'selection and recovery publish only once');
+    assert.deepEqual(engineAtRead.params, { bypass: false, ...storedAtRead.currentParams }, 'committed EQ reached engine BEFORE the failed read');
+    assert.deepEqual(engineAtRead.dynamics, storedAtRead.dynamics, 'committed switches reached engine BEFORE the failed read');
+    assert.equal(p.sent.at(-1).type, 'READ_PRESET_STATE');
+    assertLocked(p, false); assertEngineMatches(engine, bg.local);
+    assert.equal(p.state().name, bg.local.currentPreset);
+    assert.equal(p.state().params.bass, bg.local.currentParams.bass);
+    assert.deepEqual(p.state().dynamics, bg.local.dynamics);
+    p.slider('mid', 6); await p.idle();
+    assert.deepEqual(p.sent.at(-1).params, { mid: 6 });
+    assertEngineMatches(engine, bg.local);
+    assert.equal(p.state().params.mid, 6);
+    assert.deepEqual(p.state().dynamics, bg.local.dynamics);
+    const link = attachLink(bg.chrome); link.ask(); await link.advance(0);
+    const movie = settingsOf(link).at(-1);
+    assert.deepEqual(movie.currentParams, bg.local.currentParams);
+    assert.deepEqual(movie.dynamics, bg.local.dynamics);
+  });
+}
+
+test('queued recovery reconciles the real engine before replying after every preset-operation failure', async () => {
+  const operations = { pick: 'APPLY_PRESET', reset: 'RESET_DEFAULT_PRESETS', delete: 'DELETE_PRESET', save: 'SAVE_PRESET', update: 'UPDATE_PRESET' };
+  for (const [operation, type] of Object.entries(operations)) {
+    for (const fault of ['storage', 'read', 'error', 'missing', 'port', 'throw', 'timeout']) {
+      const bg = await seedSurfaces(), engine = attachSilentEngine(bg), p = openPopup(bg);
+      await p.idle(); engine.diverge();
+      if (fault === 'storage' || fault === 'read') {
+        const method = fault === 'storage' ? 'set' : 'get', original = bg.chrome.storage.local[method];
+        let once = true;
+        bg.chrome.storage.local[method] = value => {
+          if (once) { once = false; return Promise.reject(Error('one operation ' + method + ' failure')); }
+          return original(value);
+        };
+      } else p.faults.set(type, fault);
+      p.held.add('READ_PRESET_STATE');
+      ({ pick: () => p.select('B'), reset: () => p.reset(), delete: () => p.remove(), save: () => p.save('Recovered'), update: () => p.update() })[operation]();
+      await p.idle();
+      if (fault === 'timeout') { p.advance(5000); await p.idle(); }
+      assertLocked(p, true);
+      assert.equal(p.replies.at(-1).type, 'READ_PRESET_STATE', operation + '/' + fault);
+      assertEngineMatches(engine, bg.local);
+      const [params, dynamics] = engine.delivered.slice(-2);
+      assert.equal(params.type, 'UPDATE_AUDIO_PARAMS'); assert.equal(params.target, 'offscreen');
+      assert.equal(dynamics.type, 'SET_DYNAMICS'); assert.equal(dynamics.target, 'offscreen');
+      p.release('READ_PRESET_STATE'); await p.idle();
+      assertLocked(p, false); assertEngineMatches(engine, bg.local);
+      assert.equal(p.state().name, bg.local.currentPreset);
+      assert.deepEqual(p.state().dynamics, bg.local.dynamics);
+    }
+  }
+});
+
+test('queued state reads wait for both engine acknowledgements and never create an offscreen document', async () => {
+  const bg = await seedSurfaces();
+  bg.setOffscreen(false);
+  const stored = snapshot(bg.local), writes = bg.localSets.length;
+  await bg.send({ type: 'READ_PRESET_STATE' });
+  assert.equal(bg.offscreenMsgs.length, 0);
+  assert.equal((await bg.chrome.runtime.getContexts()).length, 0);
+  bg.setOffscreen(true);
+  const pending = [], sent = [];
+  bg.chrome.runtime.sendMessage = (message, callback) => { sent.push(snapshot(message)); pending.push(callback); };
+  let replied = false;
+  const read = bg.send({ type: 'READ_PRESET_STATE' }).then(result => { replied = true; return result; });
+  await until(() => pending.length === 1, 'EQ acknowledgement');
+  assert.equal(replied, false); assert.equal(sent[0].target, 'offscreen');
+  assert.deepEqual(sent[0].params, stored.currentParams);
+  pending.shift()({ success: true });
+  await until(() => pending.length === 1, 'switch acknowledgement');
+  assert.equal(replied, false); assert.equal(sent[1].target, 'offscreen');
+  assert.deepEqual(sent[1].dynamics, stored.dynamics);
+  pending.shift()({ success: true });
+  const state = await read;
+  assert.equal(state.applied, true);
+  assert.deepEqual(state.currentParams, stored.currentParams);
+  assert.deepEqual(state.dynamics, stored.dynamics);
+  assert.deepEqual(bg.local, stored); assert.equal(bg.localSets.length, writes);
+});
