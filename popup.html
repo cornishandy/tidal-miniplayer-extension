@@ -12,6 +12,8 @@
     <symbol id="s-heart" viewBox="0 0 24 24"><path d="M12 21s-7-4.6-9.3-9A5.2 5.2 0 0 1 12 6.2 5.2 5.2 0 0 1 21.3 12C19 16.4 12 21 12 21z"/></symbol>
     <symbol id="s-prev" viewBox="0 0 24 24"><path d="M6 5v14"/><path d="M18 5 8 12l10 7z"/></symbol>
     <symbol id="s-next" viewBox="0 0 24 24"><path d="M18 5v14"/><path d="M6 5l10 7-10 7z"/></symbol>
+    <symbol id="s-chevron-left" viewBox="0 0 24 24"><path d="m15 6-6 6 6 6"/></symbol>
+    <symbol id="s-chevron-right" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
     <symbol id="s-play" viewBox="0 0 24 24"><path d="M7 4l13 8-13 8z"/></symbol>
     <symbol id="s-pause" viewBox="0 0 24 24"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></symbol>
     <symbol id="s-back" viewBox="0 0 24 24"><path d="M4 12a8 8 0 1 0 2.4-5.7"/><path d="M4 3v5h5"/></symbol>
@@ -71,7 +73,11 @@
               <button id="btn-reset-defaults" class="btn-text" title="Restore this preset's saved values (factory values for a default preset)">↺ Reset</button>
             </div>
           </div>
-          <select id="preset-select" class="preset-dropdown"></select>
+          <div class="preset-picker">
+            <button type="button" id="btn-prev-preset" class="preset-step" aria-label="Previous preset" title="Previous preset"><svg aria-hidden="true"><use href="#s-chevron-left"/></svg></button>
+            <select id="preset-select" class="preset-dropdown"></select>
+            <button type="button" id="btn-next-preset" class="preset-step" aria-label="Next preset" title="Next preset"><svg aria-hidden="true"><use href="#s-chevron-right"/></svg></button>
+          </div>
         </div>
 
         <!-- Physics: the live spectrum of the processed audio (grey = in, colour = out) and the settings' response curve -->

@@ -521,7 +521,46 @@ input:checked + .slider-round:before {
   color: #ff5252 !important;
 }
 
+.preset-picker {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.preset-step {
+  flex: 0 0 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-surface, #1e1e26);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: var(--text-main, #fff);
+  cursor: pointer;
+}
+
+.preset-step svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.preset-step:hover:not(:disabled) {
+  color: var(--accent, #00e5ff);
+}
+
+.preset-step:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .preset-dropdown {
+  flex: 1;
+  min-width: 0;
   width: 100%;
   padding: 5px 9px;
   background: var(--bg-surface, #1e1e26);

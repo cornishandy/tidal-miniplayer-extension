@@ -160,6 +160,8 @@ const eqPowerStatusBadge = document.getElementById('eq-power-status-badge');
 const btnMovieMode = document.getElementById('btn-movie-mode');
 const movieStatusLine = document.getElementById('movie-status-line');
 const presetSelect = document.getElementById('preset-select');
+const btnPrevPreset = document.getElementById('btn-prev-preset');
+const btnNextPreset = document.getElementById('btn-next-preset');
 const presetStatusBadge = document.getElementById('preset-status-badge');
 const presetSwitchLabel = document.getElementById('preset-switch-label');
 const btnUpdatePreset = document.getElementById('btn-update-preset');
@@ -1097,7 +1099,7 @@ function mayPaint(res, gen, editAtSend) {
 }
 
 function presetOpButtons() {
-  return [btnSavePreset, btnUpdatePreset, btnDeletePreset, btnResetDefaults];
+  return [btnSavePreset, btnUpdatePreset, btnDeletePreset, btnResetDefaults, btnPrevPreset, btnNextPreset];
 }
 
 function presetEditControls() {
@@ -1243,17 +1245,33 @@ function canSavePreset() {
   return false;
 }
 
-presetSelect.onchange = () => {
-  const name = presetSelect.value;
-  // Even the selector keeps the confirmed name until the worker returns its stored snapshot.
-  presetSelect.value = currentPresetName;
+function pickPreset(name) {
   runPresetOperation({ type: 'APPLY_PRESET', presetName: name }, () => {
     const savedSt = parseFloat(sliderPitch.value) || 0;
     if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
       flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
     }
   });
+}
+
+presetSelect.onchange = () => {
+  const name = presetSelect.value;
+  // Even the selector keeps the confirmed name until the worker returns its stored snapshot.
+  presetSelect.value = currentPresetName;
+  pickPreset(name);
 };
+
+function stepPreset(direction) {
+  if (presetOpsInFlight || presetSelect.disabled) return;
+  // Read the rendered optgroups: defaults first, then custom presets, exactly as in the menu.
+  const names = Array.from(presetSelect.options, option => option.value);
+  if (!names.length) return;
+  const index = names.indexOf(currentPresetName);
+  pickPreset(names[(index + direction + names.length) % names.length]);
+}
+
+btnPrevPreset.onclick = () => { if (!btnPrevPreset.disabled) stepPreset(-1); };
+btnNextPreset.onclick = () => { if (!btnNextPreset.disabled) stepPreset(1); };
 
 btnSavePreset.onclick = () => {
   if (btnSavePreset.disabled || !canSavePreset()) return;

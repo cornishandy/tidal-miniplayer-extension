@@ -1281,6 +1281,181 @@ try {
     record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a side panel left open refreshes on focus; a stale Update and a stale switch change are refused, write nothing, and refresh that panel; pick/Reset/Delete lock all edit controls until confirmation; each edit sends only its changed field; the header stays on one row',
       switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
 
+    // ---- W-PRESET-STEP (R-31): two buttons share the dropdown's confirmed pick path.
+    // Additive check only: restore the synthetic preset state before the existing checks continue.
+    const stepSaved = await sendFrom(popup, { type: 'READ_PRESET_STATE' });
+    const stepDetail = { surfaces: [], layouts: [], screenshots: [] };
+    let stepOk = false;
+    try {
+      const stepBase = { bass: 3, hpf: 20, mid: 1, high: 0, gain: 1, semitones: 0,
+        autoBalance: false, bypass: false, stageBypass: NONE };
+      const stepModes = [
+        { leveler: 'bass', match: true, limiter: 'lookahead', ceiling: 'warm' },
+        { leveler: 'slow', match: false, limiter: 'fast', ceiling: 'clean' }
+      ];
+      for (const [i, name] of ['Step switches A', 'Step switches B'].entries()) {
+        const saved = await writeFrom(popup, { type: 'SAVE_PRESET', name,
+          params: { ...stepBase, bass: 3 + i }, dynamics: stepModes[i] });
+        assert.equal(saved.success, true);
+      }
+      for (const [surface, path, widths] of [
+        ['popup', 'popup.html', [440]], ['panel', 'popup.html?panel=1', [300, 360, 400, 440, 480]]
+      ]) {
+        const opened = await openPopup(path);
+        const pg = opened.page;
+        const surfaceResult = { surface, steps: [] };
+        stepDetail.surfaces.push(surfaceResult);
+        try {
+          await pg.setViewportSize({ width: surface === 'popup' ? 440 : 360, height: 800 });
+          const menu = await pg.evaluate(() => ({
+            names: Array.from(presetSelect.options, option => option.value),
+            groups: Array.from(presetSelect.children, group => ({ label: group.label, names: Array.from(group.children, option => option.value) }))
+          }));
+          assert.equal(menu.groups[0].label, 'Default Presets');
+          assert.equal(menu.groups[1].label, 'My Custom Presets');
+          assert.deepEqual(menu.names, menu.groups.flatMap(group => group.names));
+          assert.deepEqual(menu.names.slice(-2), ['Step switches A', 'Step switches B']);
+          surfaceResult.order = menu.names;
+          await pg.selectOption('#preset-select', menu.names[0]);
+          await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, menu.names[0]);
+          let index = 0;
+          const checkSelection = async (expected) => {
+            const stored = await pg.evaluate(() => chrome.storage.local.get(['presets', 'currentPreset', 'currentParams', 'dynamics']));
+            const ui = await pg.evaluate(params => {
+              // A dropdown pick also uses native range rounding (e.g. factory HPF 32 displays 30).
+              // Independent detached inputs give the expected display without changing stored/engine values.
+              const expected = { autoBalance: params.autoBalance };
+              for (const key of ['bass', 'hpf', 'mid', 'high', 'gain', 'semitones']) {
+                const input = document.getElementById(`slider-${key === 'semitones' ? 'pitch' : key}`).cloneNode();
+                input.value = params[key] ?? (key === 'semitones' ? 0 : '');
+                expected[key] = input.valueAsNumber;
+              }
+              return { name: currentPresetName, selected: presetSelect.value, expected,
+                params: getParamsFromUI(), dynamics: { leveler: modeLeveler.value, limiter: modeLimiter.value,
+                  ceiling: modeCeiling.value, match: document.querySelector('.band-tag[data-band="match"]').getAttribute('aria-pressed') === 'true' } };
+            }, stored.currentParams);
+            const engine = (await evalOffscreen('({ params: currentParams, dynamics: currentDynamics, capturing: isCapturing })')).value;
+            assert.equal(stored.currentPreset, expected);
+            assert.equal(ui.name, expected);
+            assert.equal(ui.selected, expected);
+            assert.equal(engine?.capturing, true);
+            for (const key of ['bass', 'hpf', 'mid', 'high', 'gain', 'semitones', 'autoBalance']) {
+              assert.equal(ui.params[key], ui.expected[key], `UI ${expected}: ${key}`);
+              assert.equal(engine.params[key], stored.currentParams[key] ?? (key === 'semitones' ? 0 : undefined), `engine ${expected}: ${key}`);
+            }
+            assert.equal(engine.params.bypass, stored.currentParams.bypass === true);
+            assert.deepEqual(ui.dynamics, stored.dynamics);
+            assert.deepEqual(engine.dynamics, stored.dynamics);
+            if (stored.presets[expected].dynamics) assert.deepEqual(stored.dynamics, stored.presets[expected].dynamics);
+            return { name: expected, bass: ui.params.bass, dynamics: ui.dynamics };
+          };
+          for (const direction of [1, -1]) {
+            for (let n = 0; n < menu.names.length; n++) {
+              index = (index + direction + menu.names.length) % menu.names.length;
+              const expected = menu.names[index];
+              await pg.click(direction === 1 ? '#btn-next-preset' : '#btn-prev-preset');
+              await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, expected);
+              surfaceResult.steps.push({ direction, ...await checkSelection(expected) });
+            }
+            assert.equal(index, 0, 'one full lap wraps to the first option');
+          }
+          surfaceResult.lock = await pg.evaluate(async () => {
+            const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+            const before = { name: currentPresetName, bass: currentParams.bass, dynamics: { ...dynamics } };
+            let release;
+            let calls = 0;
+            chrome.runtime.sendMessage = (message, callback) => {
+              if (message.type !== 'APPLY_PRESET') return original(message, callback);
+              calls++;
+              return original(message, response => { release = () => callback(response); });
+            };
+            try {
+              btnNextPreset.click();
+              for (let i = 0; i < 200 && !release; i++) await new Promise(r => setTimeout(r, 10));
+              if (!release) throw Error('preset reply never arrived');
+              const locked = btnPrevPreset.disabled && btnNextPreset.disabled && presetSelect.disabled;
+              const heldView = { name: currentPresetName, bass: currentParams.bass, dynamics: { ...dynamics } };
+              btnPrevPreset.click(); btnNextPreset.click();
+              const whileHeldCalls = calls;
+              release(); release = null;
+              return { locked, before, heldView, whileHeldCalls,
+                unlocked: !btnPrevPreset.disabled && !btnNextPreset.disabled && !presetSelect.disabled };
+            } finally {
+              chrome.runtime.sendMessage = original;
+              if (release) release();
+            }
+          });
+          assert.equal(surfaceResult.lock.locked, true);
+          assert.equal(surfaceResult.lock.unlocked, true);
+          assert.equal(surfaceResult.lock.whileHeldCalls, 1);
+          assert.deepEqual(surfaceResult.lock.heldView, surfaceResult.lock.before);
+          await checkSelection(menu.names[1]);
+          // Compare the new row against the original select-only DOM, without changing shipped code.
+          // Test both default and custom labels at every supported width.
+          for (const name of [menu.names[0], 'Step switches A']) {
+            await pg.selectOption('#preset-select', name);
+            await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, name);
+            for (const width of widths) {
+              await pg.setViewportSize({ width, height: 800 });
+              const layout = await pg.evaluate(() => {
+                const row = document.querySelector('.preset-picker');
+                const select = document.getElementById('preset-select');
+                const rect = element => { const r = element.getBoundingClientRect(); return { x: r.x, y: r.y, w: r.width, h: r.height, right: r.right }; };
+                const measure = () => ({ height: document.querySelector('.popup-container').getBoundingClientRect().height,
+                  section: rect(document.querySelector('.preset-section')), physics: rect(document.querySelector('.physics')),
+                  select: rect(select), overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth });
+                const current = measure();
+                const buttons = [btnPrevPreset, btnNextPreset].map(button => ({ ...rect(button),
+                  label: button.getAttribute('aria-label'), title: button.title, svg: !!button.querySelector('svg use') }));
+                row.before(select); row.remove();
+                const original = measure();
+                select.before(row); row.insertBefore(select, btnNextPreset);
+                return { current, original, buttons };
+              });
+              assert.equal(layout.current.height, layout.original.height, `${surface} ${width}: page height`);
+              assert.equal(layout.current.section.h, layout.original.section.h, `${surface} ${width}: preset height`);
+              assert.deepEqual(layout.current.physics, layout.original.physics, `${surface} ${width}: drawings do not move`);
+              assert.equal(layout.current.select.h, layout.original.select.h);
+              assert.ok(layout.current.overflow <= 0);
+              assert.ok(layout.current.select.w >= 100, 'dropdown retains usable width');
+              if (surface === 'popup') assert.ok(layout.current.height < 600);
+              for (const [i, button] of layout.buttons.entries()) {
+                assert.equal(button.label, i === 0 ? 'Previous preset' : 'Next preset');
+                assert.equal(button.title, button.label);
+                assert.equal(button.svg, true);
+                assert.equal(button.y, layout.current.select.y);
+                assert.equal(button.h, layout.current.select.h);
+                assert.ok(button.x >= layout.current.section.x && button.right <= layout.current.section.right);
+              }
+              assert.ok(layout.buttons[0].right < layout.current.select.x);
+              assert.ok(layout.buttons[1].x > layout.current.select.right);
+              stepDetail.layouts.push({ surface, width, name, ...layout });
+            }
+          }
+          await pg.setViewportSize({ width: surface === 'popup' ? 440 : 360, height: surface === 'popup' ? 600 : 900 });
+          const filename = `preset-step-${surface}.png`;
+          if (surface === 'popup') stepDetail.screenshots.push(await shot(pg, filename));
+          else {
+            await pg.screenshot({ path: join(outDir, filename), fullPage: true });
+            stepDetail.screenshots.push(`results/${label}/${filename}`);
+          }
+          assert.deepEqual(opened.errors, []);
+        } finally {
+          await pg.close();
+        }
+      }
+      stepOk = true;
+    } catch (error) {
+      stepDetail.error = String(error.stack || error);
+    } finally {
+      await popup.evaluate(saved => chrome.storage.local.set({ presets: saved.presets, currentPreset: saved.currentPreset,
+        currentParams: saved.currentParams, dynamics: saved.dynamics }), stepSaved);
+      await sendFrom(popup, { type: 'READ_PRESET_STATE' });
+      await showSurface(popup);
+    }
+    record('W-PRESET-STEP', 'Previous/Next follow dropdown order and wrap both ends; confirmed storage, engine, UI and saved switches agree; buttons lock in flight; unchanged popup height and unclipped 300–480 px panel layouts',
+      stepOk ? 'PASS' : 'FAIL', stepDetail);
+
     // ---- W-EQ-CUT (R-29): the shipped display reads the existing synthetic spectra.
     // No new audio source, output path, browser or profile; keep the harness's silent flags.
     // Keep these extra steps after the timed audio checks so fixture loop seams do not move into their measurements.
@@ -1520,6 +1695,7 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
+    record('W-PRESET-STEP', 'Preset stepping requires the synthetic capture engine', 'BLOCKED', startRes);
     for (const id of ['W-EQ-CUT', 'W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-PRESET-SWITCHES', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
