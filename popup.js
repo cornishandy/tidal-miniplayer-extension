@@ -566,12 +566,13 @@ const leaveTrack = (ms) => { leavingTrack = currentTrackInfo ? { title: currentT
 
 const jumpHints = {
   moving: 'Moving playback…',
-  held: 'Waiting for the next track',
+  held: 'Waiting for the track to change',
   start: 'Already at the start',
   seek: "This page isn't allowing seeking right now",
-  helper: 'Reload the Tidal tab once, then try again',
-  unreachable: "The Tidal tab isn't reachable. Open it and try again",
-  next: "Tidal didn't move to the next track"
+  helper: 'Reload the tab once, then try again',
+  unreachable: "Can't reach the tab. Reload it and try again",
+  missing: 'No media tab found. Open one and try again',
+  next: "The page didn't move to the next track"
 };
 let pendingTransport = null;
 
@@ -612,10 +613,12 @@ function confirmedPlayerCommand(command) {
     clearTimeout(attempt.deadline);
     pendingTransport = null;
     let text = '';
-    if (failed || !res || !['confirmed', 'cancelled', 'exhausted'].includes(res.status)) text = jumpHints.unreachable;
+    if (failed || !res || !['confirmed', 'cancelled', 'exhausted'].includes(res.status)) {
+      text = res?.error === 'No media tab found' ? jumpHints.missing : jumpHints.unreachable;
+    }
     else if (res.status === 'exhausted') text = jumpHints[res.reason] || jumpHints.seek;
     else if (res.status === 'confirmed' && res.success !== true) text = jumpHints.unreachable;
-    if (text || res?.status === 'cancelled') leavingTrack = null;
+    if (text || res?.status === 'cancelled' || res?.status === 'confirmed') leavingTrack = null;
     showTransportHint(text);
     // Paint only observed playback, never the requested target or an unverified reply.
     if (!text && res?.status === 'confirmed' && res.title) {
@@ -1269,7 +1272,8 @@ function stepPreset(direction) {
   const names = Array.from(presetSelect.options, option => option.value);
   if (!names.length) return;
   const index = names.indexOf(currentPresetName);
-  pickPreset(names[(index + direction + names.length) % names.length]);
+  const next = index < 0 ? (direction > 0 ? 0 : names.length - 1) : (index + direction + names.length) % names.length;
+  pickPreset(names[next]);
 }
 
 btnPrevPreset.onclick = () => { if (!btnPrevPreset.disabled) stepPreset(-1); };

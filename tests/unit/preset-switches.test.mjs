@@ -1880,6 +1880,41 @@ function stepOptions(popup) {
 }
 
 for (const [surface, search] of [['popup', ''], ['side panel', '?panel=1']]) {
+  test(`Fable 1.5.12 #6: unknown preset steps to the last/first entry in the ${surface}`, async () => {
+    const bg = await seedSurfaces();
+    const engine = attachSilentEngine(bg);
+    const p = openPopup(bg, search);
+    const order = stepOptions(p);
+    await p.idle();
+    const names = order();
+    for (const direction of [-1, 1]) {
+      p.run("currentPresetName = 'Missing preset'");
+      const before = p.get('preset-select').value;
+      p.held.add('APPLY_PRESET');
+      p.get(direction < 0 ? 'btn-prev-preset' : 'btn-next-preset').onclick();
+      await p.idle();
+      const expected = direction < 0 ? names.at(-1) : names[0];
+      const message = p.sent.filter(m => m.type === 'APPLY_PRESET').at(-1);
+      assert.equal(message.presetName, expected);
+      assert.equal(typeof message.viewRev, 'number');
+      assert.ok(message.surfaceId);
+      assert.equal(p.get('preset-select').value, before, 'wait for the worker snapshot');
+      assert.equal(p.state().name, 'Missing preset');
+      assert.equal(p.get('btn-prev-preset').disabled, true);
+      assert.equal(p.get('btn-next-preset').disabled, true);
+      p.release('APPLY_PRESET'); await p.idle();
+      assert.equal(p.state().name, expected);
+      assert.equal(bg.local.currentPreset, expected);
+      assert.equal(bg.local.lastWriter, message.surfaceId);
+      assert.equal(p.get('preset-select').value, expected);
+      assertEngineMatches(engine, bg.local);
+      assert.equal(p.get('btn-prev-preset').disabled, false);
+      assert.equal(p.get('btn-next-preset').disabled, false);
+    }
+  });
+}
+
+for (const [surface, search] of [['popup', ''], ['side panel', '?panel=1']]) {
   test(`preset steps follow menu order and wrap both ends in the ${surface}`, async () => {
     const bg = await seedSurfaces();
     const p = openPopup(bg, search);
