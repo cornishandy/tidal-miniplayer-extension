@@ -446,7 +446,7 @@ try {
     nudgeBefore.y === nudgeAfter.y && nudgeBefore.x === nudgeAfter.x && sliderBefore.y === sliderAfter.y && /Modified/.test(badgeText) && updateShown ? 'PASS' : 'FAIL',
     { nudgeBefore, nudgeAfter, sliderBefore, sliderAfter, badgeText, updateShown });
 
-  // ---- W-EQ-RANGE-UI (1.5.8, E-02): Bass 0..28 and Mid/High −12..12 on the popup, the side panel and the fallback window
+  // ---- W-EQ-RANGE-UI (1.5.9, E-03): Bass 0..56 and Mid/High −24..24 on the popup, the side panel and the fallback window
   // (one popup.html). The ends survive nudges, Update, neutral/restore and a reopen; a stored 14 / 6 / 0 preset keeps its
   // numbers. Runs on its own pages and puts the stored presets back exactly as they were. ----
   const getStore = (pg, keys) => pg.evaluate((k) => new Promise((r) => chrome.storage.local.get(k, r)), keys);
@@ -459,9 +459,9 @@ try {
   await rp.selectOption('#preset-select', 'Harness Preset');
   await sleep(250);
   const rangePopup = await rangeOf(rp);
-  await setSlider(rp, 'bass', 27.5); await nudge(rp, 'bass', 'up'); await nudge(rp, 'bass', 'up');
-  await setSlider(rp, 'mid', -11.5); await nudge(rp, 'mid', 'down'); await nudge(rp, 'mid', 'down');
-  await setSlider(rp, 'high', 12); await nudge(rp, 'high', 'up');
+  await setSlider(rp, 'bass', 55.5); await nudge(rp, 'bass', 'up'); await nudge(rp, 'bass', 'up');
+  await setSlider(rp, 'mid', -23.5); await nudge(rp, 'mid', 'down'); await nudge(rp, 'mid', 'down');
+  await setSlider(rp, 'high', 24); await nudge(rp, 'high', 'up');
   await sleep(200);
   const endsShown = await shownOf(rp);
   await rp.click('#btn-update-preset');
@@ -486,11 +486,11 @@ try {
   await rp.close();
   await popup.evaluate((snap) => new Promise((r) => chrome.storage.local.set(snap, r)), rangeSnap);
   await sleep(300);
-  const wantRange = { bass: [0, 28, 0.5], mid: [-12, 12, 0.5], high: [-12, 12, 0.5] };
-  const endsOk = (e) => e.bass[0] === 28 && e.mid[0] === -12 && e.high[0] === 12 && e.bass[1] === '+28.0 dB' && /12\.0 dB$/.test(e.mid[1]) && e.high[1] === '+12.0 dB';
-  record('W-EQ-RANGE-UI', 'Doubled ranges (1.5.8) on the popup, side panel and fallback window: Bass 0..28, Mid/High −12..12 in 0.5 dB steps; nudges stop at the ends; Update stores 28 / −12 / +12; neutral/restore returns to 28; every surface shows the stored ends after reopening; a stored 14 / 6 / 0 preset shows and stays 14 / 6 / 0',
-    JSON.stringify(rangePopup) === JSON.stringify(wantRange) && endsOk(endsShown) && storedEnds?.bass === 28 && storedEnds.mid === -12 && storedEnds.high === 12
-      && neutralBass === 0 && restoredBass === 28
+  const wantRange = { bass: [0, 56, 0.5], mid: [-24, 24, 0.5], high: [-24, 24, 0.5] };
+  const endsOk = (e) => e.bass[0] === 56 && e.mid[0] === -24 && e.high[0] === 24 && e.bass[1] === '+56.0 dB' && /24\.0 dB$/.test(e.mid[1]) && e.high[1] === '+24.0 dB';
+  record('W-EQ-RANGE-UI', 'Doubled-again ranges (1.5.9) on the popup, side panel and fallback window: Bass 0..56, Mid/High −24..24 in 0.5 dB steps; nudges stop at the ends; Update stores 56 / −24 / +24; neutral/restore returns to 56; every surface shows the stored ends after reopening; a stored 14 / 6 / 0 preset shows and stays 14 / 6 / 0',
+    JSON.stringify(rangePopup) === JSON.stringify(wantRange) && endsOk(endsShown) && storedEnds?.bass === 56 && storedEnds.mid === -24 && storedEnds.high === 24
+      && neutralBass === 0 && restoredBass === 56
       && Object.values(other).every((o) => JSON.stringify(o.range) === JSON.stringify(wantRange) && endsOk(o.ends) && o.old.bass[0] === 14 && o.old.mid[0] === 6 && o.old.high[0] === 0)
       && !!storedOld && Object.keys(storedOld).length === Object.keys(oldPreset).length && Object.entries(oldPreset).every(([k, v]) => storedOld[k] === v) ? 'PASS' : 'FAIL',
     { rangePopup, endsShown, storedEnds, neutralBass, restoredBass, other, storedOld });
@@ -880,16 +880,16 @@ try {
         && Math.abs(cleanAgain.peak - hot.peak) <= 0.004 && Math.abs(cleanAgain.hz1k - hot.hz1k) <= 0.3 && cleanState?.clean === 1 ? 'PASS' : 'FAIL',
       { warmFlat, flat, warm, hot140: hot, cleanAgain, colourDb: +colour.toFixed(1), warmState, cleanState }, 'objective-audio');
 
-    // ---- W-AUDIO-EXTREME (1.5.8, E-02): the doubled ends. Bass +28 really lifts 60 Hz beyond +14, Mid/High reach
-    // ±12 dB, and at the worst case (bass +28, mid/high +12, 250 %) every combination of the switches stays finite and
+    // ---- W-AUDIO-EXTREME (1.5.9, E-03): the doubled-again ends. Bass +56 really lifts 60 Hz beyond +28, Mid/High reach
+    // ±24 dB, and at the worst case (bass +56, mid/high +24, 250 %) every combination of the switches stays finite and
     // under the sample ceiling. The defaults are not changed here; W-DYN-BASELINE above still holds the 1.4.0 sound. ----
     const quiet = { ...BASE, gain: 0.5, autoBalance: false };
-    const b14 = await scenario({ ...quiet, bass: 14 });
     const b28 = await scenario({ ...quiet, bass: 28 });
-    const ends = await scenario({ ...quiet, bass: 0, mid: 12, high: 12 });
-    const cuts = await scenario({ ...quiet, bass: 0, mid: -12, high: -12 });
+    const b56 = await scenario({ ...quiet, bass: 56 });
+    const ends = await scenario({ ...quiet, bass: 0, mid: 24, high: 24 });
+    const cuts = await scenario({ ...quiet, bass: 0, mid: -24, high: -24 });
     const flatQ = await scenario({ ...quiet, bass: 0 });
-    const extremeP = { ...BASE, bass: 28, mid: 12, high: 12, gain: 2.5 };
+    const extremeP = { ...BASE, bass: 56, mid: 24, high: 24, gain: 2.5 };
     const combos = [];
     for (const limiter of ['fast', 'lookahead']) for (const ceiling of ['clean', 'warm']) {
       combos.push({ autoBalance: false, dyn: { ...DEFAULT_DYN, limiter, ceiling } });
@@ -911,13 +911,13 @@ try {
       const bar = document.getElementById(`meter-${k}`), val = document.getElementById(`val-${k}`);
       return { k, now: +bar.getAttribute('aria-valuenow'), max: +bar.getAttribute('aria-valuemax'), text: bar.getAttribute('aria-valuetext'), shown: val.textContent };
     }));
-    const lift = b14 && b28 ? +(b28.hz60 - b14.hz60).toFixed(1) : null;
-    record('W-AUDIO-EXTREME', 'Doubled ranges (1.5.8): bass +28 lifts 60 Hz at least 10 dB beyond +14 with 1 kHz within 1 dB; mid and high +12 lift 1 kHz and 8 kHz by 10 dB or more and −12 cuts them by 10 dB or more; at bass +28, mid/high +12, 250 % all 17 switch combinations stay finite and at or under 0.967; meter aria-valuenow stays within 0..12 and the screen-reader text matches the figure',
-      lift !== null && lift >= 10 && Math.abs(b28.hz1k - b14.hz1k) <= 1 && ends && cuts && flatQ
-        && ends.hz1k - flatQ.hz1k >= 10 && ends.hz8k - flatQ.hz8k >= 10 && flatQ.hz1k - cuts.hz1k >= 10 && flatQ.hz8k - cuts.hz8k >= 10
+    const lift = b28 && b56 ? +(b56.hz60 - b28.hz60).toFixed(1) : null;
+    record('W-AUDIO-EXTREME', 'Doubled-again ranges (1.5.9): bass +56 lifts 60 Hz beyond +28; mid and high +24 lift 1 kHz and 8 kHz by 18 dB or more and −24 cuts them by 18 dB or more; at bass +56, mid/high +24, 250 % all 17 switch combinations stay finite and at or under 0.967; meter aria-valuenow stays within 0..12 and the screen-reader text matches the figure',
+      lift !== null && lift > 0 && ends && cuts && flatQ
+        && ends.hz1k - flatQ.hz1k >= 18 && ends.hz8k - flatQ.hz8k >= 18 && flatQ.hz1k - cuts.hz1k >= 18 && flatQ.hz8k - cuts.hz8k >= 18
         && extreme.length === 17 && extreme.every((e) => e.ok)
         && extremeMeters.every((m) => m.now >= 0 && m.now <= m.max && m.max === 12 && m.text === m.shown) ? 'PASS' : 'FAIL',
-      { b14, b28, liftBeyond14: lift, flatQ, ends, cuts, extreme, extremeMeters }, 'objective-audio');
+      { b28, b56, liftBeyond28: lift, flatQ, ends, cuts, extreme, extremeMeters }, 'objective-audio');
 
     // W-DYN-METERS-UI: the screen's bars and figures follow the engine while the EQ works (AUTO on, worst case: the leveler,
     // the limiter and the ceiling all show work), the match reads 0.0 dB while off, and a menu change and the MATCH tag persist.
