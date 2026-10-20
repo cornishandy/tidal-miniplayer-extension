@@ -23,6 +23,7 @@
         isPlaying: media ? !media.paused : true,
         currentTime: media ? media.currentTime : 0,
         duration: media ? media.duration : 0,
+        mediaSrc: media ? media.currentSrc || media.src || '' : '',
         favoriteFound: false,
         isFavorite: false
       };
@@ -76,6 +77,8 @@
     const favBtn = getFavoriteButton();
     currentTrackInfo = {
       title, artist, artwork, isPlaying, currentTime, duration,
+      trackUrl: titleEl ? titleEl.href || titleEl.closest('a[href]')?.href || '' : '',
+      mediaSrc: media ? media.currentSrc || media.src || '' : '',
       favoriteFound: !!favBtn,
       isFavorite: isTrackFavorited(favBtn)
     };
@@ -213,7 +216,9 @@
     const disabled = !!btn && (btn.disabled || btn.getAttribute('aria-disabled') === 'true');
     const course = startCourse();
     const advanced = (now) => now.title !== course.title || now.artist !== course.artist
-      || (course.from > 3 && now.currentTime < 3); // a new track, including a same-title track restarting
+      || (course.trackUrl && now.trackUrl && now.trackUrl !== course.trackUrl)
+      || (course.mediaSrc && now.mediaSrc && now.mediaSrc !== course.mediaSrc)
+      || now.currentTime < Math.min(3, course.from); // an observed restart, even near the start
     let route = false;
     if (btn && !disabled) { btn.click(); route = 'button'; }
     else if (!btn && isTidal) route = (bridge('next') || {}).next || false; // a narrow page without the button
@@ -242,7 +247,8 @@
   // for instance in Tidal itself). Only 'timeout' means the request demonstrably did nothing.
   function startCourse() {
     const now = getTrackInfo();
-    return { from: now.currentTime || 0, playing: !!now.isPlaying, title: now.title, artist: now.artist, seq: transportSeq, t0: performance.now() };
+    return { from: now.currentTime || 0, playing: !!now.isPlaying, title: now.title, artist: now.artist,
+      trackUrl: now.trackUrl, mediaSrc: now.mediaSrc, seq: transportSeq, t0: performance.now() };
   }
 
   async function watch(done, course, steps = 6, read = getTrackInfo) {
@@ -305,13 +311,19 @@
     const duration = reachable ? media.duration : getTrackInfo().duration;
     if (duration > 0) targetSecs = Math.max(0, Math.min(duration, targetSecs));
     const distance = Math.abs(targetSecs - course.from);
+    let drivenAt = course.t0;
     const reached = (now) => {
       const expected = course.from + (course.playing ? (performance.now() - course.t0) / 1000 : 0);
-      return now.title === course.title && Math.abs(now.currentTime - targetSecs) < Math.min(3, Math.max(0.05, distance / 2))
+      // A successful seek can resume playing before the first sample; allow only time since this route.
+      const played = course.playing ? (performance.now() - drivenAt) / 1000 : 0;
+      const tolerance = Math.min(3, Math.max(0.05, distance / 2));
+      return now.title === course.title && now.currentTime > targetSecs - tolerance
+        && now.currentTime < targetSecs + played + tolerance
         && Math.abs(now.currentTime - expected) >= Math.min(0.5, distance / 2);
     };
     let helper = false;
     for (const route of ['media', 'bar', ...(isTidal ? ['session', 'element'] : [])]) {
+      drivenAt = performance.now();
       let took = false;
       if (route === 'media') {
         if (!reachable) continue;

@@ -236,3 +236,126 @@ test('screen: late responses and cancelled attempts never overwrite a newer hint
   assert.equal(p.hint.hidden, true);
   assert.equal(p.run('currentTrackInfo.currentTime'), 5);
 });
+
+// Sol review regressions, retained verbatim from repro.mjs and hint-timer.mjs.
+test('B1: successful playing seek from 0.2 s to zero is confirmed', async () => {
+  const p = transport({ media: true, tidal: false });
+  p.state.currentTime = 0.2;
+  p.state.isPlaying = true;
+  let base = 0.2, at = 0, assignments = 0;
+  const media = { duration: 60,
+    get currentTime() { return base + (p.time.now() - at) / 1000; },
+    set currentTime(value) { base = value; at = p.time.now(); assignments++; }
+  };
+  p.ctx.document.querySelector = () => media;
+  p.ctx.getTrackInfo = () => ({ ...p.state, currentTime: media.currentTime });
+  const result = p.run('seekAudio(0)');
+  await p.time.advance(1400);
+  const response = await result;
+  const ui = screen();
+  ui.run('handleJump(-15)'); ui.reply({success:response.status==='confirmed',...response});
+  console.log({assignments,actualTime:media.currentTime,response,hint:ui.hint.textContent});
+  assert.equal(response.status, 'confirmed', 'the seek happened and normal playback resumed');
+});
+
+test('B2: Next confirms a different resource with unchanged title and artist', async () => {
+  let trackId = 'album-one/track-one';
+  const p = transport({ next: { click(s) { trackId = 'album-two/track-two'; s.currentTime = 0; } } });
+  p.state.currentTime = 2;
+  const result = p.run('nextTrack()');
+  await p.time.advance(3200);
+  const response = await result;
+  const ui = screen();
+  ui.run('handleNext()'); ui.reply({success:response.status==='confirmed',...response});
+  console.log({trackId,calls:p.calls,response,hint:ui.hint.textContent});
+  assert.equal(response.status, 'confirmed', 'Next loaded another track; same display text is valid');
+});
+
+test('S1: an old hint timer cannot hide a newer failure', async () => {
+ const p=screen();
+ p.run('handleJump(30)');p.reply({status:'exhausted',reason:'seek'});
+ await p.time.advance(3000);
+ p.run('handleJump(30)');await p.time.advance(500);
+ p.reply({status:'exhausted',reason:'seek'});
+ await p.time.advance(500);
+ assert.equal(p.hint.hidden,false,'the newer failure is only 500 ms old');
+});
+
+test('B1: each playing fallback allows elapsed playback since that route, including delayed seeks', async () => {
+  for (const route of ['bar', 'session', 'element']) {
+    for (const delay of [0, 100]) {
+      let base = 0.2, at = 0, p;
+      const drive = (s, target) => {
+        const move = () => { base = target; at = p.time.now(); };
+        if (delay) p.time.setTimeout(move, delay);
+        else move();
+        return true;
+      };
+      p = transport({ routes: { bar: () => true, session: () => true, [route]: drive } });
+      p.state.isPlaying = true;
+      p.ctx.getTrackInfo = () => ({ ...p.state, currentTime: base + (p.time.now() - at) / 1000 });
+      const result = p.run('seekAudio(0)');
+      await p.time.advance(5000);
+      assert.equal((await result).status, 'confirmed', `${route}, delay ${delay}`);
+      assert.equal((await result).seeked, route === 'bar' ? 'range' : route);
+      assert.deepEqual(p.calls, ['bar', 'session', 'element'].slice(0, ['bar', 'session', 'element'].indexOf(route) + 1));
+    }
+  }
+});
+
+test('B1: a refused short playing seek stays on its original course and cannot confirm', async () => {
+  const p = transport({ media: true, routes: { bar: () => true, session: () => true, element: () => true } });
+  p.state.isPlaying = true;
+  p.ctx.getTrackInfo = () => ({ ...p.state, currentTime: 0.2 + p.time.now() / 1000 });
+  p.ctx.document.querySelector = () => ({
+    duration: 60, get currentTime() { return 0.2 + p.time.now() / 1000; }, set currentTime(value) {}
+  });
+  const result = p.run('seekAudio(0)');
+  await p.time.advance(5000);
+  assert.equal((await result).status, 'exhausted');
+  assert.equal((await result).seeked, false);
+});
+
+test('B2: either stable identity confirms Next at zero without changed display text or a backward time jump', async () => {
+  for (const field of ['trackUrl', 'mediaSrc']) {
+    const p = transport({ next: { click(s) { s[field] = 'second'; } } });
+    p.state.currentTime = 0;
+    p.state[field] = 'first';
+    const result = p.run('nextTrack()');
+    await p.time.advance(3200);
+    assert.equal((await result).status, 'confirmed', field);
+    assert.deepEqual(p.calls, ['next']);
+  }
+});
+
+test('B2: an observed near-start restart confirms while a newer command cancels it', async () => {
+  for (const newer of [false, true]) {
+    const p = transport({ next: { click(s) { s.currentTime = 0; s.trackUrl = 'second'; } } });
+    p.state.currentTime = 2;
+    p.state.isPlaying = true;
+    p.ctx.getTrackInfo = () => ({ ...p.state, currentTime: p.state.currentTime + p.time.now() / 1000 });
+    const result = p.run('nextTrack(true)');
+    if (newer) p.run('transportSeq++');
+    await p.time.advance(3200);
+    assert.equal((await result).status, newer ? 'cancelled' : 'confirmed');
+    assert.deepEqual(p.calls, ['next']);
+  }
+});
+
+test('S1: repeated identical hints each keep their full lifetime and a persistent hint stays visible', async () => {
+  const p = screen();
+  p.run('showHint("Repeated")');
+  await p.time.advance(3500);
+  p.run('showHint("Repeated")');
+  await p.time.advance(3999);
+  assert.equal(p.hint.hidden, false);
+  await p.time.advance(1);
+  assert.equal(p.hint.hidden, true);
+  p.run('showHint("Repeated")');
+  await p.time.advance(3500);
+  p.run('showHint("Repeated", 0)');
+  await p.time.advance(5000);
+  assert.equal(p.hint.hidden, false);
+  p.run('showHint("")');
+  assert.equal(p.hint.hidden, true);
+});

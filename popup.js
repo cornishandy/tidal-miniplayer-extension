@@ -363,11 +363,13 @@ window.addEventListener('resize', () => {
 
 function showHint(text, ms = 4000) {
   if (!hintEl) return;
+  clearTimeout(hintHideTimer);
   hintEl.classList.remove('transport-hint');
   hintEl.textContent = text;
   hintEl.hidden = !text;
-  if (text && ms) setTimeout(() => { if (hintEl.textContent === text) hintEl.hidden = true; }, ms);
+  if (text && ms) hintHideTimer = setTimeout(() => { hintEl.hidden = true; }, ms);
 }
+let hintHideTimer = null;
 
 // Stay-open window only: size the window to its content. (Chrome sizes the toolbar popup itself.)
 function fitUndockedWindow() {

@@ -2610,6 +2610,68 @@ try {
         return { fwd, back: time, forward: forward.response, hints };
       });
     }
+    // Review B1/B2 regressions: successful actions must not produce failure feedback.
+    await feedbackCase('short backward seek while playing', '', async (pg, pp) => {
+      await pg.evaluate(async () => {
+        document.body.append(audioEl);
+        await audioEl.play();
+        await new Promise((resolve) => {
+          audioEl.addEventListener('seeked', resolve, { once: true });
+          audioEl.currentTime = 0.2;
+        });
+        window.__feedbackSeeks = [];
+        audioEl.addEventListener('seeking', () => __feedbackSeeks.push(audioEl.currentTime));
+      });
+      const before = await pp.evaluate(() => new Promise((resolve) => {
+        chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'GET_TRACK_INFO' } }, (info) => {
+          currentTrackInfo = info;
+          document.getElementById('player-btn-back15').click();
+          resolve(info);
+        });
+      }));
+      assert.ok(before.isPlaying && before.currentTime > 0 && before.currentTime < 0.4);
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'confirmed');
+      assert.equal(result.response.seeked, 'media');
+      assert.equal(await feedbackHint(pp), '');
+      const actual = await pg.evaluate(() => ({ time: audioEl.currentTime, seeks: __feedbackSeeks, clicks }));
+      assert.ok(actual.time > 0.1 && actual.time < 1, 'playback continues past the old arrival tolerance');
+      assert.equal(actual.seeks.length, 1, 'a successful route must not be retried');
+      assert.equal(actual.clicks.seek, 0, 'no footer fallback');
+      return { before, response: result.response, actual };
+    });
+    for (const identity of ['track link', 'media source', 'restart only']) {
+      await feedbackCase(`same title and artist Next (${identity})`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, identity === 'restart only' ? 2 : 0);
+        await pg.evaluate((identity) => {
+          document.body.append(audioEl);
+          document.getElementById('next').onclick = () => {
+            clicks.next++;
+            if (identity === 'track link') document.querySelector('[data-test="footer-track-title"]').href = '/album/2';
+            if (identity === 'media source') { audioEl.src = '/tone.wav?track=two'; audioEl.load(); }
+            else audioEl.currentTime = 0;
+          };
+        }, identity);
+        const before = await pp.evaluate(() => ({ ...currentTrackInfo }));
+        await pp.click('#player-btn-next');
+        const result = await feedbackDone(pp);
+        assert.equal(result.response.status, 'confirmed');
+        assert.equal(result.response.next, 'button');
+        assert.equal(result.response.title, before.title);
+        assert.equal(result.response.artist, before.artist);
+        assert.equal(await feedbackHint(pp), '');
+        const actual = await pg.evaluate(() => ({
+          time: audioEl.currentTime, src: audioEl.currentSrc,
+          link: document.querySelector('[data-test="footer-track-title"]').getAttribute('href'), clicks
+        }));
+        assert.equal(actual.time, 0);
+        assert.equal(actual.clicks.next, 1);
+        assert.equal(actual.clicks.seek, 0);
+        if (identity === 'track link') assert.ok(result.response.trackUrl.endsWith('/album/2'));
+        if (identity === 'media source') assert.ok(result.response.mediaSrc.endsWith('/tone.wav?track=two'));
+        return { before, response: result.response, actual };
+      });
+    }
     await feedbackCase('unknown length before first play', '?narrow=1&media=detached', async (pg, pp) => {
       await pp.click('#player-btn-fwd30');
       assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
