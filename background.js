@@ -318,7 +318,7 @@ function mergeParamEdit(stored, delta) {
     merged.stageBypass = stages;
   }
   const patch = delta && typeof delta === 'object' && !Array.isArray(delta) ? delta : {};
-  const ranges = { bass: [0, 28], hpf: [20, 200], mid: [-12, 12], high: [-12, 12], gain: [0.5, 2.5], semitones: [-12, 12] };
+  const ranges = { bass: [0, 56], hpf: [20, 200], mid: [-24, 24], high: [-24, 24], gain: [0.5, 2.5], semitones: [-12, 12] };
   for (const [key, [min, max]] of Object.entries(ranges)) {
     if (typeof patch[key] === 'number' && Number.isFinite(patch[key])) {
       merged[key] = Math.min(max, Math.max(min, patch[key]));

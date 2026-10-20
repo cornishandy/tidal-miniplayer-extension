@@ -600,7 +600,7 @@ function openPopup(bg, search = '') {
   });
   const nudges = ['bass', 'hpf', 'mid', 'high', 'gain', 'pitch'].flatMap((band) => {
     const slider = get('slider-' + band);
-    const [min, max, step] = { bass: [0, 28, 0.5], hpf: [20, 200, 5], mid: [-12, 12, 0.5], high: [-12, 12, 0.5], gain: [0.5, 2.5, 0.05], pitch: [-12, 12, 0.5] }[band];
+    const [min, max, step] = { bass: [0, 56, 0.5], hpf: [20, 200, 5], mid: [-24, 24, 0.5], high: [-24, 24, 0.5], gain: [0.5, 2.5, 0.05], pitch: [-12, 12, 0.5] }[band];
     Object.assign(slider, { min, max, defaultValue: 0 });
     return ['up', 'down'].map((action) => {
       const button = get(`nudge-${band}-${action}`);
@@ -1668,7 +1668,7 @@ test('edit deltas merge once inside the queue and normalise changed fields witho
   const mark = bg.localSets.length;
   const reply = await bg.send({ type: 'EDIT_PARAMS', params: { mid: 99, gain: NaN, stageBypass: { bass: false }, dynamics: MUSIC, unknown: 'ignored' }, ...viewOf(bg) });
   assert.equal(bg.localSets.length, mark + 1);
-  assert.equal(bg.local.currentParams.mid, 12); assert.equal(bg.local.currentParams.gain, 1);
+  assert.equal(bg.local.currentParams.mid, 24); assert.equal(bg.local.currentParams.gain, 1);
   assert.deepEqual(bg.local.currentParams.stageBypass, { bass: false, high: true });
   assert.equal('unknown' in bg.local.currentParams, false);
   assert.equal('dynamics' in bg.local.currentParams, false);
