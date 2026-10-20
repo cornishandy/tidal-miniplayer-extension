@@ -31,6 +31,8 @@ Earlier measurements at Master 250 % (Sol, 2026-10-19, silent offline renders of
 
 The bars are full at 12 dB; the figure beside each one keeps counting above that. The response drawing above the EQ is approximate and runs off its ±24 dB scale at very large settings.
 
+From 1.5.10, a red `cut N dB` under LOW, MID or HI reports how much of that band's requested boost is being taken back in the measured audio, with a red slider tick at the value minus the cut; it needs sound in that band and hides while idle, bypassed or pitch-shifted.
+
 ## Why there is a check at all
 
 A bass boost of +8 dB with Master Volume at 250 % asks for far more level than digital audio can hold (0 dBFS is the ceiling of the format and of your DAC). Something has to give. Either the tops of the waveform are cut off (distortion), or something turns the level down in time (a compressor or limiter), and turning down in time has its own sound (pumping). The chain is built so that the second thing happens, gently, and the first never does. The check is: does that work on real music at your volume, or can you hear the mechanism?

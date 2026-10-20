@@ -41,6 +41,99 @@ if (isPanel) document.body.classList.add('panel');
 const BANDS = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'pitch'];
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
 
+// ---------- Band cut model (display only; no audio nodes or parameter writes) ----------
+const EqCuts = (() => {
+  const ranges = { bass: [45, 80], mid: [800, 1250], high: [6000, 10000] };
+  // spectrumPoints reports maxima of 72 logarithmic spans, not 72 endpoint samples.
+  const frequencies = Array.from({ length: 72 }, (_, i) => 20 * 1000 ** ((i + 0.5) / 72));
+  const points = Object.fromEntries(Object.entries(ranges).map(([band, [lo, hi]]) =>
+    [band, frequencies.flatMap((f, i) => f >= lo && f <= hi ? [i] : [])]));
+
+  // Web Audio's biquad coefficients (Audio EQ Cookbook, shelf slope S = 1).
+  // HPF Q is in dB in Web Audio; peaking Q is linear:
+  // https://webaudio.github.io/web-audio-api/#filters-characteristics
+  function biquadDb(type, f, f0, gain, q, rate) {
+    const w0 = 2 * Math.PI * f0 / rate;
+    const c = Math.cos(w0), s = Math.sin(w0), A = 10 ** (gain / 40);
+    let b0, b1, b2, a0, a1, a2;
+    if (type === 'highpass') {
+      const alpha = s / (2 * 10 ** (q / 20));
+      b0 = (1 + c) / 2; b1 = -(1 + c); b2 = b0;
+      a0 = 1 + alpha; a1 = -2 * c; a2 = 1 - alpha;
+    } else if (type === 'peaking') {
+      const alpha = s / (2 * q);
+      b0 = 1 + alpha * A; b1 = -2 * c; b2 = 1 - alpha * A;
+      a0 = 1 + alpha / A; a1 = -2 * c; a2 = 1 - alpha / A;
+    } else {
+      const beta = Math.sqrt(2 * A) * s;
+      if (type === 'lowshelf') {
+        b0 = A * ((A + 1) - (A - 1) * c + beta);
+        b1 = 2 * A * ((A - 1) - (A + 1) * c);
+        b2 = A * ((A + 1) - (A - 1) * c - beta);
+        a0 = (A + 1) + (A - 1) * c + beta;
+        a1 = -2 * ((A - 1) + (A + 1) * c);
+        a2 = (A + 1) + (A - 1) * c - beta;
+      } else {
+        b0 = A * ((A + 1) + (A - 1) * c + beta);
+        b1 = -2 * A * ((A - 1) + (A + 1) * c);
+        b2 = A * ((A + 1) + (A - 1) * c - beta);
+        a0 = (A + 1) - (A - 1) * c + beta;
+        a1 = 2 * ((A - 1) - (A + 1) * c);
+        a2 = (A + 1) - (A - 1) * c - beta;
+      }
+    }
+    const w = 2 * Math.PI * f / rate;
+    const magnitude = (x0, x1, x2) => Math.hypot(
+      x0 + x1 * Math.cos(w) + x2 * Math.cos(2 * w),
+      x1 * Math.sin(w) + x2 * Math.sin(2 * w));
+    return 20 * Math.log10(Math.max(1e-12, magnitude(b0, b1, b2) / magnitude(a0, a1, a2)));
+  }
+
+  function askedDb(p, f, rate = 48000) {
+    if (p.bypass) return 0;
+    const off = p.stageBypass || {};
+    let db = off.gain ? 0 : 20 * Math.log10(p.gain ?? 1);
+    if (!off.hpf) db += biquadDb('highpass', f, p.hpf ?? 20, 0, 0.707, rate);
+    if (!off.bass) db += biquadDb('lowshelf', f, 120, p.bass || 0, 0, rate);
+    if (!off.mid) db += biquadDb('peaking', f, 1000, p.mid || 0, 0.8, rate);
+    if (!off.high) db += biquadDb('highshelf', f, 5000, p.high || 0, 0, rate);
+    return db;
+  }
+
+  function allowed(p, active, movieMode) {
+    return active && !p.bypass && !(p.semitones && !p.stageBypass?.pitch && !movieMode);
+  }
+
+  function measure(frame, p, active, movieMode) {
+    const cuts = { bass: null, mid: null, high: null };
+    if (!allowed(p, active, movieMode) || !frame?.isCapturing
+      || frame.input?.length !== 72 || frame.output?.length !== 72) return cuts;
+    const rate = Number.isFinite(frame.sampleRate) && frame.sampleRate > 0 ? frame.sampleRate : 48000;
+    for (const [band, indices] of Object.entries(points)) {
+      const valid = indices.filter((i) => Number.isFinite(frame.input[i])
+        && frame.input[i] >= -70 && Number.isFinite(frame.output[i]));
+      if (valid.length < 2) continue;
+      // Average both responses over exactly the same audible points, then clamp the cut.
+      const sum = valid.reduce((total, i) =>
+        total + askedDb(p, frequencies[i], rate) - (frame.output[i] - frame.input[i]), 0);
+      cuts[band] = Math.max(0, sum / valid.length);
+    }
+    return cuts;
+  }
+
+  function smooth(previous, raw, elapsedMs) {
+    if (raw == null || !Number.isFinite(raw)) return { value: 0, visible: false };
+    const value = previous.value + (Math.max(0, raw) - previous.value) * -Math.expm1(-Math.max(0, elapsedMs) / 600);
+    return { value, visible: previous.visible ? value >= 1 : value >= 2 };
+  }
+
+  function position(value, cut, min, max) {
+    return Math.max(0, Math.min(1, (value - Math.max(0, cut) - min) / (max - min)));
+  }
+  return { frequencies, points, biquadDb, askedDb, allowed, measure, smooth, position };
+})();
+// ---------- End band cut model ----------
+
 // DOM: player
 const artCover = document.getElementById('art-cover');
 const artSlice = document.getElementById('art-slice');
@@ -102,6 +195,49 @@ const meters = {
   ceiling: { bar: document.getElementById('meter-ceiling'), val: document.getElementById('val-ceiling'), shown: 0 }
 };
 
+const bandCuts = Object.fromEntries(['bass', 'mid', 'high'].map((band) => {
+  const caption = document.getElementById(`cut-${band}`);
+  return [band, {
+    caption, normal: caption.textContent,
+    tick: document.getElementById(`cut-tick-${band}`),
+    slider: document.getElementById(`slider-${band}`),
+    state: { value: 0, visible: false }
+  }];
+}));
+let cutFrameAt = null;
+
+function paintBandCuts() {
+  for (const { caption, normal, tick, slider, state } of Object.values(bandCuts)) {
+    const n = Math.round(state.value);
+    caption.textContent = state.visible ? `cut ${n} dB` : normal;
+    caption.classList.toggle('cutting', state.visible);
+    if (state.visible) {
+      caption.title = `About ${n} dB of this band is being taken back by the leveler, limiter and ceiling right now. Measured from the audio, so it shows only while this band has sound.`;
+      const ratio = EqCuts.position(+slider.value, state.value, +slider.min, +slider.max);
+      // Range thumbs travel within the track's 7 px end insets (14 px thumb).
+      tick.style.left = `calc(${ratio * 100}% + ${7 - 14 * ratio}px)`;
+    } else {
+      caption.removeAttribute('title');
+    }
+    tick.hidden = !state.visible;
+  }
+}
+
+function updateBandCuts(frame) {
+  const now = Date.now();
+  const cuts = EqCuts.measure(frame, currentParams, isCapturingActive, currentMovieMode);
+  for (const [band, ui] of Object.entries(bandCuts)) {
+    ui.state = EqCuts.smooth(ui.state, cuts[band], cutFrameAt == null ? 66 : now - cutFrameAt);
+  }
+  cutFrameAt = frame ? now : null;
+  paintBandCuts();
+}
+
+function syncBandCutVisibility() {
+  if (!EqCuts.allowed(currentParams, isCapturingActive, currentMovieMode)) updateBandCuts(null);
+  else paintBandCuts();
+}
+
 // Per-band on/off. Off keeps the slider value but takes that stage out of the chain.
 // `comp` is the Auto-Balancing switch (autoBalance); the others live in stageBypass.
 let bandOff = { hpf: false, bass: false, mid: false, high: false, comp: false, gain: false, pitch: false };
@@ -118,9 +254,10 @@ function startFrames() {
   if (frameTimer) return;
   frameTimer = setInterval(() => {
     chrome.runtime.sendMessage({ target: 'offscreen', type: 'GET_AUDIO_FRAME' }, (res) => {
-      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); updateMeters(null); return; }
+      if (chrome.runtime.lastError || !res || !res.isCapturing) { physics.setFrame(null); updateMeters(null); updateBandCuts(null); return; }
       physics.setFrame(res);
       updateMeters(res.dyn || null);
+      updateBandCuts(res);
     });
   }, 66);
 }
@@ -129,6 +266,7 @@ function stopFrames() {
   frameTimer = null;
   physics.setFrame(null);
   updateMeters(null);
+  updateBandCuts(null);
 }
 
 // ---------- Dynamics meters ----------
@@ -503,6 +641,7 @@ function notifyPitchLocked() {
 }
 
 function syncMoviePresentation() {
+  syncBandCutVisibility();
   if (btnMovieMode) {
     const on = !!currentMovieMode;
     const manualOff = currentMovieOverride === false;
@@ -1183,6 +1322,7 @@ function sendAudioParamUpdate(delta) {
   const editAtSend = noteSurfaceEdit();
   const gen = presetUiGen;
   currentParams = getParamsFromUI();
+  syncBandCutVisibility();
   chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: delta, ...viewTag() }, (res) => {
     if (chrome.runtime.lastError) return;
     if (handleRefusal(res, gen, editAtSend)) return;

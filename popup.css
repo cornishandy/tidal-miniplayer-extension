@@ -801,6 +801,58 @@ input:checked + .slider-round:before {
   cursor: pointer;
 }
 
+/* R-29: captions and ticks fit inside the existing 20 px rows. The heavy-meter
+   warning red (#ff5252) is slightly lighter here for >=4.5:1 against the slider
+   track as well as every theme's background; it stays opaque with a band off. */
+.eq-cut-label {
+  position: relative;
+  height: 20px;
+  line-height: 11px;
+}
+
+.eq-cut-label small {
+  position: absolute;
+  top: 11px;
+  left: 0;
+  margin: 0;
+  line-height: 9px;
+}
+
+.eq-cut-label small.cutting {
+  color: #ff5a5a;
+}
+
+.eq-row.is-off .eq-cut-label {
+  opacity: 1;
+}
+
+.eq-row.is-off .eq-cut-label > span,
+.eq-row.is-off .eq-cut-label small:not(.cutting) {
+  opacity: 0.45;
+}
+
+.eq-cut-track {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  height: 6px;
+}
+
+.eq-cut-track .eq-slider {
+  width: 100%;
+}
+
+.eq-cut-tick {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  transform: translateX(-1px);
+  background: #ff5a5a;
+  pointer-events: none;
+}
+
 .eq-val {
   width: 62px;
   min-width: 62px;
@@ -1082,9 +1134,13 @@ body.panel .eq-row:not(.toggle-row):not(.dyn-row) {
 
 body.panel .eq-row:not(.toggle-row):not(.dyn-row) .band-tag { grid-area: tag; }
 body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-label { grid-area: label; width: auto; }
+/* The panel's first grid line is 16 px tall. Use its existing 4 px row gap for
+   the caption's last pixels so the new caption cannot enlarge the grid row. */
+body.panel .eq-row .eq-cut-label { height: 16px; overflow: visible; }
 body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-val { grid-area: val; width: auto; min-width: 0; }
 body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-nudge-btn[data-action="down"] { grid-area: down; justify-self: end; }
-body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-slider { grid-area: slider; }
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-slider,
+body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-cut-track { grid-area: slider; }
 body.panel .eq-row:not(.toggle-row):not(.dyn-row) .eq-nudge-btn[data-action="up"] { grid-area: up; justify-self: start; }
 
 /* Dynamics rows in the panel: name + menu on the first line, the bar under them. */

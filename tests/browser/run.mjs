@@ -632,6 +632,7 @@ try {
     await sleep(400);
     const flat = (await evalOffscreen(measure)).value;
     const source = (await evalOffscreen(measureInput)).value;
+
     await setParams({ bass: 10, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
     await sleep(400);
     const boosted = (await evalOffscreen(measure)).value;
@@ -1279,6 +1280,154 @@ try {
     record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a side panel left open refreshes on focus; a stale Update and a stale switch change are refused, write nothing, and refresh that panel; pick/Reset/Delete lock all edit controls until confirmation; each edit sends only its changed field; the header stays on one row',
       switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
 
+    // ---- W-EQ-CUT (R-29): the shipped display reads the existing synthetic spectra.
+    // No new audio source, output path, browser or profile; keep the harness's silent flags.
+    // Keep these extra steps after the timed audio checks so fixture loop seams do not move into their measurements.
+    const cutSaved = await sendFrom(popup, { type: 'READ_PRESET_STATE' });
+    await setDyn(DEFAULT_DYN);
+    await setParams({ bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: false, stageBypass: NONE });
+    await showSurface(popup);
+    await sleep(2000);
+    const readCuts = (page) => page.evaluate(() => {
+      const rect = (el) => {
+        const r = el.getBoundingClientRect();
+        return { x: r.x, y: r.y, w: r.width, h: r.height };
+      };
+      return {
+        body: rect(document.body),
+        bands: ['bass', 'mid', 'high'].map((band) => {
+          const row = document.querySelector(`.eq-row[data-band="${band}"]`);
+          const slider = document.getElementById(`slider-${band}`);
+          const caption = document.getElementById(`cut-${band}`);
+          const tick = document.getElementById(`cut-tick-${band}`);
+          const track = rect(slider);
+          const thumbX = track.x + 7 + (track.w - 14) * ((+slider.value - +slider.min) / (+slider.max - +slider.min));
+          return { band, text: caption.textContent, title: caption.getAttribute('title'),
+            cutting: caption.classList.contains('cutting'), hidden: tick.hidden,
+            tick: rect(tick), ariaHidden: tick.getAttribute('aria-hidden'),
+            thumbX, track, row: rect(row), label: rect(row.querySelector('.eq-label')),
+            fits: caption.scrollWidth <= caption.clientWidth && row.querySelector('.eq-label').scrollWidth <= row.querySelector('.eq-label').clientWidth };
+        })
+      };
+    });
+    const cutFlat = await readCuts(popup);
+    await setParams({ bass: 56, gain: 2.5 });
+    await showSurface(popup);
+    await sleep(3000);
+    const cutHot = await readCuts(popup);
+    const cutScreenshot = await shot(popup, 'eq-cut-bass56.png');
+
+    const cutContrast = await popup.evaluate(() => {
+      const savedTheme = document.body.className;
+      const rgb = (v) => v.match(/[\d.]+/g).slice(0, 3).map(Number);
+      const luminance = (rgb) => rgb.map((v) => {
+        const c = v / 255;
+        return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      }).reduce((s, v, i) => s + v * [0.2126, 0.7152, 0.0722][i], 0);
+      const contrast = (a, b) => {
+        const x = luminance(a), y = luminance(b);
+        return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+      };
+      const results = [];
+      for (const theme of ['cyan', 'amber', 'synthwave', 'matrix', 'oled']) {
+        document.body.className = `theme-${theme}`;
+        const bg = rgb(getComputedStyle(document.body).backgroundColor);
+        for (const band of ['bass', 'mid', 'high']) {
+          const row = document.querySelector(`.eq-row[data-band="${band}"]`);
+          const caption = document.getElementById(`cut-${band}`);
+          const tick = document.getElementById(`cut-tick-${band}`);
+          const savedRow = row.className, savedCaption = caption.className;
+          caption.classList.add('cutting');
+          for (const off of [false, true]) {
+            row.classList.toggle('is-off', off);
+            const style = getComputedStyle(caption);
+            const opacity = +style.opacity * +getComputedStyle(caption.parentElement).opacity;
+            const fg = rgb(style.color).map((v, i) => v * opacity + bg[i] * (1 - opacity));
+            results.push({ theme, band, off, text: contrast(fg, bg),
+              tick: contrast(rgb(getComputedStyle(tick).backgroundColor), rgb(getComputedStyle(document.getElementById(`slider-${band}`)).backgroundColor)) });
+          }
+          row.className = savedRow;
+          caption.className = savedCaption;
+        }
+      }
+      document.body.className = savedTheme;
+      return results;
+    });
+
+    // The panel and fallback window execute the same renderer. Toggle only its presentation
+    // synchronously to compare geometry with/without cuts while the real frame stream continues.
+    const cutLayouts = [];
+    for (const path of ['popup.html?panel=1', 'popup.html?undocked=true']) {
+      const { page, errors } = await openPopup(path);
+      await sleep(1200);
+      for (const width of path.includes('panel') ? [300, 360, 400, 440, 480] : [440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await sleep(150);
+        const geometry = await page.evaluate(() => {
+          const positions = () => [...document.querySelectorAll('.eq-cut-label, .eq-cut-track, .eq-row')].map((el) => {
+            const r = el.getBoundingClientRect();
+            return [r.x, r.y, r.width, r.height];
+          });
+          const shown = positions();
+          const saved = Object.values(bandCuts).map((ui) => ui.state);
+          Object.values(bandCuts).forEach((ui) => { ui.state = { value: 0, visible: false }; });
+          paintBandCuts();
+          const hidden = positions();
+          const rows = () => [...document.querySelectorAll('.eq-row')].map((el) => {
+            const r = el.getBoundingClientRect();
+            return [r.y, r.height];
+          });
+          const cutRows = rows();
+          // The original labels had no fixed height and their small text was inline.
+          const labels = [...document.querySelectorAll('.eq-cut-label')];
+          labels.forEach((el) => el.classList.remove('eq-cut-label'));
+          const originalRows = rows();
+          labels.forEach((el) => el.classList.add('eq-cut-label'));
+          Object.values(bandCuts).forEach((ui, i) => { ui.state = saved[i]; });
+          paintBandCuts();
+          return { stable: JSON.stringify(shown) === JSON.stringify(hidden),
+            originalRowHeights: JSON.stringify(cutRows) === JSON.stringify(originalRows),
+            noOverflow: document.documentElement.scrollWidth <= document.documentElement.clientWidth };
+        });
+        cutLayouts.push({ path, width, ...geometry, ...(await readCuts(page)), errors: [...errors] });
+      }
+      await page.close();
+    }
+
+    await showSurface(popup);
+    await setParams({ bypass: true });
+    await showSurface(popup);
+    const cutBypass = await readCuts(popup);
+    await setParams({ bypass: false, semitones: 1 });
+    await showSurface(popup);
+    const cutPitch = await readCuts(popup);
+    await setParams({ semitones: 0 });
+    await showSurface(popup);
+    await sleep(1500);
+    await popup.click('.power-switch');
+    await sleep(500);
+    const cutOff = await readCuts(popup);
+    const normalCaptions = ['', 'vocals / body', 'sparkle'];
+    const allHidden = (r) => r.bands.every((b, i) => b.hidden && !b.cutting && b.title === null && b.text === normalCaptions[i]);
+    const noShift = cutHot.bands.every((b, i) => JSON.stringify(b.row) === JSON.stringify(cutFlat.bands[i].row)
+      && JSON.stringify(b.track) === JSON.stringify(cutFlat.bands[i].track));
+    const low = cutHot.bands[0], mid = cutHot.bands[1];
+    const cutText = /^cut (\d+) dB$/;
+    record('W-EQ-CUT', 'Flat hides cuts; Bass +56 / Master 250% / AUTO off shows LOW ≥10 dB and a left tick plus a MID cut; no shift/overflow in popup, 300–480 px panel or window; all themes ≥4.5:1; bypass, Pitch and EQ off restore captions',
+      allHidden(cutFlat) && cutText.test(low.text) && +low.text.match(cutText)[1] >= 10
+        && !low.hidden && low.tick.x + 1 < low.thumbX && low.tick.w === 2 && low.tick.h === low.track.h
+        && cutText.test(mid.text) && !mid.hidden && noShift && cutHot.body.h < 600
+        && cutHot.bands.every((b) => b.ariaHidden === 'true' && (!b.cutting || b.title === `About ${b.text.match(cutText)?.[1]} dB of this band is being taken back by the leveler, limiter and ceiling right now. Measured from the audio, so it shows only while this band has sound.`))
+        && cutContrast.every((c) => c.text >= 4.5 && c.tick >= 4.5)
+        && cutLayouts.every((l) => l.stable && l.originalRowHeights && l.noOverflow && l.errors.length === 0
+          && l.bands[0].cutting && l.bands.every((b) => b.fits))
+        && allHidden(cutBypass) && allHidden(cutPitch) && allHidden(cutOff) ? 'PASS' : 'FAIL',
+      { flat: cutFlat, hot: cutHot, noShift, contrast: cutContrast, layouts: cutLayouts,
+        bypass: cutBypass, pitch: cutPitch, off: cutOff, screenshot: cutScreenshot });
+    await setParams(cutSaved.currentParams);
+    await setDyn(cutSaved.dynamics);
+    await sendFrom(popup, { type: 'START_CAPTURE_FOR_TAB', tabId: mediaTabId });
+
     // ---- W-CAPTURE-STOP ----
     const stopRes = await sendFrom(popup, { type: 'STOP_CAPTURE' });
     await sleep(500);
@@ -1370,7 +1519,7 @@ try {
     record('W-TAB-CLOSE-AFTER-SW-RESTART', 'Tab close after worker restart still cleans up capture',
       s2?.success && st2.isCapturing === false && after2.value?.stream !== true ? 'PASS' : 'FAIL', { s2, after2, stateIsCapturing: st2.isCapturing });
   } else {
-    for (const id of ['W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-PRESET-SWITCHES', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
+    for (const id of ['W-EQ-CUT', 'W-AUDIO-TRANSPARENT', 'W-AUDIO-BASS', 'W-AUDIO-BAND-SWITCH', 'W-AUDIO-HPF', 'W-PITCH', 'W-PITCH-RECOVER', 'W-AUDIO-LIMITER', 'W-DYN-BASELINE', 'W-DYN-LEVELER-BASS', 'W-DYN-LEVELER-SLOW', 'W-DYN-MATCH', 'W-DYN-LIMITER-LOOKAHEAD', 'W-DYN-CEILING-WARM', 'W-DYN-METERS-UI', 'W-PRESET-SWITCHES', 'W-CAPTURE-STOP', 'W-CAPTURE-RESTART', 'W-TAB-CLOSE-CLEANUP', 'W-TAB-CLOSE-AFTER-SW-RESTART']) {
       record(id, 'depends on W-CAPTURE-START', 'BLOCKED', null);
     }
   }
