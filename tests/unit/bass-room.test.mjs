@@ -190,6 +190,20 @@ test('Unmud settled bell, silent key, inverted key, and per-block coefficient sl
     assert.ok(Math.abs(db(toneAmp(quiet.right, fs, 60, start) / 0.001)) <= 0.02, `silent 60 at ${fs}`);
     assert.ok(silent.env <= 0.02, `silent env ${silent.env}`);
 
+    // Recover from a fully keyed bell, not only a fresh silent detector.
+    const released = new reg.unmud();
+    const releasedOut = render(released, fs, 3, i => {
+      const t = i / fs;
+      const probe = .001 * (Math.sin(2 * Math.PI * 60 * t) + Math.sin(2 * Math.PI * 250 * t) + Math.sin(2 * Math.PI * 1000 * t));
+      const key = t < 1 ? .2 * Math.sin(2 * Math.PI * 60 * t) : 0;
+      return { audio: [probe, probe], key: [key, -key] };
+    }, { inputs: 2 });
+    for (const frequency of [60, 250, 1000]) {
+      const gain = db(toneAmp(releasedOut.left, fs, frequency, fs * 2) / .001);
+      assert.ok(Math.abs(gain) <= .02, `released ${frequency} Hz ${gain} dB at ${fs}`);
+    }
+    assert.ok(released.env <= .02, `released envelope ${released.env}`);
+
     const a = new reg.unmud();
     const b = new reg.unmud();
     const envsA = [], envsB = [];
