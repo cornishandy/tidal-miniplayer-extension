@@ -319,6 +319,7 @@
       const tolerance = Math.min(3, Math.max(0.05, distance / 2));
       return now.title === course.title && now.currentTime > targetSecs - tolerance
         && now.currentTime < targetSecs + played + tolerance
+        && (course.from - targetSecs < 1 || now.currentTime < course.from)
         && Math.abs(now.currentTime - expected) >= Math.min(0.5, distance / 2);
     };
     let helper = false;

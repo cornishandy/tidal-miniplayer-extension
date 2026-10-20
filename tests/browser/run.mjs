@@ -1390,6 +1390,15 @@ try {
           assert.equal(surfaceResult.lock.whileHeldCalls, 1);
           assert.deepEqual(surfaceResult.lock.heldView, surfaceResult.lock.before);
           await checkSelection(menu.names[1]);
+          // Fable 1.5.12 #6: a missing current name starts at the appropriate end.
+          surfaceResult.unknown = [];
+          for (const direction of [-1, 1]) {
+            await pg.evaluate(() => { currentPresetName = 'Missing preset'; });
+            const expected = direction < 0 ? menu.names.at(-1) : menu.names[0];
+            await pg.click(direction < 0 ? '#btn-prev-preset' : '#btn-next-preset');
+            await pg.waitForFunction(name => presetOpsInFlight === 0 && currentPresetName === name, expected);
+            surfaceResult.unknown.push({ direction, ...await checkSelection(expected) });
+          }
           // Compare the new row against the original select-only DOM, without changing shipped code.
           // Test both default and custom labels at every supported width.
           for (const name of [menu.names[0], 'Step switches A']) {
@@ -2674,14 +2683,14 @@ try {
     }
     await feedbackCase('unknown length before first play', '?narrow=1&media=detached', async (pg, pp) => {
       await pp.click('#player-btn-fwd30');
-      assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
+      assert.equal(await feedbackHint(pp), 'Reload the tab once, then try again');
       assert.equal(await pp.evaluate(() => __transport.length), 0);
     }, false);
     await feedbackCase('dead bar and empty helper', '?deadbar=1', async (pg, pp) => {
       await pp.click('#player-btn-fwd30');
       const result = await feedbackDone(pp);
       assert.equal(result.response.status, 'exhausted');
-      assert.equal(await feedbackHint(pp), 'Reload the Tidal tab once, then try again');
+      assert.equal(await feedbackHint(pp), 'Reload the tab once, then try again');
       assert.equal(await pg.evaluate(() => audioEl.currentTime), 0);
       assert.ok(await pp.evaluate(() => __hints.includes('Moving playback…')));
       return { response: result.response };
@@ -2728,7 +2737,7 @@ try {
       await feedbackSet(pg, pp, 45);
       // Same event turn guarantees that the second click arrives before the confirmation.
       await pp.evaluate(() => { document.getElementById('player-btn-fwd30').click(); document.getElementById('player-btn-fwd30').click(); });
-      assert.equal(await feedbackHint(pp), 'Waiting for the next track');
+      assert.equal(await feedbackHint(pp), 'Waiting for the track to change');
       const result = await feedbackDone(pp);
       assert.equal(result.response.status, 'confirmed');
       assert.equal(await feedbackHint(pp), '');
@@ -2743,7 +2752,7 @@ try {
         await pp.click(button);
         const result = await feedbackDone(pp);
         assert.equal(result.response.status, 'exhausted');
-        assert.equal(await feedbackHint(pp), "Tidal didn't move to the next track");
+        assert.equal(await feedbackHint(pp), "The page didn't move to the next track");
         const clicks = await pg.evaluate(() => window.clicks);
         assert.equal(clicks.next, 1);
         assert.equal(clicks.seek, 0);
@@ -2772,7 +2781,7 @@ try {
       await pg.close();
       await pp.click('#player-btn-fwd30');
       await feedbackDone(pp);
-      assert.equal(await feedbackHint(pp), "The Tidal tab isn't reachable. Open it and try again");
+      assert.equal(await feedbackHint(pp), 'No media tab found. Open one and try again');
       assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
     });
     for (const mode of ['failed', 'missing', 'throw']) {
@@ -2780,7 +2789,7 @@ try {
         await feedbackSet(pg, pp, 5);
         await pp.evaluate((mode) => { window.__replyMode = mode; }, mode);
         await pp.click('#player-btn-fwd30');
-        assert.equal(await feedbackHint(pp), "The Tidal tab isn't reachable. Open it and try again");
+        assert.equal(await feedbackHint(pp), "Can't reach the tab. Reload it and try again");
         assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
         assert.equal(await pg.evaluate(() => audioEl.currentTime), 5);
       });
@@ -2795,6 +2804,142 @@ try {
       assert.equal(await feedbackHint(pp), '');
       assert.equal(await pg.evaluate(() => audioEl.currentTime), 12);
       assert.equal(await pg.evaluate(() => clicks.sessionSeek), 0);
+    });
+    // Fable 1.5.12 #1–5: additive regressions on both shared surfaces.
+    await feedbackCase('whole-second refused backward jump while playing from 1 s', '?deadbar=1&session=noop', async (pg, pp) => {
+      await pg.evaluate(async () => {
+        await new Promise(resolve => {
+          audioEl.addEventListener('seeked', resolve, { once: true });
+          audioEl.currentTime = 1.05;
+        });
+      });
+      await pg.evaluate(blockFeedbackSeek);
+      const before = await pp.evaluate(() => new Promise(resolve => {
+        chrome.runtime.sendMessage({ type: 'FORWARD_PLAYER_COMMAND', command: { type: 'GET_TRACK_INFO' } }, info => {
+          currentTrackInfo = info;
+          document.getElementById('player-btn-back15').click();
+          resolve(info);
+        });
+      }));
+      assert.equal(before.currentTime, 1, 'the content script sees a whole-second footer label');
+      assert.equal(before.isPlaying, true);
+      const result = await feedbackDone(pp);
+      assert.equal(result.response.status, 'exhausted');
+      assert.equal(result.response.seeked, false);
+      assert.equal(await feedbackHint(pp), "This page isn't allowing seeking right now");
+      const actual = await pg.evaluate(() => audioEl.currentTime);
+      assert.ok(actual > 1, 'refused playback continued forward');
+      return { before, response: result.response, actual };
+    });
+    await feedbackCase('non-Tidal helper, Next and unreachable hints', '', async (pg, pp) => {
+      const initialInfo = await pp.evaluate(() => ({ ...currentTrackInfo }));
+      // Route only this surface to the local non-Tidal fixture, keeping real content-script replies.
+      await pg.goto(MEDIA_URL);
+      await pg.waitForFunction(() => document.querySelector('audio').duration > 0);
+      await pp.evaluate(async url => {
+        clearInterval(trackPollInterval);
+        const [tab] = await chrome.tabs.query({ url });
+        const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+        chrome.runtime.sendMessage = (message, callback) => {
+          if (message.type !== 'FORWARD_PLAYER_COMMAND') return original(message, callback);
+          return chrome.tabs.sendMessage(tab.id, message.command, response => {
+            const error = chrome.runtime.lastError;
+            if (message.command.type !== 'GET_TRACK_INFO') __transport.push({ command: message.command, response });
+            callback?.(error ? { success: false, error: error.message } : response);
+          });
+        };
+        await new Promise(resolve => chrome.runtime.sendMessage({
+          type: 'FORWARD_PLAYER_COMMAND', command: { type: 'GET_TRACK_INFO' }
+        }, info => { currentTrackInfo = info; updatePlayerUI(info); resolve(); }));
+      }, pg.url());
+      assert.equal(await pp.evaluate(() => currentTrackInfo.artist), '127.0.0.1');
+      const plainHeight = await pp.evaluate(() => document.body.getBoundingClientRect().height);
+      await pp.click('#player-btn-next');
+      const next = await feedbackDone(pp);
+      assert.equal(next.response.status, 'exhausted');
+      assert.equal(await feedbackHint(pp), "The page didn't move to the next track");
+      // Unknown length from a real content-script reply after removing the fixture media.
+      await pg.evaluate(() => document.querySelector('audio').remove());
+      await pp.evaluate(() => new Promise(resolve => chrome.runtime.sendMessage({
+        type: 'FORWARD_PLAYER_COMMAND', command: { type: 'GET_TRACK_INFO' }
+      }, info => { currentTrackInfo = info; updatePlayerUI(info); resolve(); })));
+      await pp.click('#player-btn-fwd30');
+      const helper = await feedbackHint(pp);
+      assert.equal(helper, 'Reload the tab once, then try again');
+      assert.equal(await pp.evaluate(() => __transport.length), 1);
+      await pg.goto('about:blank');
+      await pp.click('#player-btn-next');
+      await feedbackDone(pp, 2);
+      const unreachable = await feedbackHint(pp);
+      assert.equal(unreachable, "Can't reach the tab. Reload it and try again");
+      assert.equal(await pp.evaluate(() => document.body.getBoundingClientRect().height), plainHeight,
+        'non-Tidal hints preserve the non-Tidal layout');
+      // Restore the original title/art before the shared height check: changing sites itself can resize it.
+      await pp.evaluate(info => { currentTrackInfo = info; updatePlayerUI(info); }, initialInfo);
+      return { next: next.response, helper, unreachable };
+    }, false);
+    for (const error of ['No media tab found', 'Could not establish connection. Receiving end does not exist.']) {
+      await feedbackCase(`missing tab versus failed re-injection: ${error}`, '', async (pg, pp) => {
+        await feedbackSet(pg, pp, 5);
+        await pp.evaluate(error => {
+          const original = chrome.runtime.sendMessage.bind(chrome.runtime);
+          chrome.runtime.sendMessage = (message, callback) => {
+            if (message.type !== 'FORWARD_PLAYER_COMMAND' || message.command.type === 'GET_TRACK_INFO') return original(message, callback);
+            const response = { success: false, error };
+            __transport.push({ command: message.command, response });
+            callback(response);
+          };
+        }, error);
+        await pp.click('#player-btn-fwd30');
+        const result = await feedbackDone(pp);
+        const hint = await feedbackHint(pp);
+        assert.equal(hint, error === 'No media tab found'
+          ? 'No media tab found. Open one and try again' : "Can't reach the tab. Reload it and try again");
+        assert.equal(await pp.evaluate(() => currentTrackInfo.currentTime), 5);
+        assert.equal(await pg.evaluate(() => audioEl.currentTime), 5);
+        return { response: result.response, hint };
+      });
+    }
+    await feedbackCase('Previous holds a jump with direction-neutral wording', '', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pp.evaluate(() => {
+        document.getElementById('player-btn-prev').click();
+        document.getElementById('player-btn-fwd30').click();
+      });
+      await feedbackDone(pp);
+      assert.equal(await feedbackHint(pp), 'Waiting for the track to change');
+      assert.equal(await pp.evaluate(() => __transport.length), 1);
+      const actual = await pg.evaluate(() => ({ time: audioEl.currentTime, clicks }));
+      assert.equal(actual.clicks.prev, 1);
+      assert.equal(actual.clicks.seek, 0);
+      assert.equal(actual.time, 5);
+      return { actual };
+    });
+    await feedbackCase('confirmed same-title Next allows an immediate jump', '', async (pg, pp) => {
+      await feedbackSet(pg, pp, 5);
+      await pg.evaluate(() => {
+        document.getElementById('next').onclick = () => {
+          clicks.next++;
+          document.querySelector('[data-test="footer-track-title"]').href = '/album/2';
+          audioEl.currentTime = 0;
+        };
+      });
+      const started = Date.now();
+      await pp.click('#player-btn-next');
+      const next = await feedbackDone(pp);
+      assert.equal(next.response.status, 'confirmed');
+      assert.equal(next.response.title, 'Synthetic Tone');
+      await pp.click('#player-btn-fwd30');
+      const jump = await feedbackDone(pp, 2);
+      assert.ok(Date.now() - started < 3000, 'the jump completed within the old hold');
+      assert.equal(jump.command.type, 'SEEK_AUDIO');
+      assert.equal(jump.response.status, 'confirmed');
+      assert.equal(await feedbackHint(pp), '');
+      const actual = await pg.evaluate(() => ({ time: audioEl.currentTime, clicks }));
+      assert.equal(actual.clicks.next, 1);
+      assert.equal(actual.clicks.seek, 1);
+      assert.equal(actual.time, 30);
+      return { next: next.response, jump: jump.response, actual };
     });
   }
   record('W-JUMP-FEEDBACK', 'Confirmed jumps clear feedback; every investigated silent failure is explained, without changing popup/panel height',
