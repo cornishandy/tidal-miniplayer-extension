@@ -1046,8 +1046,15 @@ try {
         && sameDyn(agreePanel, WANTED) && sameDyn(agreeWin, WANTED);
       const curveMatches = curve.shown != null && Math.abs(curve.shown - curve.bass) < 0.05
         && savedPreset && Math.abs(curve.bass - savedPreset.bass) < 0.05;
-      // Popup and side panel already open: a pick and an update on the popup must move the panel's
-      // switches, label and preset cache without the panel being reopened.
+      // Two screens stay open. The panel does not follow live: it refreshes when it is focused.
+      // An Update from the panel after the popup has moved on is refused, writes nothing, and refreshes.
+      const showSurface = async (pg) => {
+        await pg.evaluate(() => {
+          window.dispatchEvent(new Event('focus'));
+          document.dispatchEvent(new Event('visibilitychange'));
+        });
+        await sleep(450);
+      };
       const followPanel = adopt(await openPopup('popup.html?panel=1'));
       await followPanel.setViewportSize({ width: 360, height: 900 });
       await sleep(400);
@@ -1057,12 +1064,17 @@ try {
       await setModes(popup, SLOW);
       await popup.click('#btn-update-preset');
       await sleep(500);
+      const followBeforeFocus = await readModes(followPanel);
+      await showSurface(followPanel);
       const followUpdated = await readModes(followPanel);
       await popup.selectOption('#preset-select', 'Flat (Bypass)');
       await sleep(400);
+      const followStillHarness = await readModes(followPanel);
+      await showSurface(followPanel);
       const followFlat = await readModes(followPanel);
       await popup.selectOption('#preset-select', 'Harness Preset');
       await sleep(400);
+      await showSurface(followPanel);
       const followBack = await readModes(followPanel);
       const followCache = await followPanel.evaluate(() => new Promise((r) => {
         chrome.storage.local.get(['presets', 'currentPreset'], (d) => r({
@@ -1070,11 +1082,34 @@ try {
           saved: d.presets?.['Harness Preset']?.dynamics || null
         }));
       }));
+      const harnessBefore = await followPanel.evaluate(() => new Promise((r) => {
+        chrome.storage.local.get('presets', (d) => r(d.presets?.['Harness Preset'] || null));
+      }));
+      await followPanel.click('.eq-nudge-btn[data-target="slider-bass"][data-action="up"]');
+      await sleep(200);
+      await popup.selectOption('#preset-select', 'Flat (Bypass)');
+      await sleep(400);
+      await followPanel.click('#btn-update-preset');
+      await sleep(500);
+      const followRefused = await readModes(followPanel);
+      const staleHint = await followPanel.evaluate(() => document.getElementById('hint').textContent);
+      const harnessAfter = await followPanel.evaluate(() => new Promise((r) => {
+        chrome.storage.local.get(['presets', 'currentPreset'], (d) => r({
+          preset: d.currentPreset,
+          saved: d.presets?.['Harness Preset'] || null
+        }));
+      }));
       await followPanel.close();
-      const followOk = sameDyn(followUpdated, SLOW) && followUpdated.label === 'EQ + switches' && followUpdated.preset === 'Harness Preset'
+      const followOk = followBeforeFocus.preset === 'Harness Preset' && sameDyn(followBeforeFocus, WANTED)
+        && sameDyn(followUpdated, SLOW) && followUpdated.label === 'EQ + switches' && followUpdated.preset === 'Harness Preset'
+        && followStillHarness.preset === 'Harness Preset'
         && followFlat.preset === 'Flat (Bypass)' && followFlat.label === 'EQ only' && sameDyn(followFlat, SLOW)
         && followBack.preset === 'Harness Preset' && followBack.label === 'EQ + switches' && sameDyn(followBack, SLOW)
-        && followCache.preset === 'Harness Preset' && sameDyn(followCache.saved, SLOW);
+        && followCache.preset === 'Harness Preset' && sameDyn(followCache.saved, SLOW)
+        && JSON.stringify(harnessBefore) === JSON.stringify(harnessAfter.saved)
+        && harnessAfter.preset === 'Flat (Bypass)'
+        && followRefused.preset === 'Flat (Bypass)'
+        && staleHint === 'Another window changed your presets, so this one has been refreshed. Please try again.';
       switchOk = sameDyn(savedPreset?.dynamics, WANTED)
         && sameDyn(hydrated, OTHER) && hydrated.label === 'EQ + switches'
         && onFactory.label === 'EQ only' && /Save a copy/.test(onFactory.labelTitle) && sameDyn(dynWhileFactory, OTHER)
@@ -1090,7 +1125,7 @@ try {
         && fitPopup.labelInside && fitPopup.resetInside && fitPopup.rowH === 20 && fitPopup.updateShown
         && fitPanel.labelInside && fitPanel.resetInside && fitPanel.pageOverflow <= 0
         && surfacesAgree && curveMatches && followOk;
-      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, curve, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin, followUpdated, followFlat, followBack, followCache };
+      switchDetail = { savedPreset, hydrated, onFactory, dynWhileFactory, back, storedBack, curve, engineEff: engineBack?.eff, afterReset, storedReset, engineReset: engineReset?.eff, onLegacy, storedLegacy, onFactoryLabel, storedFactory, fitPopup, fitPanel, agreePanel, agreeWin, followBeforeFocus, followUpdated, followStillHarness, followFlat, followBack, followCache, followRefused, staleHint, harnessBefore, harnessAfter };
     } finally {
       await popup.evaluate((snap) => new Promise((resolve) => {
         chrome.storage.local.set(snap.local, () => {
@@ -1101,7 +1136,7 @@ try {
       if (switchSnap.local.dynamics) await sendFrom(popup, { type: 'SET_DYNAMICS', dynamics: switchSnap.local.dynamics });
       if (switchSnap.local.currentParams) await sendFrom(popup, { type: 'UPDATE_AUDIO_PARAMS', params: switchSnap.local.currentParams, presetName: switchSnap.local.currentPreset });
     }
-    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a popup and a side panel open together follow a pick and an update; the header stays on one row',
+    record('W-PRESET-SWITCHES', 'A custom preset stores Bass only / MATCH on / Look-ahead / Warm and brings them back on pick and Reset; a legacy preset and a factory preset leave the switches alone; the label matches; popup, side panel and window agree; the response curve matches the picked preset; a side panel left open refreshes on focus and a stale Update is refused; the header stays on one row',
       switchOk ? 'PASS' : 'FAIL', switchDetail, 'installed-browser');
 
     // ---- W-CAPTURE-STOP ----
@@ -1623,7 +1658,12 @@ try {
 
     // 2. Save a custom preset "Movie Pitch +4" with semitones: 4.0 while in normal playback mode
     const pitchPresetParams = { bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 4, autoBalance: false, bypass: false, stageBypass: { hpf: false, bass: false, mid: false, high: false, pitch: false, gain: false } };
-    await sendFrom(popupMovie, { type: 'SAVE_PRESET', name: 'Movie Pitch +4', params: pitchPresetParams });
+    const pitchView = await sendFrom(popupMovie, { type: 'GET_STATE' });
+    await sendFrom(popupMovie, {
+      type: 'SAVE_PRESET', name: 'Movie Pitch +4', params: pitchPresetParams,
+      expectedRev: Number.isInteger(pitchView.presetRev) ? pitchView.presetRev : 0,
+      expectedPreset: pitchView.currentPreset || 'Punchy Bass & Clarity'
+    });
     await sendFrom(popupMovie, { type: 'SET_ACTIVE_PRESET', presetName: 'Movie Pitch +4' });
     await sendFrom(popupMovie, { type: 'UPDATE_AUDIO_PARAMS', params: pitchPresetParams });
     await sleep(400);
@@ -1739,7 +1779,12 @@ try {
     })`)).value;
 
     // Clean up custom preset and restore Flat (Bypass) + stop capture
-    await sendFrom(popupMovie, { type: 'DELETE_PRESET', name: 'Movie Pitch +4' });
+    const deleteView = await sendFrom(popupMovie, { type: 'GET_STATE' });
+    await sendFrom(popupMovie, {
+      type: 'DELETE_PRESET', name: 'Movie Pitch +4',
+      expectedRev: Number.isInteger(deleteView.presetRev) ? deleteView.presetRev : 0,
+      expectedPreset: deleteView.currentPreset || 'Punchy Bass & Clarity'
+    });
     await sendFrom(popupMovie, { type: 'SET_ACTIVE_PRESET', presetName: 'Flat (Bypass)' });
     await sendFrom(popupMovie, { type: 'UPDATE_AUDIO_PARAMS', params: { bass: 0, hpf: 20, mid: 0, high: 0, gain: 1, semitones: 0, autoBalance: false, bypass: true, stageBypass: { hpf: false, bass: false, mid: false, high: false, pitch: false, gain: false } } });
     await sleep(250);

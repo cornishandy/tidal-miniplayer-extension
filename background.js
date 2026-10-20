@@ -308,6 +308,17 @@ function presetSavedDynamics(preset) {
   return normaliseDynamics(d);
 }
 
+// `presetRev` counts writes that change the preset list or which preset is current.
+// Slider and switch edits do not count: a screen compares this number, and the name it
+// is showing, before Save, Update, Delete or Reset, and the worker writes nothing if either moved.
+function storedPresetRev(value) {
+  return Number.isInteger(value) && value >= 0 ? value : 0;
+}
+
+function storedPresetName(value) {
+  return typeof value === 'string' && value ? value : 'Punchy Bass & Clarity';
+}
+
 function askOffscreen(message) {
   return new Promise((resolve) => {
     chrome.runtime.sendMessage(message, (res) => {
@@ -335,7 +346,9 @@ async function tellOffscreen(params, dynamics) {
 // One local set. `dynamics` is omitted entirely for a preset that has none, so the switches stay as they are.
 // The comparison for Modified is the preset's own saved switches, so nothing is written to session storage.
 async function writeSelection({ presetName, params, dynamics, extra }) {
-  const payload = { ...(extra || {}), currentPreset: presetName };
+  const prev = await chrome.storage.local.get('presetRev');
+  const presetRev = storedPresetRev(prev.presetRev) + 1;
+  const payload = { ...(extra || {}), currentPreset: presetName, presetRev };
   if (params && typeof params === 'object') payload.currentParams = paramsWithoutDynamics(params);
   else if (params !== undefined) payload.currentParams = params;
   if (dynamics) payload.dynamics = normaliseDynamics(dynamics);
@@ -350,14 +363,15 @@ async function writeSelection({ presetName, params, dynamics, extra }) {
     dynamics: payload.dynamics,
     switchBaseline: payload.dynamics || null,
     applied: !!(offscreen && offscreen.ok),
-    offscreen
+    offscreen,
+    presetRev
   };
 }
 
 async function readPresetSnapshot() {
-  const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'dynamics']);
+  const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'dynamics', 'presetRev']);
   const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
-  const currentPreset = stored.currentPreset || 'Punchy Bass & Clarity';
+  const currentPreset = storedPresetName(stored.currentPreset);
   const currentParams = stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS['Punchy Bass & Clarity'];
   return {
     success: true,
@@ -366,8 +380,20 @@ async function readPresetSnapshot() {
     currentPreset,
     currentParams: paramsWithoutDynamics(currentParams),
     dynamics: normaliseDynamics(stored.dynamics),
+    presetRev: storedPresetRev(stored.presetRev),
     factoryPresets: FACTORY_PRESET_NAMES
   };
+}
+
+// Inside the preset queue, before any write. A miss writes nothing and returns the snapshot
+// the screen should paint instead.
+async function refuseStalePresetView(message) {
+  const stored = await chrome.storage.local.get(['presetRev', 'currentPreset']);
+  const rev = storedPresetRev(stored.presetRev);
+  const name = storedPresetName(stored.currentPreset);
+  if (rev === message.expectedRev && name === message.expectedPreset) return null;
+  const state = await readPresetSnapshot();
+  return { success: false, saved: false, error: 'stale-view', presetRev: state.presetRev, state };
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
@@ -1045,7 +1071,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             const data = await chrome.storage.local.get('presets');
             const presets = { ...DEFAULT_PRESETS, ...(data.presets || {}) };
             const preset = presets[message.presetName];
-            if (!preset) return { success: false, saved: false, error: 'missing-preset' };
+            if (!preset) {
+              const state = await readPresetSnapshot();
+              return { success: false, saved: false, error: 'missing-preset', presetRev: state.presetRev };
+            }
             return writeSelection({
               presetName: message.presetName,
               params: preset,
@@ -1078,9 +1107,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'GET_STATE': {
           await ensureMovieState();
-          const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'stayOpen', 'dynamics']);
+          const stored = await chrome.storage.local.get(['presets', 'currentParams', 'currentPreset', 'stayOpen', 'dynamics', 'presetRev']);
           const presets = { ...DEFAULT_PRESETS, ...(stored.presets || {}) };
-          const currentPreset = stored.currentPreset || "Punchy Bass & Clarity";
+          const currentPreset = storedPresetName(stored.currentPreset);
           const status = await getActualCaptureStatus();
           await clearEndedCaptureMovieState(status);
           let tabTitle = null;
@@ -1097,6 +1126,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             currentParams: stored.currentParams || presets[currentPreset] || DEFAULT_PRESETS["Punchy Bass & Clarity"],
             stayOpen: !!stored.stayOpen,
             dynamics: normaliseDynamics(stored.dynamics),
+            presetRev: storedPresetRev(stored.presetRev),
             ...moviePayload()
           });
           break;
@@ -1126,18 +1156,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
             break;
           }
           const result = await enqueuePresetWrite(async () => {
-            const data = await chrome.storage.local.get(['presets', 'dynamics']);
+            const stale = await refuseStalePresetView(message);
+            if (stale) return stale;
+            const data = await chrome.storage.local.get(['presets', 'dynamics', 'presetRev']);
             const p = { ...DEFAULT_PRESETS, ...(data.presets || {}) };
             const clean = paramsWithoutDynamics(params);
             const dyn = message.dynamics === undefined ? normaliseDynamics(data.dynamics) : normaliseDynamics(message.dynamics);
             p[name] = { ...clean, dynamics: dyn };
-            // Preset, the EQ in force and the switches in force, in one set. The top-level dynamics key stays the sound.
+            const presetRev = storedPresetRev(data.presetRev) + 1;
+            // Preset, the EQ in force, the switches in force and the new revision, in one set.
             // The map was just read inside the queue, so this cannot drop a preset another screen saved earlier.
             // The EQ and switches stored are the ones in this message: the screen that has the controls.
-            await chrome.storage.local.set({ presets: p, currentPreset: name, currentParams: clean, dynamics: dyn });
+            await chrome.storage.local.set({ presets: p, currentPreset: name, currentParams: clean, dynamics: dyn, presetRev });
             const open = await isOffscreenOpen();
             const offscreen = open ? await tellOffscreen(clean, dyn) : null;
-            return { success: true, saved: true, presets: p, savedName: name, dynamics: dyn, applied: !!(offscreen && offscreen.ok), offscreen };
+            return { success: true, saved: true, presets: p, savedName: name, dynamics: dyn, applied: !!(offscreen && offscreen.ok), offscreen, presetRev };
           });
           sendResponse(result);
           break;
@@ -1145,12 +1178,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'DELETE_PRESET': {
           const result = await enqueuePresetWrite(async () => {
+            const stale = await refuseStalePresetView(message);
+            if (stale) return stale;
             const { name } = message;
-            const data = await chrome.storage.local.get('presets');
+            const data = await chrome.storage.local.get(['presets', 'presetRev']);
             const p = { ...DEFAULT_PRESETS, ...(data.presets || {}) };
             delete p[name];
-            await chrome.storage.local.set({ presets: p });
-            return { success: true, presets: p };
+            const presetRev = storedPresetRev(data.presetRev) + 1;
+            await chrome.storage.local.set({ presets: p, presetRev });
+            return { success: true, presets: p, presetRev };
           });
           sendResponse(result);
           break;
@@ -1158,6 +1194,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
         case 'RESET_DEFAULT_PRESETS': {
           const result = await enqueuePresetWrite(async () => {
+            const stale = await refuseStalePresetView(message);
+            if (stale) return stale;
             const presetToReset = message.currentPreset;
             const data = await chrome.storage.local.get('presets');
             const p = { ...DEFAULT_PRESETS, ...(data.presets || {}) };
@@ -1180,7 +1218,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                 dynamics: applied.dynamics,
                 switchBaseline: applied.switchBaseline,
                 applied: applied.applied,
-                offscreen: applied.offscreen
+                offscreen: applied.offscreen,
+                presetRev: applied.presetRev
               };
             }
 
@@ -1211,7 +1250,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
               dynamicsApplied: false,
               switchBaseline: applied.switchBaseline,
               applied: applied.applied,
-              offscreen: applied.offscreen
+              offscreen: applied.offscreen,
+              presetRev: applied.presetRev
             };
           });
           sendResponse(result);
