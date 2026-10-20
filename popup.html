@@ -62,10 +62,11 @@
             <div class="section-title-group">
               <label for="preset-select" class="section-title">PRESETS</label>
               <span id="preset-status-badge" class="preset-badge-saved">● Saved</span>
+              <span id="preset-switch-label" class="preset-switch-label" title="Default presets set the EQ only. Save a copy to keep switches with it.">EQ only</span>
             </div>
             <div class="preset-actions">
-              <button id="btn-update-preset" class="btn-text" title="Save the current values into this custom preset" style="display:none;">Update</button>
-              <button id="btn-save-preset" class="btn-text" title="Save the current values as a new preset">+ Save</button>
+              <button id="btn-update-preset" class="btn-text" title="Save the current EQ and switches into this preset" style="display:none;">Update</button>
+              <button id="btn-save-preset" class="btn-text" title="Save the current EQ and switches as a new preset">+ Save</button>
               <button id="btn-delete-preset" class="btn-text btn-danger" title="Delete this custom preset" style="display:none;">✕</button>
               <button id="btn-reset-defaults" class="btn-text" title="Restore this preset's saved values (factory values for a default preset)">↺ Reset</button>
             </div>
@@ -75,9 +76,9 @@
 
         <!-- Physics: the live spectrum of the processed audio (grey = in, colour = out) and the settings' response curve -->
         <div class="physics">
-          <div class="phys-hdr"><span>PHYSICS</span><em id="physics-readout" title="Top: live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear). Bottom: the response your settings make."></em></div>
+          <div class="phys-hdr"><span>PHYSICS</span><em id="physics-readout" title="Top: live spectrum of the audio while the EQ is on (grey = what the tab sends, colour = what you hear). Bottom: an approximate drawing of the response your settings make (±24 dB; very large settings run off the top)."></em></div>
           <canvas id="live-canvas" class="phys-canvas live" role="img" aria-label="Live spectrum of the audio: grey is what the tab sends, colour is what you hear"></canvas>
-          <canvas id="bode-canvas" class="phys-canvas bode" role="img" aria-label="Frequency response of the current settings"></canvas>
+          <canvas id="bode-canvas" class="phys-canvas bode" role="img" aria-label="Approximate frequency response of the current settings; very large settings run off the scale"></canvas>
         </div>
 
         <!-- The stages, top to bottom in the order the audio passes through them (your request of 2026-10-04).
@@ -104,43 +105,43 @@
 
           <div class="eq-row" data-band="bass">
             <button class="band-tag" aria-pressed="true" data-band="bass" title="Bass on. Click to switch it off without losing the value.">LOW</button>
-            <div class="eq-label" title="Low-shelf filter at 120 Hz: warm low-end weight, +0 to +14 dB.">Bass Boost</div>
+            <div class="eq-label" title="Low-shelf filter at 120 Hz: warm low-end weight, +0 to +28 dB. Large boosts can make the leveler and limiter work hard: pumping, flattened kicks or fizz; if you hear that, lower the boost first.">Bass Boost</div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-bass" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
-            <input type="range" id="slider-bass" class="eq-slider" aria-label="Bass Boost, dB" min="0" max="14" step="0.5" value="5.0">
+            <input type="range" id="slider-bass" class="eq-slider" aria-label="Bass Boost, dB" min="0" max="28" step="0.5" value="5.0">
             <button class="eq-nudge-btn" data-action="up" data-target="slider-bass" data-step="0.5" title="+0.5 dB (Shift: +0.1)">+</button>
             <span class="eq-val" id="val-bass" title="Double-click: neutral / restore">+5.0 dB</span>
           </div>
 
           <div class="eq-row" data-band="mid">
             <button class="band-tag" aria-pressed="true" data-band="mid" title="Mid on. Click to switch it off without losing the value.">MID</button>
-            <div class="eq-label" title="Peaking filter at 1 kHz (Q 0.8): vocal presence and body, −6 to +6 dB.">Mid <small>vocals / body</small></div>
+            <div class="eq-label" title="Peaking filter at 1 kHz (Q 0.8): vocal presence and body, −12 to +12 dB. Large boosts can make the leveler and limiter work hard.">Mid <small>vocals / body</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-mid" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
-            <input type="range" id="slider-mid" class="eq-slider" aria-label="Mid, dB" min="-6" max="6" step="0.5" value="1.5">
+            <input type="range" id="slider-mid" class="eq-slider" aria-label="Mid, dB" min="-12" max="12" step="0.5" value="1.5">
             <button class="eq-nudge-btn" data-action="up" data-target="slider-mid" data-step="0.5" title="+0.5 dB (Shift: +0.1)">+</button>
             <span class="eq-val" id="val-mid" title="Double-click: neutral / restore">+1.5 dB</span>
           </div>
 
           <div class="eq-row" data-band="high">
             <button class="band-tag" aria-pressed="true" data-band="high" title="High on. Click to switch it off without losing the value.">HI</button>
-            <div class="eq-label" title="High-shelf filter at 5 kHz: air and sparkle, −6 to +6 dB.">High <small>sparkle</small></div>
+            <div class="eq-label" title="High-shelf filter at 5 kHz: air and sparkle, −12 to +12 dB. Large boosts can make the leveler and limiter work hard, and add fizz.">High <small>sparkle</small></div>
             <button class="eq-nudge-btn" data-action="down" data-target="slider-high" data-step="0.5" title="−0.5 dB (Shift: −0.1)">−</button>
-            <input type="range" id="slider-high" class="eq-slider" aria-label="High, dB" min="-6" max="6" step="0.5" value="2.0">
+            <input type="range" id="slider-high" class="eq-slider" aria-label="High, dB" min="-12" max="12" step="0.5" value="2.0">
             <button class="eq-nudge-btn" data-action="up" data-target="slider-high" data-step="0.5" title="+0.5 dB (Shift: +0.1)">+</button>
             <span class="eq-val" id="val-high" title="Double-click: neutral / restore">+2.0 dB</span>
           </div>
 
           <div class="eq-row dyn-row" data-band="comp">
             <button class="band-tag" aria-pressed="true" data-band="comp" title="Auto-Balancing on. Click to switch it off.">AUTO</button>
-            <div class="eq-label dyn-label" title="Auto-Balancing (AUTO): a leveler that turns the music down when the boosted signal gets loud, so heavy presets stay listenable. Full band: the original, the whole mix is levelled (and lifted a little by Chrome's compressor). Slow release: the same, but it lets go three times more slowly, so it breathes less between kicks. Bass only: only what is below 150 Hz is levelled; voice and hi-hats are never touched. The bar shows how much it is turning down right now."><span>Leveler</span><select id="mode-leveler" class="mode-select" aria-label="Leveler mode"><option value="full">Full band</option><option value="slow">Slow release</option><option value="bass">Bass only</option></select></div>
+            <div class="eq-label dyn-label" title="Auto-Balancing (AUTO): a leveler that turns the music down when the boosted signal gets loud, so heavy presets stay listenable. Full band: the original, the whole mix is levelled (and lifted a little by Chrome's compressor). Slow release: the same, but it lets go three times more slowly, so it breathes less between kicks. Bass only: only what is below 150 Hz is levelled, so bass hits pull voices and hi-hats down much less (the limiter can still turn the whole mix down); it also turns the boosted bass down. The bar shows how much it is turning down right now."><span>Leveler</span><select id="mode-leveler" class="mode-select" aria-label="Leveler mode"><option value="full">Full band</option><option value="slow">Slow release</option><option value="bass">Bass only</option></select></div>
             <div class="gr-meter" id="meter-comp" role="meter" aria-label="Leveler, how much it is turning down" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><i></i></div>
-            <span class="eq-val dyn-val idle" id="val-comp" title="How much the leveler is turning the music down right now (0 to 12 dB)">idle</span>
+            <span class="eq-val dyn-val idle" id="val-comp" title="How much the leveler is turning the music down right now. The bar is full at 12 dB; the figure keeps counting above that.">idle</span>
           </div>
 
           <div class="eq-row dyn-row" data-band="match">
             <button class="band-tag" aria-pressed="false" data-band="match" title="Loudness match is off (more bass means more loudness). Click to switch it on.">MATCH</button>
             <div class="eq-label dyn-label" title="Loudness match. Off: more bass means more loudness, until you turn Master down by hand. On: the volume is trimmed automatically so the music stays as loud as the untouched tab (measured the way streaming services measure loudness, over a few seconds), so you hear tone, not loudness; Master Volume still adds on top. The bar shows the trim."><span>Loudness match</span><small>auto gain</small></div>
             <div class="gr-meter" id="meter-match" role="meter" aria-label="Loudness match, trim applied" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><i></i></div>
-            <span class="eq-val dyn-val idle" id="val-match" title="The trim the loudness match is applying right now">idle</span>
+            <span class="eq-val dyn-val idle" id="val-match" title="The trim the loudness match is applying right now. The bar is full at 12 dB; the figure keeps counting above that.">idle</span>
           </div>
 
           <div class="eq-row" data-band="gain">
@@ -156,14 +157,14 @@
             <span class="band-tag static" title="Safety limiter: always on, it cannot be switched off.">LIM</span>
             <div class="eq-label dyn-label" title="Safety limiter, always on: catches peaks above −0.3 dB. Fast: the original, reacts within 1 ms, so the very fastest peaks slip past to the ceiling. Look-ahead: sees peaks 5 ms early and turns down smoothly before they arrive, so the ceiling has nothing to do; adds 5 ms of delay while selected. The bar shows how much it is turning down."><span>Limiter</span><select id="mode-limiter" class="mode-select" aria-label="Limiter mode"><option value="fast">Fast</option><option value="lookahead">Look-ahead</option></select></div>
             <div class="gr-meter" id="meter-limiter" role="meter" aria-label="Limiter, how much it is turning down" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><i></i></div>
-            <span class="eq-val dyn-val idle" id="val-limiter" title="How much the limiter is turning the peaks down right now">idle</span>
+            <span class="eq-val dyn-val idle" id="val-limiter" title="How much the limiter is turning the peaks down right now. The bar is full at 12 dB; the figure keeps counting above that.">idle</span>
           </div>
 
           <div class="eq-row dyn-row" data-band="ceiling">
             <span class="band-tag static" title="Output ceiling: always on, it cannot be switched off.">CEIL</span>
-            <div class="eq-label dyn-label" title="The last stage, always on: nothing above −0.3 dB can get through. Clean: the original, does nothing below −0.6 dB and bends only the last fraction of a decibel. Warm: rounds the loudest peaks gradually from about −10 dB up, the way tape does, adding a little harmonic colour; a deliberate, gentle distortion. The bar shows how far the loudest peaks are being bent."><span>Ceiling</span><select id="mode-ceiling" class="mode-select" aria-label="Ceiling mode"><option value="clean">Clean</option><option value="warm">Warm</option></select></div>
+            <div class="eq-label dyn-label" title="The last stage, always on: no sample above −0.3 dB gets through (the smoothed waveform between samples can still peak slightly higher). Clean: the original, does nothing below −0.6 dB and bends only the last fraction of a decibel. Warm: rounds the loudest peaks gradually from about −10 dB up, the way tape does, adding a little harmonic colour; a deliberate, gentle distortion. The bar shows how far the loudest peaks are being bent."><span>Ceiling</span><select id="mode-ceiling" class="mode-select" aria-label="Ceiling mode"><option value="clean">Clean</option><option value="warm">Warm</option></select></div>
             <div class="gr-meter" id="meter-ceiling" role="meter" aria-label="Ceiling, how far the loudest peaks are bent" aria-valuemin="0" aria-valuemax="12" aria-valuenow="0"><i></i></div>
-            <span class="eq-val dyn-val idle" id="val-ceiling" title="How far the ceiling is bending the loudest peaks right now">idle</span>
+            <span class="eq-val dyn-val idle" id="val-ceiling" title="How far the ceiling is bending the loudest peaks right now. The bar is full at 12 dB; the figure keeps counting above that.">idle</span>
           </div>
         </main>
       </section>

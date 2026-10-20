@@ -180,3 +180,24 @@ test('the Movie Sound link (1.5.7) runs only on the Movie Sound page, in the iso
   assert.doesNotMatch(src, /tabCapture|getUserMedia|AudioContext|runtime\.sendMessage|isAudioCapturing'/, 'never touches capture, audio or the background');
   assert.doesNotMatch(src, /postMessage\([^)]*['"]\*['"]/, 'never posts to any origin');
 });
+
+test('EQ ranges (1.5.8, E-02): Bass 0..28 and Mid/High -12..12 in 0.5 dB steps, the same as Movie Sound accepts', () => {
+  const popup = readFileSync(join(root, 'popup.html'), 'utf8');
+  const range = (id) => {
+    const tag = popup.match(new RegExp(`<input[^>]*id="${id}"[^>]*>`))[0];
+    return ['min', 'max', 'step'].map((a) => Number(tag.match(new RegExp(` ${a}="([^"]+)"`))[1]));
+  };
+  assert.deepEqual(range('slider-bass'), [0, 28, 0.5]);
+  assert.deepEqual(range('slider-mid'), [-12, 12, 0.5]);
+  assert.deepEqual(range('slider-high'), [-12, 12, 0.5]);
+  assert.deepEqual(range('slider-hpf'), [20, 200, 5], 'HPF unchanged');
+  assert.deepEqual(range('slider-gain').slice(0, 2), [0.5, 2.5], 'Master unchanged');
+  assert.doesNotMatch(popup, /never touched/, 'no promise that the leveler leaves voices untouched');
+  // Movie Sound refuses values outside its own copy of these ranges, so both must move together.
+  const bridge = join(root, '..', 'movie-sound', 'bridge', 'bridge.js');
+  if (existsSync(bridge)) {
+    const m = readFileSync(bridge, 'utf8').match(/CHROME_PARAM_RANGES = \{ bass: \[0, (\d+)\], hpf: \[20, 200\], mid: \[(-?\d+), (\d+)\], high: \[(-?\d+), (\d+)\]/);
+    assert.ok(m, 'CHROME_PARAM_RANGES not found in movie-sound/bridge/bridge.js');
+    assert.deepEqual(m.slice(1).map(Number), [28, -12, 12, -12, 12], 'Movie Sound accepts a different range');
+  }
+});

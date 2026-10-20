@@ -13,9 +13,24 @@ let currentMovieOverride = null;
 let currentMovieModeOverride = null;
 let movieAlertText = '';
 let movieAlertTimer = null;
-// Dynamics modes (1.5.0, D-01): engine settings, not preset fields. The defaults are the 1.4.0 chain.
+// Dynamics modes (1.5.0, D-01). From 1.5.8 (R-28) Save and Update may store a copy on the preset.
+// The top-level `dynamics` value is still the sound in force. The defaults are the 1.4.0 chain.
 const DYN_DEFAULT = { leveler: 'full', match: false, limiter: 'fast', ceiling: 'clean' };
 let dynamics = { ...DYN_DEFAULT };
+let switchBaseline = null; // saved switches on the selected preset, or null when that preset has none
+let presetUiGen = 0; // a newer select, save, update, delete or reset ignores a stale reply
+let surfaceEditSeq = 0; // slider and switch edits since this screen opened
+// R-28: the worker accepts a write from the screen that wrote last, or from a screen whose controls show the
+// latest revision. This screen's id, one per page load, and the revision its controls show. `viewRev` moves
+// only with this screen's own accepted writes and the reads it paints, never with another screen's event.
+const surfaceId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+  ? crypto.randomUUID()
+  : `s${Math.random().toString(36).slice(2)}${Math.random().toString(36).slice(2)}`;
+let viewRev = 0;
+let presetOpsInFlight = 0;
+let authoritativePresetPaint = false;
+let presetCacheRev = -1;
+let presetViewWatching = false;
 let dynUnavailableTold = false;
 const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
@@ -48,6 +63,7 @@ const btnMovieMode = document.getElementById('btn-movie-mode');
 const movieStatusLine = document.getElementById('movie-status-line');
 const presetSelect = document.getElementById('preset-select');
 const presetStatusBadge = document.getElementById('preset-status-badge');
+const presetSwitchLabel = document.getElementById('preset-switch-label');
 const btnUpdatePreset = document.getElementById('btn-update-preset');
 const btnSavePreset = document.getElementById('btn-save-preset');
 const btnDeletePreset = document.getElementById('btn-delete-preset');
@@ -116,8 +132,10 @@ function stopFrames() {
 }
 
 // ---------- Dynamics meters ----------
-// Each bar is how much that stage is turning the music down right now, 0 to 12 dB (the match bar: the size of its
-// trim, signed in the figure). Values fall at about 20 dB/s on screen so short limiter hits stay visible.
+// Each bar is how much that stage is turning the music down right now, full at 12 dB (the match bar: the size of its
+// trim, signed in the figure). The figure is the true reading and keeps counting past 12 dB; so does the screen-reader
+// text, while aria-valuenow stays inside the declared 0 to 12 (1.5.8). Values fall at about 20 dB/s on screen so short
+// limiter hits stay visible.
 const METER_MAX_DB = 12;
 const METER_FALL_PER_FRAME = 1.4;
 function updateMeters(dyn) {
@@ -128,6 +146,7 @@ function updateMeters(dyn) {
       m.bar.firstElementChild.style.width = '0%';
       m.bar.classList.remove('warn', 'heavy');
       m.bar.setAttribute('aria-valuenow', '0');
+      m.bar.removeAttribute('aria-valuetext');
       m.val.textContent = 'idle';
       m.val.classList.add('idle');
       continue;
@@ -139,9 +158,10 @@ function updateMeters(dyn) {
     m.bar.firstElementChild.style.width = `${pct.toFixed(1)}%`;
     m.bar.classList.toggle('warn', m.shown >= 3 && m.shown < 8);
     m.bar.classList.toggle('heavy', m.shown >= 8);
-    m.bar.setAttribute('aria-valuenow', m.shown.toFixed(1));
+    m.bar.setAttribute('aria-valuenow', Math.min(METER_MAX_DB, m.shown).toFixed(1));
     const signed = key === 'match' ? raw : -size;
     m.val.textContent = `${signed > 0.05 ? '+' : signed < -0.05 ? '−' : ''}${Math.abs(signed).toFixed(1)} dB`;
+    m.bar.setAttribute('aria-valuetext', m.val.textContent);
     m.val.classList.remove('idle');
   }
   if (dyn && dyn.available === false && !dynUnavailableTold) {
@@ -167,15 +187,28 @@ function applyDynamicsToUI() {
   renderBandTags();
 }
 
-function sendDynamicsUpdate() {
-  dynamics = normaliseDyn(dynamics);
-  chrome.runtime.sendMessage({ type: 'SET_DYNAMICS', dynamics });
-  applyDynamicsToUI();
+function noteSurfaceEdit() {
+  surfaceEditSeq += 1;
+  return surfaceEditSeq;
 }
 
-if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate(); };
-if (modeLimiter) modeLimiter.onchange = () => { dynamics.limiter = modeLimiter.value; sendDynamicsUpdate(); };
-if (modeCeiling) modeCeiling.onchange = () => { dynamics.ceiling = modeCeiling.value; sendDynamicsUpdate(); };
+function sendDynamicsUpdate(delta) {
+  const editAtSend = noteSurfaceEdit();
+  const gen = presetUiGen;
+  dynamics = normaliseDyn(dynamics);
+  chrome.runtime.sendMessage({ type: 'EDIT_DYNAMICS', dynamics: delta, ...viewTag() }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (handleRefusal(res, gen, editAtSend)) return;
+    noteAccepted(res);
+    if (mayPaint(res, gen, editAtSend)) paintPresetSnapshot(res);
+  });
+  applyDynamicsToUI();
+  checkPresetModificationState();
+}
+
+if (modeLeveler) modeLeveler.onchange = () => { dynamics.leveler = modeLeveler.value; sendDynamicsUpdate({ leveler: dynamics.leveler }); };
+if (modeLimiter) modeLimiter.onchange = () => { dynamics.limiter = modeLimiter.value; sendDynamicsUpdate({ limiter: dynamics.limiter }); };
+if (modeCeiling) modeCeiling.onchange = () => { dynamics.ceiling = modeCeiling.value; sendDynamicsUpdate({ ceiling: dynamics.ceiling }); };
 window.addEventListener('unload', stopFrames);
 let resizeTimer = null;
 window.addEventListener('resize', () => {
@@ -238,26 +271,45 @@ chrome.runtime.sendMessage({ type: 'GET_STATE' }, (response) => {
   if (chrome.runtime.lastError || !response) return;
 
   isCapturingActive = !!response.isCapturing;
-  presets = response.presets || {};
   factoryPresetNames = response.factoryPresets || [];
-  currentPresetName = response.currentPreset || "Punchy Bass & Clarity";
-  currentParams = normaliseBypass({ ...(response.currentParams || presets[currentPresetName] || {}) });
+  // A refusal reply can already have painted a newer state here; this older read must not replace it.
+  const openedRev = Number.isInteger(response.stateRev) ? response.stateRev : 0;
+  const opened = openedRev >= viewRev;
+  if (opened) {
+    viewRev = openedRev;
+    presets = response.presets || {};
+    presetCacheRev = openedRev;
+    authoritativePresetPaint = true;
+    currentPresetName = response.currentPreset || "Punchy Bass & Clarity";
+    currentParams = normaliseBypass(stripDynamics(response.currentParams || presets[currentPresetName] || {}));
+    // Hydrate only. A preset's saved switches are not applied again on open.
+    dynamics = normaliseDyn(response.dynamics);
+  }
   stayOpen = !!response.stayOpen;
   toggleStayOpen.checked = stayOpen;
-  dynamics = normaliseDyn(response.dynamics);
 
   updateEqPowerUI(isCapturingActive, response.capturedTabTitle);
   populatePresets(currentPresetName);
-  applyParamsToUI(currentParams);
-  applyDynamicsToUI();
+  if (opened) {
+    applyParamsToUI(currentParams);
+    applyDynamicsToUI();
+  }
   updateMovieModeUI(response, { checkSavedPitch: true });
 
-  activePresetBaseline = presets[currentPresetName] ? normaliseBypass({ ...presets[currentPresetName] }) : null;
+  if (opened) {
+    const selected = presets[currentPresetName];
+    activePresetBaseline = selected ? { ...normaliseBypass(stripDynamics(selected)) } : null;
+    // EQ-only presets (legacy custom and factory) compare EQ only, so opening one does not
+    // treat the switches already in force as a saved baseline.
+    switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
+  }
   checkPresetModificationState();
 
   physics.updateState(currentParams, isCapturingActive);
   if (isCapturingActive) startFrames();
   requestAnimationFrame(fitUndockedWindow);
+
+  watchPresetView();
 
   if (query.get('minibar') === '1') {
     btnMinibar.classList.add('pulse');
@@ -723,6 +775,41 @@ function populatePresets(selectedName) {
   updatePresetButtonsVisibility();
 }
 
+function presetHasSavedSwitches(preset) {
+  if (!preset || !Object.prototype.hasOwnProperty.call(preset, 'dynamics')) return false;
+  const d = preset.dynamics;
+  return !!d && typeof d === 'object' && !Array.isArray(d);
+}
+
+function isFactoryPresetNameUi(name) {
+  const folded = String(name || '').toLowerCase();
+  return factoryPresetNames.some((factory) => String(factory).toLowerCase() === folded);
+}
+
+function stripDynamics(preset) {
+  const copy = { ...(preset || {}) };
+  delete copy.dynamics;
+  return copy;
+}
+
+function sameSwitches(a, b) {
+  const x = normaliseDyn(a);
+  const y = normaliseDyn(b);
+  return x.leveler === y.leveler && x.match === y.match && x.limiter === y.limiter && x.ceiling === y.ceiling;
+}
+
+function bumpPresetUi() { return ++presetUiGen; }
+function presetUiCurrent(gen) { return gen === presetUiGen; }
+
+const SWITCH_LABELS = {
+  saved: ['EQ + switches', 'Picking this preset or pressing Reset also sets Leveler, MATCH, Limiter and Ceiling.'],
+  custom: ['EQ only', 'Picking this preset sets the EQ only; Leveler, MATCH, Limiter and Ceiling stay as they are. Press Update to save the current switches with it.'],
+  factory: ['EQ only', 'Default presets set the EQ only. Save a copy to keep switches with it.']
+};
+const RESET_TITLE_SWITCHES = "Restore this preset's saved EQ and switches";
+const RESET_TITLE_VALUES = "Restore this preset's saved values (factory values for a default preset)";
+const FACTORY_NAME_HINT = 'That name belongs to a default preset. Pick another name.';
+
 function updatePresetButtonsVisibility() {
   const isFactory = factoryPresetNames.includes(presetSelect.value);
   btnDeletePreset.style.display = isFactory ? 'none' : 'inline-block';
@@ -736,7 +823,7 @@ function checkPresetModificationState() {
   const bb = b.stageBypass || {};
   const cb = currentUI.stageBypass;
 
-  const isModified =
+  const eqModified =
     Math.abs(currentUI.bass - b.bass) > 0.01 ||
     Math.abs(currentUI.hpf - b.hpf) > 0.5 ||
     Math.abs(currentUI.mid - b.mid) > 0.01 ||
@@ -745,107 +832,269 @@ function checkPresetModificationState() {
     Math.abs((currentUI.semitones || 0) - (b.semitones || 0)) > 0.01 ||
     currentUI.autoBalance !== b.autoBalance ||
     ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch'].some((k) => !!cb[k] !== !!bb[k]);
-
   const isFactory = factoryPresetNames.includes(currentPresetName);
-  if (isModified) {
-    presetStatusBadge.className = 'preset-badge-modified';
-    presetStatusBadge.textContent = '● Modified';
-    btnUpdatePreset.style.display = isFactory ? 'none' : 'inline-block';
-  } else {
-    presetStatusBadge.className = 'preset-badge-saved';
-    presetStatusBadge.textContent = '● Saved';
-    btnUpdatePreset.style.display = 'none';
+  const hasSwitches = presetHasSavedSwitches(presets[currentPresetName]);
+  // A switch change marks Modified only when this preset stored its switches. EQ-only presets
+  // keep Update visible so the current switches can be saved with one click.
+  const switchesChanged = hasSwitches && !!switchBaseline && !sameSwitches(dynamics, switchBaseline);
+  const isModified = eqModified || switchesChanged;
+  presetStatusBadge.className = isModified ? 'preset-badge-modified' : 'preset-badge-saved';
+  presetStatusBadge.textContent = isModified ? '● Modified' : '● Saved';
+  btnUpdatePreset.style.display = (!isFactory && (isModified || !hasSwitches)) ? 'inline-block' : 'none';
+
+  const kind = isFactory ? 'factory' : (hasSwitches ? 'saved' : 'custom');
+  if (presetSwitchLabel) {
+    presetSwitchLabel.textContent = SWITCH_LABELS[kind][0];
+    presetSwitchLabel.title = SWITCH_LABELS[kind][1];
+  }
+  if (btnResetDefaults) {
+    btnResetDefaults.title = (!isFactory && hasSwitches) ? RESET_TITLE_SWITCHES : RESET_TITLE_VALUES;
   }
 }
 
+const STALE_VIEW_HINT = 'Another window changed your presets, so this one has been refreshed. Please try again.';
+
+// Every write of the preset state carries these.
+function viewTag() {
+  return { surfaceId, viewRev };
+}
+
+function replyRev(res) {
+  if (!res) return null;
+  if (Number.isInteger(res.stateRev)) return res.stateRev;
+  if (res.state && Number.isInteger(res.state.stateRev)) return res.state.stateRev;
+  return null;
+}
+
+// This screen's own write was accepted, so viewRev moves up to its revision (never back), even when the reply
+// does not repaint. Anything these controls show beyond it is this screen's own later edits: accepted ones, or
+// refused ones, and a refusal means the stored revision had already moved past this one.
+function noteAccepted(res) {
+  if (!res || res.success !== true) return;
+  refreshPresetCache(res);
+  const rev = replyRev(res);
+  if (rev == null || rev < viewRev) return;
+  viewRev = rev;
+}
+
+function refreshPresetCache(snap) {
+  const rev = replyRev(snap);
+  if (snap?.presets && rev != null && rev >= presetCacheRev) {
+    presets = snap.presets;
+    presetCacheRev = rev;
+  }
+}
+
+function mayPaint(res, gen, editAtSend) {
+  if (!res || res.success !== true) return false;
+  if (!presetUiCurrent(gen)) return false;
+  if (surfaceEditSeq !== editAtSend) return false;
+  const rev = replyRev(res);
+  return rev != null && rev >= viewRev;
+}
+
+function presetOpButtons() {
+  return [btnSavePreset, btnUpdatePreset, btnDeletePreset, btnResetDefaults];
+}
+
+function presetEditControls() {
+  return [...presetOpButtons(), presetSelect, sliderBass, sliderHpf, sliderMid, sliderHigh, sliderGain, sliderPitch,
+    modeLeveler, modeLimiter, modeCeiling, ...document.querySelectorAll('.eq-nudge-btn'),
+    ...document.querySelectorAll('button.band-tag')];
+}
+
+function lockPresetOps() {
+  presetOpsInFlight += 1;
+  authoritativePresetPaint = false;
+  for (const control of presetEditControls()) if (control) control.disabled = true;
+}
+
+function unlockPresetOps() {
+  presetOpsInFlight = Math.max(0, presetOpsInFlight - 1);
+  if (presetOpsInFlight === 0) {
+    for (const control of presetEditControls()) if (control) control.disabled = false;
+  }
+}
+
+// A closed message port normally calls back with lastError; a lost callback must not lock a screen forever.
+// Ignore a response delivered after its deadline, then reconcile through the same worker queue.
+const PRESET_REPLY_TIMEOUT_MS = 5000;
+function presetRequest(message, done) {
+  let settled = false;
+  const finish = (res) => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    done(res);
+  };
+  const timer = setTimeout(() => finish(null), PRESET_REPLY_TIMEOUT_MS);
+  try {
+    chrome.runtime.sendMessage(message, (res) => finish(chrome.runtime.lastError ? null : res));
+  } catch {
+    finish(null);
+  }
+}
+
+// The stored state, from the worker's queue. Never painted over a newer state these controls already show.
+function paintPresetSnapshot(snap) {
+  if (!snap) return;
+  refreshPresetCache(snap);
+  const rev = Number.isInteger(snap.stateRev) ? snap.stateRev : null;
+  if (rev == null || rev < viewRev) return;
+  viewRev = rev;
+  authoritativePresetPaint = true;
+  const name = snap.currentPreset || currentPresetName;
+  currentPresetName = name;
+  populatePresets(name);
+  const p = normaliseBypass(stripDynamics(snap.currentParams || presets[name] || {}));
+  currentParams = p;
+  applyParamsToUI(p);
+  currentParams = getParamsFromUI();
+  activePresetBaseline = normaliseBypass(stripDynamics(presets[name] || p));
+  if (snap.dynamics) {
+    dynamics = normaliseDyn(snap.dynamics);
+    applyDynamicsToUI();
+  }
+  const selected = presets[name];
+  switchBaseline = presetHasSavedSwitches(selected) ? normaliseDyn(selected.dynamics) : null;
+  checkPresetModificationState();
+  physics.updateState(currentParams, isCapturingActive);
+  return true;
+}
+
+// The worker refused this screen's write and wrote nothing. Paint the stored state it sent, with the hint,
+// unless this screen has made an edit or started a preset operation since that message: the newer one's own
+// reply settles the screen, so a drag converges and a late refusal never paints over a newer accepted edit.
+function handleRefusal(res, gen, editAtSend) {
+  if (!res || res.error !== 'stale-view') return false;
+  refreshPresetCache(res.state);
+  const rev = replyRev(res);
+  if (res.state && presetUiCurrent(gen) && surfaceEditSeq === editAtSend && rev != null && rev >= viewRev) {
+    paintPresetSnapshot(res.state);
+    showHint(STALE_VIEW_HINT);
+  }
+  return true;
+}
+
+// A newer local edit is already on screen. Read the queue, which runs after that edit, and paint the result.
+function hydrateFromAuthoritativeState(gen, done = () => {}) {
+  const seq = surfaceEditSeq;
+  presetRequest({ type: 'READ_PRESET_STATE' }, (res) => {
+    if (res?.success) refreshPresetCache(res);
+    if (!res?.success || !presetUiCurrent(gen)) { done(); return; }
+    if (surfaceEditSeq !== seq) {
+      hydrateFromAuthoritativeState(gen, done);
+      return;
+    }
+    paintPresetSnapshot(res);
+    done();
+  });
+}
+
+// On focus or visibility: repaint when the stored state is newer than these controls, unless this screen
+// made an edit or started a preset operation after the read was sent.
+function refreshPresetView() {
+  const gen = presetUiGen;
+  const editAtSend = surfaceEditSeq;
+  chrome.runtime.sendMessage({ type: 'READ_PRESET_STATE' }, (res) => {
+    if (!res?.success) return;
+    refreshPresetCache(res);
+    if (!presetUiCurrent(gen) || surfaceEditSeq !== editAtSend) return;
+    if (!Number.isInteger(res.stateRev) || res.stateRev <= viewRev) return;
+    paintPresetSnapshot(res);
+  });
+}
+
+function watchPresetView() {
+  if (presetViewWatching) return;
+  presetViewWatching = true;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') refreshPresetView();
+  });
+  window.addEventListener('focus', () => refreshPresetView());
+}
+
+function runPresetOperation(message, onPaint = () => {}, hydrateAfterEdit = true) {
+  const gen = bumpPresetUi();
+  const editAtSend = surfaceEditSeq;
+  lockPresetOps();
+  presetRequest({ ...message, ...viewTag() }, (res) => {
+    const refused = handleRefusal(res, gen, editAtSend);
+    noteAccepted(res);
+    if (res?.error === 'factory-name') showHint(FACTORY_NAME_HINT);
+    if (!res?.success || refused || (hydrateAfterEdit && presetUiCurrent(gen) && surfaceEditSeq !== editAtSend)) {
+      hydrateFromAuthoritativeState(gen, unlockPresetOps);
+      return;
+    }
+    if (mayPaint(res, gen, editAtSend) && paintPresetSnapshot(res)) onPaint();
+    unlockPresetOps();
+  });
+}
+
+function canSavePreset() {
+  if (presetOpsInFlight) return false;
+  if (authoritativePresetPaint) return true;
+  // A failed recovery read cannot authorise a Save from an unconfirmed display.
+  lockPresetOps();
+  hydrateFromAuthoritativeState(presetUiGen, unlockPresetOps);
+  return false;
+}
+
 presetSelect.onchange = () => {
-  currentPresetName = presetSelect.value;
-  updatePresetButtonsVisibility();
-  const sel = presets[currentPresetName];
-  if (sel) {
-    const p = normaliseBypass({ ...sel });
-    activePresetBaseline = { ...p };
-    applyParamsToUI(p);
-    sendAudioParamUpdate();
+  const name = presetSelect.value;
+  // Even the selector keeps the confirmed name until the worker returns its stored snapshot.
+  presetSelect.value = currentPresetName;
+  runPresetOperation({ type: 'APPLY_PRESET', presetName: name }, () => {
     const savedSt = parseFloat(sliderPitch.value) || 0;
     if (currentMovieMode && Math.abs(savedSt) >= 0.05 && !bandOff.pitch) {
       flashMovieAlert(`Pitch (${fmt.pitch(savedSt)}) disabled in Movie mode — saved value kept`);
     }
-  }
+  });
 };
 
 btnSavePreset.onclick = () => {
+  if (btnSavePreset.disabled || !canSavePreset()) return;
   const defaultName = factoryPresetNames.includes(currentPresetName)
     ? `${currentPresetName} (Custom)`
     : `${currentPresetName} (New)`;
   const name = prompt('Save current settings as new preset name:', defaultName);
-  if (name && name.trim()) {
-    const p = getParamsFromUI();
-    chrome.runtime.sendMessage({ type: 'SAVE_PRESET', name: name.trim(), params: p }, (res) => {
-      if (res?.success) {
-        presets = res.presets;
-        currentPresetName = res.savedName;
-        activePresetBaseline = { ...p };
-        populatePresets(res.savedName);
-        checkPresetModificationState();
-      }
-    });
-  }
+  if (!name || !name.trim()) return;
+  const trimmed = name.trim();
+  if (isFactoryPresetNameUi(trimmed)) { showHint(FACTORY_NAME_HINT); return; }
+  const p = getParamsFromUI();
+  const dyn = normaliseDyn(dynamics);
+  runPresetOperation({ type: 'SAVE_PRESET', name: trimmed, params: p, dynamics: dyn }, undefined, false);
 };
 
 btnUpdatePreset.onclick = () => {
-  if (!currentPresetName || factoryPresetNames.includes(currentPresetName)) return;
+  if (btnUpdatePreset.disabled || !canSavePreset()) return;
+  if (!currentPresetName || isFactoryPresetNameUi(currentPresetName)) return;
   const p = getParamsFromUI();
-  chrome.runtime.sendMessage({ type: 'UPDATE_PRESET', name: currentPresetName, params: p }, (res) => {
-    if (res?.success) {
-      presets = res.presets;
-      activePresetBaseline = { ...p };
-      checkPresetModificationState();
+  const dyn = normaliseDyn(dynamics);
+  runPresetOperation({ type: 'UPDATE_PRESET', name: currentPresetName, params: p, dynamics: dyn }, () => {
+    if (btnUpdatePreset.style.display !== 'none') {
       const orig = btnUpdatePreset.textContent;
       btnUpdatePreset.textContent = 'Saved';
       setTimeout(() => { btnUpdatePreset.textContent = orig; }, 1200);
     }
-  });
+  }, false);
 };
 
 btnDeletePreset.onclick = () => {
+  if (btnDeletePreset.disabled) return;
   if (!currentPresetName || factoryPresetNames.includes(currentPresetName)) return;
-  if (confirm(`Delete preset "${currentPresetName}"?`)) {
-    chrome.runtime.sendMessage({ type: 'DELETE_PRESET', name: currentPresetName }, (res) => {
-      if (res?.success) {
-        presets = res.presets;
-        currentPresetName = factoryPresetNames[0];
-        populatePresets(currentPresetName);
-        if (presets[currentPresetName]) {
-          const p = normaliseBypass({ ...presets[currentPresetName] });
-          activePresetBaseline = { ...p };
-          applyParamsToUI(p);
-          sendAudioParamUpdate();
-        }
-      }
-    });
-  }
+  if (!confirm(`Delete preset "${currentPresetName}"?`)) return;
+  runPresetOperation({ type: 'DELETE_PRESET', name: currentPresetName });
 };
 
 btnResetDefaults.onclick = () => {
+  if (btnResetDefaults.disabled) return;
   const isFactory = factoryPresetNames.includes(currentPresetName);
   const question = isFactory
     ? `Restore default factory settings for "${currentPresetName}"?`
     : `Discard unsaved changes and go back to the saved values of "${currentPresetName}"?\n\n(Your custom presets are kept.)`;
-  if (confirm(question)) {
-    chrome.runtime.sendMessage({ type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName }, (res) => {
-      if (res?.success) {
-        presets = res.presets;
-        currentPresetName = res.selectedName;
-        populatePresets(res.selectedName);
-        const p = normaliseBypass({ ...res.currentParams });
-        applyParamsToUI(p);
-        activePresetBaseline = { ...p };
-        sendAudioParamUpdate();
-        checkPresetModificationState();
-      }
-    });
-  }
+  if (!confirm(question)) return;
+  runPresetOperation({ type: 'RESET_DEFAULT_PRESETS', currentPreset: currentPresetName });
 };
 
 // ---------- Values, band switches and the audio engine ----------
@@ -917,7 +1166,6 @@ const renderSliders = applyParamsToUI;
 const renderStageBypass = () => renderBandTags();
 
 function getParamsFromUI() {
-  const sel = presets[presetSelect.value];
   return {
     bass: parseFloat(sliderBass.value),
     hpf: parseFloat(sliderHpf.value),
@@ -926,14 +1174,21 @@ function getParamsFromUI() {
     gain: parseFloat(sliderGain.value),
     semitones: parseFloat(sliderPitch.value),
     autoBalance: !bandOff.comp,
-    bypass: sel?.bypass === true,
+    bypass: currentParams.bypass === true,
     stageBypass: { hpf: bandOff.hpf, bass: bandOff.bass, mid: bandOff.mid, high: bandOff.high, gain: bandOff.gain, pitch: bandOff.pitch }
   };
 }
 
-function sendAudioParamUpdate() {
+function sendAudioParamUpdate(delta) {
+  const editAtSend = noteSurfaceEdit();
+  const gen = presetUiGen;
   currentParams = getParamsFromUI();
-  chrome.runtime.sendMessage({ type: 'UPDATE_AUDIO_PARAMS', params: currentParams, presetName: currentPresetName });
+  chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: delta, ...viewTag() }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (handleRefusal(res, gen, editAtSend)) return;
+    noteAccepted(res);
+    if (mayPaint(res, gen, editAtSend)) paintPresetSnapshot(res);
+  });
   checkPresetModificationState();
   physics.updateState(currentParams, isCapturingActive);
 }
@@ -945,14 +1200,14 @@ document.querySelectorAll('button.band-tag').forEach((tag) => {
       notifyPitchLocked();
       return;
     }
-    if (band === 'match') { // an engine setting, not a preset value
+    if (band === 'match') { // the live switch; a preset remembers it only when you Save or Update (R-28)
       dynamics.match = !dynamics.match;
-      sendDynamicsUpdate();
+      sendDynamicsUpdate({ match: dynamics.match });
       return;
     }
     bandOff[band] = !bandOff[band];
     renderBandTags();
-    sendAudioParamUpdate();
+    sendAudioParamUpdate(band === 'comp' ? { autoBalance: !bandOff.comp } : { stageBypass: { [band]: bandOff[band] } });
   };
 });
 
@@ -961,6 +1216,7 @@ function setupValueToggle(valEl, sliderEl, neutralVal, formatFn, onChange) {
   let prevVal = parseFloat(sliderEl.value);
   valEl.ondblclick = (e) => {
     e.preventDefault();
+    if (presetOpsInFlight) return;
     if (sliderEl === sliderPitch && currentMovieMode) {
       notifyPitchLocked();
       return;
@@ -973,7 +1229,8 @@ function setupValueToggle(valEl, sliderEl, neutralVal, formatFn, onChange) {
       sliderEl.value = neutralVal;
     }
     valEl.textContent = formatFn(sliderEl.value);
-    sendAudioParamUpdate();
+    const key = sliderEl === sliderPitch ? 'semitones' : sliderEl.id.replace('slider-', '');
+    sendAudioParamUpdate({ [key]: parseFloat(sliderEl.value) });
     if (onChange) onChange();
   };
 }
@@ -1011,11 +1268,11 @@ if (sliderPitch) {
   });
 }
 
-sliderBass.oninput = (e) => { valBass.textContent = fmt.bass(e.target.value); sendAudioParamUpdate(); };
-sliderHpf.oninput = (e) => { valHpf.textContent = fmt.hpf(e.target.value); sendAudioParamUpdate(); };
-sliderMid.oninput = (e) => { valMid.textContent = fmt.mid(e.target.value); sendAudioParamUpdate(); };
-sliderHigh.oninput = (e) => { valHigh.textContent = fmt.high(e.target.value); sendAudioParamUpdate(); };
-sliderGain.oninput = (e) => { valGain.textContent = fmt.gain(e.target.value); sendAudioParamUpdate(); };
+sliderBass.oninput = (e) => { valBass.textContent = fmt.bass(e.target.value); sendAudioParamUpdate({ bass: parseFloat(e.target.value) }); };
+sliderHpf.oninput = (e) => { valHpf.textContent = fmt.hpf(e.target.value); sendAudioParamUpdate({ hpf: parseFloat(e.target.value) }); };
+sliderMid.oninput = (e) => { valMid.textContent = fmt.mid(e.target.value); sendAudioParamUpdate({ mid: parseFloat(e.target.value) }); };
+sliderHigh.oninput = (e) => { valHigh.textContent = fmt.high(e.target.value); sendAudioParamUpdate({ high: parseFloat(e.target.value) }); };
+sliderGain.oninput = (e) => { valGain.textContent = fmt.gain(e.target.value); sendAudioParamUpdate({ gain: parseFloat(e.target.value) }); };
 sliderPitch.oninput = (e) => {
   if (currentMovieMode) {
     sliderPitch.value = typeof currentParams.semitones === 'number' ? currentParams.semitones : 0;
@@ -1024,7 +1281,7 @@ sliderPitch.oninput = (e) => {
     return;
   }
   valPitch.textContent = fmt.pitch(e.target.value);
-  sendAudioParamUpdate();
+  sendAudioParamUpdate({ semitones: parseFloat(e.target.value) });
 };
 
 // − / + nudges; Shift-click = 5× finer
