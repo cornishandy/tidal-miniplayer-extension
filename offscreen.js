@@ -78,7 +78,10 @@ let matchNode = null, matchDryGain = null, matchWetGain = null; // MATCH (loudne
 let limiterFastGain = null, lookaheadNode = null, lookaheadGain = null, limiterOut = null; // LIM
 let warmPreGain = null, warmShaper = null, ceilingCleanGain = null, ceilingWarmGain = null, outputSum = null; // CEIL
 let ceilingTap = null, ceilingBuf = null;                  // meter: what the ceiling is being asked to bend
-const dynMeters = { band: 0, trim: 0, lookahead: 0 };     // last figures posted by the worklets
+const dynMeters = { band: 0, trim: 0, lookahead: 0, peaks: 0, truepeak: 0, unmud: 0 }; // last figures posted by the worklets
+let dynMake = null;
+let unmudNode = null, centreNode = null, bassPeaksNode = null, truePeakNode = null;
+const br = emptyBass();
 
 // Live display taps: what the tab sends (before the chain) and what you hear (after the ceiling).
 let inputAnalyser = null;
@@ -120,21 +123,51 @@ const ceilingWarmOf = (ax) => CEILING_MAX * Math.tanh(Math.min(ax, 2) / CEILING_
 function normaliseDynamics(d) {
   const x = d || {};
   return {
-    leveler: ['full', 'slow', 'bass'].includes(x.leveler) ? x.leveler : 'full',
+    leveler: ['full', 'slow', 'bass', 'peaks'].includes(x.leveler) ? x.leveler : 'full',
     match: x.match === true,
-    limiter: ['fast', 'lookahead'].includes(x.limiter) ? x.limiter : 'fast',
-    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean'
+    limiter: ['fast', 'lookahead', 'truepeak'].includes(x.limiter) ? x.limiter : 'fast',
+    ceiling: ['clean', 'warm'].includes(x.ceiling) ? x.ceiling : 'clean',
+    room: ['off', 'unmud', 'centre', 'both'].includes(x.room) ? x.room : 'off'
   };
 }
 
-// The modes actually in force: an alternative that needs a worklet falls back to the 1.4.0 stage if the module failed.
+// The modes actually in force. A missing worklet falls back audibly and sets dynError (no silent louder path).
+// Bass peaks runs only while AUTO is on; the menu value is still reported. Room does not depend on AUTO.
 function effectiveDynamics() {
-  const d = currentDynamics;
+  const d = normaliseDynamics(currentDynamics);
+  let leveler = d.leveler;
+  let limiter = d.limiter;
+  let room = d.room;
+  // A null node before capture is "not created yet", not a failure. Sticky dynError only once capture
+  // is up, or once a bass-room create was attempted and failed (peaksFailed / tpFailed / roomFailed).
+  if (leveler === 'bass' && !bandLevelerNode) {
+    leveler = 'full';
+    if (isCapturing && !dynError) dynError = 'Bass only could not be loaded; Full band is in use.';
+  }
+  if (leveler === 'peaks' && br.peaksFailed) {
+    leveler = 'full';
+    if (!dynError) dynError = 'Bass peaks could not be loaded; Full band is in use.';
+  }
+  if (limiter === 'lookahead' && !lookaheadNode) {
+    limiter = 'fast';
+    if (isCapturing && !dynError) dynError = 'Look-ahead could not be loaded; Fast is in use.';
+  }
+  if (limiter === 'truepeak' && br.tpFailed) {
+    limiter = lookaheadNode ? 'lookahead' : 'fast';
+    if (!dynError) dynError = lookaheadNode
+      ? 'True peak could not be loaded; Look-ahead is in use.'
+      : 'True peak could not be loaded; Fast is in use.';
+  }
+  if (room !== 'off' && br.roomFailed) {
+    room = 'off';
+    if (!dynError) dynError = 'Room could not be loaded; Room stays off.';
+  }
   return {
-    leveler: d.leveler === 'bass' && !bandLevelerNode ? 'full' : d.leveler,
-    match: d.match && !!matchNode,
-    limiter: d.limiter === 'lookahead' && !lookaheadNode ? 'fast' : d.limiter,
-    ceiling: d.ceiling
+    leveler,
+    match: d.match === true && !!matchNode,
+    limiter,
+    ceiling: d.ceiling,
+    room
   };
 }
 
@@ -256,9 +289,15 @@ function dynamicsFrame() {
   const dyn = effectiveDynamics();
   const compOff = bypassState().comp;
   const r1 = (v) => Math.round(v * 10) / 10;
-  const leveler = compOff ? 0 : dyn.leveler === 'bass' ? dynMeters.band : Math.max(0, -(autoBalanceComp ? autoBalanceComp.reduction : 0));
+  const leveler = compOff ? 0
+    : dyn.leveler === 'bass' ? dynMeters.band
+    : dyn.leveler === 'peaks' ? dynMeters.peaks
+    : Math.max(0, -(autoBalanceComp ? autoBalanceComp.reduction : 0));
   const match = dyn.match ? dynMeters.trim : 0;
-  const limiter = dyn.limiter === 'lookahead' ? dynMeters.lookahead : Math.max(0, -(masterLimiter ? masterLimiter.reduction : 0));
+  const limiter = dyn.limiter === 'lookahead' ? dynMeters.lookahead
+    : dyn.limiter === 'truepeak' ? dynMeters.truepeak
+    : Math.max(0, -(masterLimiter ? masterLimiter.reduction : 0));
+  const roomDip = (dyn.room === 'unmud' || dyn.room === 'both') ? dynMeters.unmud : 0;
   let ceiling = 0, peak = 0;
   if (ceilingTap) {
     if (!ceilingBuf || ceilingBuf.length !== ceilingTap.fftSize) ceilingBuf = new Float32Array(ceilingTap.fftSize);
@@ -269,7 +308,7 @@ function dynamicsFrame() {
       ceiling = Math.max(0, 20 * Math.log10(peak / y));
     }
   }
-  return { modes: dyn, available: !dynError, error: dynError, leveler: r1(leveler), match: r1(match), limiter: r1(limiter), ceiling: r1(ceiling), peakIn: Math.round(peak * 1000) / 1000 };
+  return { modes: dyn, available: !dynError, error: dynError, leveler: r1(leveler), match: r1(match), limiter: r1(limiter), ceiling: r1(ceiling), room: r1(roomDip), roomMode: dyn.room, peakIn: Math.round(peak * 1000) / 1000 };
 }
 
 function startCapture(streamId, initialParams = {}, initialDynamics = null, movieMode) {
@@ -405,10 +444,17 @@ async function buildAudioGraph(stream, movieMode, gen) {
           if (name === 'band-leveler' && bandLevelerNode !== node) return;
           if (name === 'lookahead-limiter' && lookaheadNode !== node) return;
           if (name === 'loudness-match' && matchNode !== node) return;
+          if (name === 'unmud' && br.unmud !== node) return;
+          if (name === 'centre-bass' && br.centre !== node) return;
+          if (name === 'bass-peaks' && br.peaks !== node) return;
+          if (name === 'true-peak' && br.truepeak !== node) return;
           const d = e.data || {};
           if (name === 'band-leveler' && typeof d.red === 'number') dynMeters.band = d.red;
           if (name === 'lookahead-limiter' && typeof d.red === 'number') dynMeters.lookahead = d.red;
           if (name === 'loudness-match' && typeof d.trim === 'number') dynMeters.trim = d.trim;
+          if (name === 'unmud' && typeof d.dip === 'number') { dynMeters.unmud = d.dip; br.callbacks++; }
+          if (name === 'bass-peaks' && typeof d.red === 'number') { dynMeters.peaks = d.red; br.callbacks++; }
+          if (name === 'true-peak' && typeof d.red === 'number') { dynMeters.truepeak = d.red; br.callbacks++; }
         };
         return node;
       } catch (err) {
@@ -609,6 +655,13 @@ async function buildAudioGraph(stream, movieMode, gen) {
 
     sourceNodeLocal.connect(inputAnalyser);
     outputSum.connect(outputAnalyser);
+
+    // Bass-room stages are spliced only when selected. The connections above stay the 1.4.0 default.
+    g.wired = true;
+    g.live = false;
+    g.makeDyn = makeDyn;
+    g._br = emptyBass();
+    applyRoutingToGraph(g, { immediate: true });
     return g;
   } catch (err) {
     abortCtx();
@@ -658,6 +711,16 @@ function installGraph(g) {
   inputAnalyser = g.inputAnalyser;
   outputAnalyser = g.outputAnalyser;
   currentMovieMode = !!g.movieMode;
+  dynMake = g.makeDyn || null;
+  if (g._br) {
+    const timers = br.timers;
+    Object.assign(br, g._br);
+    br.timers = timers;
+  }
+  unmudNode = br.unmud;
+  centreNode = br.centre;
+  bassPeaksNode = br.peaks;
+  truePeakNode = br.truepeak;
 }
 
 function setMovieMode(requestedMode) {
@@ -719,12 +782,14 @@ async function setMovieModeBody(requestedMode, myGen) {
   const oldBand = bandLevelerNode;
   const oldMatch = matchNode;
   const oldLa = lookaheadNode;
-  for (const n of [oldPitch, oldBand, oldMatch, oldLa]) if (n && n.port) n.port.onmessage = null;
+  const oldBass = [br.unmud, br.centre, br.peaks, br.truepeak];
+  for (const n of [oldPitch, oldBand, oldMatch, oldLa, ...oldBass]) if (n && n.port) n.port.onmessage = null;
   clearTimeout(pitchHoldTimer);
   pitchHoldTimer = null;
   pitchPrimed = false;
   pitchHoldUntil = 0;
-  dynMeters.band = dynMeters.trim = dynMeters.lookahead = 0;
+  dynMeters.band = dynMeters.trim = dynMeters.lookahead = dynMeters.peaks = dynMeters.truepeak = dynMeters.unmud = 0;
+  releaseBassRoom();
 
   installGraph(g);
   currentMovieMode = want;
@@ -737,9 +802,10 @@ async function setMovieModeBody(requestedMode, myGen) {
 }
 
 function cleanupCaptureState() {
-  for (const n of [pitchNode, bandLevelerNode, matchNode, lookaheadNode]) {
+  for (const n of [pitchNode, bandLevelerNode, matchNode, lookaheadNode, br.unmud, br.centre, br.peaks, br.truepeak]) {
     if (n && n.port) n.port.onmessage = null;
   }
+  releaseBassRoom();
   clearTimeout(pitchHoldTimer);
   pitchHoldTimer = null;
   if (currentStream) {
@@ -764,7 +830,7 @@ function cleanupCaptureState() {
   limiterFastGain = lookaheadNode = lookaheadGain = limiterOut = null;
   warmPreGain = warmShaper = ceilingCleanGain = ceilingWarmGain = outputSum = null;
   ceilingTap = null;
-  dynMeters.band = dynMeters.trim = dynMeters.lookahead = 0;
+  dynMeters.band = dynMeters.trim = dynMeters.lookahead = dynMeters.peaks = dynMeters.truepeak = dynMeters.unmud = 0;
 }
 
 function stopCapture() {
@@ -799,6 +865,690 @@ function updateParams(newParams) {
   applyRoutingState();
 }
 
+// Bass room (1.6.0, D-09). New stages are created when selected and removed when off.
+// The fresh default start never inserts them. Fades are 40 ms complementary linear ramps;
+// a temporary delay is removed with a 10 ms dip down and a 20 ms fade up.
+const BASS_FADE = 0.04;
+const BASS_DIP_DOWN = 0.01;
+const BASS_DIP_UP = 0.02;
+
+function emptyBass() {
+  return {
+    gen: 0, timers: [], key: '', phase: 'idle',
+    unmud: null, centre: null, peaks: null, truepeak: null,
+    roomDry: null, roomWet: null, peaksDry: null, peaksWet: null, tpGain: null, preLim: null,
+    pad: { bypass: null, peaksDry: null, lookahead: null, fast: null, truepeak: null },
+    roomSpliced: false, postSpliced: false, split: false,
+    appliedRoom: 'off', appliedPeaks: false, appliedLimiter: 'fast', appliedLeveler: 'full',
+    peaksFailed: false, tpFailed: false, roomFailed: false, callbacks: 0
+  };
+}
+
+function bassWant(g, slot) {
+  const d = normaliseDynamics(currentDynamics);
+  const compOff = bypassState().comp;
+  const s = slot || br;
+  const peaks = !compOff && d.leveler === 'peaks' && !s.peaksFailed;
+  const truepeak = d.limiter === 'truepeak' && !s.tpFailed;
+  let limiter = d.limiter;
+  if (limiter === 'truepeak' && !truepeak) limiter = g && g.lookaheadNode ? 'lookahead' : 'fast';
+  if (limiter === 'lookahead' && !(g && g.lookaheadNode)) limiter = 'fast';
+  let leveler = compOff ? 'bypass' : d.leveler;
+  if (leveler === 'bass' && !(g && g.bandLevelerNode)) leveler = 'full';
+  if (leveler === 'peaks' && !peaks) leveler = compOff ? 'bypass' : 'full';
+  const room = s.roomFailed ? 'off' : d.room;
+  return { room, peaks, truepeak, limiter, leveler, compOff };
+}
+
+function wantKey(w) { return w.room + '|' + (w.peaks ? 1 : 0) + '|' + (w.truepeak ? 1 : 0); }
+
+function heldGain(p, now) {
+  if (!p) return 0;
+  const f = p._brFade;
+  if (!f || !(f.dur > 0)) return +p.value || 0;
+  const t = Math.max(0, Math.min(1, ((now || 0) - f.start) / f.dur));
+  return f.from + (f.to - f.from) * t;
+}
+
+function rampGain(node, to, dur, ctx) {
+  if (!node || !node.gain) return;
+  const p = node.gain;
+  const now = ctx && typeof ctx.currentTime === 'number' ? ctx.currentTime : 0;
+  if (!ctx || !(dur > 0) || typeof p.linearRampToValueAtTime !== 'function' || typeof p.setValueAtTime !== 'function') {
+    try { if (p.cancelScheduledValues) p.cancelScheduledValues(now); } catch (_) {}
+    p.value = to;
+    p._brFade = null;
+    return;
+  }
+  const from = heldGain(p, now);
+  try { p.cancelScheduledValues(now); } catch (_) {}
+  p.setValueAtTime(from, now);
+  p.linearRampToValueAtTime(to, now + dur);
+  p._brFade = { from, to, start: now, dur };
+}
+
+function rampLeveler(g, tgt, dur, ctx) {
+  let wet = tgt.wet, bypass = tgt.bypass, band = tgt.band;
+  const sum = wet + bypass + band;
+  if (sum > 1.000001) { const s = 1 / sum; wet *= s; bypass *= s; band *= s; }
+  rampGain(g.autoBalanceWetGain, wet, dur, ctx);
+  rampGain(g.autoBalanceBypassGain, bypass, dur, ctx);
+  rampGain(g.bandLevelerGain, band, dur, ctx);
+}
+
+function levelerTarget(want) {
+  if (want.leveler === 'bass') return { wet: 0, bypass: 0, band: 1 };
+  if (want.leveler === 'peaks' || want.leveler === 'bypass' || want.peaks) return { wet: 0, bypass: 1, band: 0 };
+  return { wet: 1, bypass: 0, band: 0 };
+}
+
+function clearLater(slot) {
+  if (!slot) return;
+  for (const id of slot.timers) clearTimeout(id);
+  slot.timers.length = 0;
+}
+
+function later(slot, sec, fn) {
+  const gen = slot.gen;
+  const id = setTimeout(() => { if (slot.gen === gen) fn(); }, Math.max(0, sec * 1000));
+  slot.timers.push(id);
+}
+
+function makeGain(ctx, value) {
+  const n = ctx.createGain();
+  n.gain.value = value;
+  return n;
+}
+
+function dropNode(node) {
+  if (!node) return;
+  try { node.disconnect(); } catch (_) {}
+  try {
+    if (node.port) {
+      node.port.onmessage = null;
+      try { node.port.postMessage({ type: 'park' }); } catch (_) {}
+      try { node.port.close(); } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+function syncBassGlobals(slot) {
+  unmudNode = slot.unmud || null;
+  centreNode = slot.centre || null;
+  bassPeaksNode = slot.peaks || null;
+  truePeakNode = slot.truepeak || null;
+}
+
+function noteDynFail(g, slot, failFlag, errText) {
+  slot[failFlag] = true;
+  if (!dynError) dynError = errText;
+  if (g && !g.dynError) g.dynError = errText;
+}
+
+function makeWorklet(g, slot, field, proc, inputs, failFlag, errText) {
+  if (slot[field]) return slot[field];
+  if (typeof g.makeDyn !== 'function') {
+    noteDynFail(g, slot, failFlag, errText);
+    return null;
+  }
+  const node = g.makeDyn(proc, inputs);
+  if (!node) {
+    noteDynFail(g, slot, failFlag, errText);
+    return null;
+  }
+  slot[field] = node;
+  syncBassGlobals(slot);
+  return node;
+}
+
+function levelerDests(g) {
+  const out = [];
+  if (g.autoBalanceComp) out.push(g.autoBalanceComp);
+  if (g.autoBalanceBypassGain) out.push(g.autoBalanceBypassGain);
+  if (g.bandLevelerNode) out.push(g.bandLevelerNode);
+  return out;
+}
+
+function limiterFeeds(g) {
+  const out = [];
+  if (g.masterLimiter) out.push(g.masterLimiter);
+  if (g.lookaheadNode) out.push(g.lookaheadNode);
+  return out;
+}
+
+function setPad(slot, key, fromNode, toNode, samples, ctx) {
+  const have = slot.pad[key];
+  if (!(samples > 0)) {
+    if (have && fromNode && toNode) {
+      try { fromNode.disconnect(have); } catch (_) {}
+      try { have.disconnect(); } catch (_) {}
+      try { fromNode.connect(toNode); } catch (_) {}
+    }
+    slot.pad[key] = null;
+    return;
+  }
+  if (!fromNode || !toNode || !ctx || typeof ctx.createDelay !== 'function') return;
+  if (have) {
+    try { have.delayTime.value = samples / ctx.sampleRate; } catch (_) {}
+    return;
+  }
+  const d = ctx.createDelay(1);
+  d.delayTime.value = samples / ctx.sampleRate;
+  try { fromNode.disconnect(toNode); } catch (_) {}
+  fromNode.connect(d);
+  d.connect(toNode);
+  slot.pad[key] = d;
+}
+
+function ensurePreLim(g, slot) {
+  if (slot.postSpliced) return true;
+  const ctx = g.audioCtx;
+  if (!ctx || !g.volumeGain) return false;
+  slot.preLim = makeGain(ctx, 1);
+  for (const dest of limiterFeeds(g)) slot.preLim.connect(dest);
+  g.volumeGain.connect(slot.preLim);
+  for (const dest of limiterFeeds(g)) { try { g.volumeGain.disconnect(dest); } catch (_) {} }
+  slot.postSpliced = true;
+  return true;
+}
+
+function tearPost(g, slot) {
+  // Reconnect the 1.4.0 limiter feeds only after a splice. Doing it on a fresh default graph
+  // connects volumeGain to nodes it is already wired to, and Chrome throws InvalidAccessError.
+  if (slot.postSpliced && g.volumeGain) {
+    for (const dest of limiterFeeds(g)) { try { g.volumeGain.connect(dest); } catch (_) {} }
+    try { g.volumeGain.disconnect(slot.preLim); } catch (_) {}
+    try { g.volumeGain.disconnect(slot.peaks); } catch (_) {}
+    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+  }
+  if (slot.preLim && g.masterLimiter) { try { slot.preLim.disconnect(g.masterLimiter); } catch (_) {} }
+  if (slot.preLim && g.lookaheadNode) { try { slot.preLim.disconnect(g.lookaheadNode); } catch (_) {} }
+  if (slot.preLim && slot.truepeak) { try { slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
+  dropNode(slot.peaks); dropNode(slot.truepeak);
+  dropNode(slot.peaksDry); dropNode(slot.peaksWet); dropNode(slot.tpGain); dropNode(slot.preLim);
+  for (const key of ['peaksDry', 'lookahead', 'fast', 'truepeak']) {
+    if (slot.pad[key]) { try { slot.pad[key].disconnect(); } catch (_) {} slot.pad[key] = null; }
+  }
+  slot.peaks = slot.truepeak = slot.peaksDry = slot.peaksWet = slot.tpGain = slot.preLim = null;
+  slot.postSpliced = false;
+  slot.split = false;
+  syncBassGlobals(slot);
+}
+
+function tearRoom(g, slot) {
+  const dests = levelerDests(g);
+  if (slot.roomSpliced && g.highNode) {
+    for (const dest of dests) { try { g.highNode.connect(dest); } catch (_) {} }
+    try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+    try { g.highNode.disconnect(slot.unmud); } catch (_) {}
+    try { g.highNode.disconnect(slot.centre); } catch (_) {}
+  }
+  if (g.hpfNode && slot.unmud) { try { g.hpfNode.disconnect(slot.unmud); } catch (_) {} }
+  dropNode(slot.unmud); dropNode(slot.centre); dropNode(slot.roomDry); dropNode(slot.roomWet);
+  slot.unmud = slot.centre = slot.roomDry = slot.roomWet = null;
+  slot.roomSpliced = false;
+  syncBassGlobals(slot);
+}
+
+function wireRoomChain(g, slot, mode) {
+  const ctx = g.audioCtx;
+  const needUnmud = mode === 'unmud' || mode === 'both';
+  const needCentre = mode === 'centre' || mode === 'both';
+  if (needUnmud && !makeWorklet(g, slot, 'unmud', 'unmud', 2, 'roomFailed', 'Room could not be loaded; Room stays off.')) return false;
+  if (needCentre && !makeWorklet(g, slot, 'centre', 'centre-bass', 1, 'roomFailed', 'Room could not be loaded; Room stays off.')) return false;
+  if (!slot.roomWet) slot.roomWet = makeGain(ctx, 0);
+  try { if (slot.unmud) slot.unmud.disconnect(); } catch (_) {}
+  try { if (slot.centre) slot.centre.disconnect(); } catch (_) {}
+  try { if (g.highNode) g.highNode.disconnect(slot.unmud); } catch (_) {}
+  try { if (g.highNode) g.highNode.disconnect(slot.centre); } catch (_) {}
+  let tail = g.highNode;
+  if (needUnmud) {
+    g.highNode.connect(slot.unmud);
+    if (g.hpfNode) {
+      try { g.hpfNode.disconnect(slot.unmud); } catch (_) {}
+      g.hpfNode.connect(slot.unmud, 0, 1);
+    }
+    tail = slot.unmud;
+  } else if (slot.unmud) {
+    dropNode(slot.unmud); slot.unmud = null;
+  }
+  if (needCentre) {
+    tail.connect(slot.centre);
+    tail = slot.centre;
+  } else if (slot.centre) {
+    dropNode(slot.centre); slot.centre = null;
+  }
+  try { slot.roomWet.disconnect(); } catch (_) {}
+  tail.connect(slot.roomWet);
+  for (const dest of levelerDests(g)) slot.roomWet.connect(dest);
+  syncBassGlobals(slot);
+  return true;
+}
+
+function spliceRoomDry(g, slot, ctx, gain) {
+  if (!slot.roomDry) slot.roomDry = makeGain(ctx, gain);
+  else slot.roomDry.gain.value = gain;
+  const dests = levelerDests(g);
+  for (const dest of dests) { try { slot.roomDry.connect(dest); } catch (_) {} }
+  if (!slot.roomSpliced && g.highNode) {
+    g.highNode.connect(slot.roomDry);
+    for (const dest of dests) { try { g.highNode.disconnect(dest); } catch (_) {} }
+    slot.roomSpliced = true;
+  } else if (g.highNode) {
+    try { g.highNode.connect(slot.roomDry); } catch (_) {}
+  }
+}
+
+function ensurePeaksSplit(g, slot, ctx) {
+  if (!makeWorklet(g, slot, 'peaks', 'bass-peaks', 1, 'peaksFailed', 'Bass peaks could not be loaded; Full band is in use.')) return false;
+  if (!ensurePreLim(g, slot)) return false;
+  if (!slot.peaksWet) slot.peaksWet = makeGain(ctx, 0);
+  if (!slot.peaksDry) slot.peaksDry = makeGain(ctx, heldGain(slot.peaksDry && slot.peaksDry.gain, ctx.currentTime) || 1);
+  if (slot.split) return true;
+  const vg = g.volumeGain;
+  try { vg.disconnect(slot.preLim); } catch (_) {}
+  vg.connect(slot.peaksDry);
+  if (slot.pad.peaksDry) slot.peaksDry.connect(slot.pad.peaksDry);
+  else slot.peaksDry.connect(slot.preLim);
+  vg.connect(slot.peaks);
+  slot.peaks.connect(slot.peaksWet);
+  slot.peaksWet.connect(slot.preLim);
+  slot.split = true;
+  return true;
+}
+
+function ensureTruepeak(g, slot, ctx) {
+  if (!makeWorklet(g, slot, 'truepeak', 'true-peak', 1, 'tpFailed', 'True peak could not be loaded; the previous limiter stays in use.')) return false;
+  if (!ensurePreLim(g, slot)) return false;
+  if (!slot.tpGain) {
+    slot.tpGain = makeGain(ctx, 0);
+    slot.preLim.connect(slot.truepeak);
+    slot.truepeak.connect(slot.tpGain);
+    if (g.limiterOut) slot.tpGain.connect(g.limiterOut);
+  }
+  syncBassGlobals(slot);
+  return true;
+}
+
+function limDelay(kind, fs) {
+  if (kind === 'fast') return Math.round(0.006 * fs);
+  if (kind === 'lookahead') return Math.round(0.005 * fs) + 1;
+  if (kind === 'truepeak') return Math.ceil(0.005 * fs) + 33;
+  return 0;
+}
+
+function levelerDelay(kind, fs) {
+  return (kind === 'full' || kind === 'slow') ? Math.round(0.006 * fs) : 0;
+}
+
+function commitBassRoom(g, { immediate = false } = {}) {
+  if (!g || !g.wired || !g._br) return;
+  const slot = g._br;
+  const want = bassWant(g, slot);
+  const key = wantKey(want);
+  if (slot.key === key) return;
+  slot.key = key;
+  slot.gen++;
+  clearLater(slot);
+  if (immediate || !g.live) applyBassSettled(g, slot, want);
+  else runBassLive(g, slot, want);
+}
+
+function applyBassSettled(g, slot, want) {
+  const ctx = g.audioCtx;
+  rampLeveler(g, levelerTarget(want), 0, ctx);
+  setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, 0, ctx);
+  if (want.room === 'off') tearRoom(g, slot);
+  else {
+    spliceRoomDry(g, slot, ctx, 0);
+    if (!wireRoomChain(g, slot, want.room)) {
+      tearRoom(g, slot);
+      want = { ...want, room: 'off' };
+    } else {
+      rampGain(slot.roomWet, 1, 0, ctx);
+      try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+      try { slot.roomDry.disconnect(); } catch (_) {}
+    }
+  }
+  if (!want.peaks && !want.truepeak) tearPost(g, slot);
+  else if (!buildPostSettled(g, slot, want)) {
+    tearPost(g, slot);
+    want = {
+      ...want,
+      peaks: false,
+      truepeak: false,
+      limiter: g.lookaheadNode ? 'lookahead' : 'fast',
+      leveler: want.compOff ? 'bypass' : 'full'
+    };
+  }
+  rampLeveler(g, levelerTarget(want), 0, ctx);
+  rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, 0, ctx);
+  rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, 0, ctx);
+  rampGain(slot.tpGain, want.truepeak ? 1 : 0, 0, ctx);
+  slot.appliedRoom = want.room;
+  slot.appliedPeaks = !!want.peaks;
+  slot.appliedLimiter = want.truepeak ? 'truepeak' : want.limiter;
+  slot.appliedLeveler = want.leveler;
+  slot.phase = 'idle';
+  slot.key = wantKey(want);
+  syncBassGlobals(slot);
+}
+
+function buildPostSettled(g, slot, want) {
+  const ctx = g.audioCtx;
+  if (want.truepeak && !ensureTruepeak(g, slot, ctx)) return false;
+  if (want.peaks) {
+    if (!ensurePeaksSplit(g, slot, ctx)) return false;
+    rampGain(slot.peaksWet, 1, 0, ctx);
+    rampGain(slot.peaksDry, 0, 0, ctx);
+    setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
+    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    try { slot.peaksDry.disconnect(); } catch (_) {}
+  } else if (slot.split) {
+    try { g.volumeGain.disconnect(slot.peaks); } catch (_) {}
+    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    dropNode(slot.peaks); dropNode(slot.peaksDry); dropNode(slot.peaksWet);
+    slot.peaks = slot.peaksDry = slot.peaksWet = null;
+    slot.split = false;
+    try { g.volumeGain.connect(slot.preLim); } catch (_) {}
+    setPad(slot, 'peaksDry', null, null, 0, ctx);
+  } else if (!ensurePreLim(g, slot)) return false;
+  if (!want.truepeak) {
+    setPad(slot, 'truepeak', slot.tpGain, g.limiterOut, 0, ctx);
+    if (slot.preLim && slot.truepeak) { try { slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
+    dropNode(slot.truepeak); dropNode(slot.tpGain);
+    slot.truepeak = slot.tpGain = null;
+  }
+  syncBassGlobals(slot);
+  return true;
+}
+
+function runBassLive(g, slot, want) {
+  const ctx = g.audioCtx;
+  // A newer request cancelled the previous timers (commit bumps gen). Restart from the topology
+  // we actually have, not only from the last applied label: a cancelled enter has already spliced.
+  slot.phase = 'run';
+  const pending = [];
+  const roomOn = want.room !== 'off';
+  const roomLive = slot.appliedRoom !== 'off' || !!slot.roomSpliced;
+  if (slot.appliedRoom !== want.room || roomLive !== roomOn) pending.push((done) => liveRoom(g, slot, want, ctx, done));
+  if (slot.appliedPeaks !== !!want.peaks || !!slot.split !== !!want.peaks) pending.push((done) => livePeaks(g, slot, want, ctx, done));
+  if ((slot.appliedLimiter === 'truepeak') !== !!want.truepeak || !!slot.truepeak !== !!want.truepeak) pending.push((done) => liveTruepeak(g, slot, want, ctx, done));
+  if (!pending.length) { finishBass(g, slot, want, ctx); return; }
+  let left = pending.length;
+  for (const start of pending) start(() => { if (--left === 0) finishBass(g, slot, want, ctx); });
+}
+
+function retargetBass(g, slot, want, ctx) {
+  if (slot.appliedPeaks !== want.peaks || want.peaks) rampLeveler(g, levelerTarget(want), BASS_FADE, ctx);
+  if (slot.roomDry && slot.roomWet) {
+    rampGain(slot.roomDry, want.room === 'off' ? 1 : 0, BASS_FADE, ctx);
+    rampGain(slot.roomWet, want.room === 'off' ? 0 : 1, BASS_FADE, ctx);
+  }
+  if (slot.peaksDry && slot.peaksWet) {
+    rampGain(slot.peaksDry, want.peaks ? 0 : 1, BASS_FADE, ctx);
+    rampGain(slot.peaksWet, want.peaks ? 1 : 0, BASS_FADE, ctx);
+  }
+  rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, BASS_FADE, ctx);
+  rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, BASS_FADE, ctx);
+  rampGain(slot.tpGain, want.truepeak ? 1 : 0, BASS_FADE, ctx);
+}
+
+function finishBass(g, slot, want, ctx) {
+  const now = ctx ? ctx.currentTime : 0;
+  const near = (node, v) => !node || Math.abs(heldGain(node.gain, now) - v) < 0.02;
+  if (slot.roomDry && slot.roomWet) {
+    if (!near(slot.roomDry, want.room === 'off' ? 1 : 0) || !near(slot.roomWet, want.room === 'off' ? 0 : 1)) {
+      later(slot, 0.02, () => finishBass(g, slot, want, ctx));
+      return;
+    }
+  }
+  if (slot.split && slot.peaksDry && slot.peaksWet) {
+    if (!near(slot.peaksDry, want.peaks ? 0 : 1) || !near(slot.peaksWet, want.peaks ? 1 : 0)) {
+      later(slot, 0.02, () => finishBass(g, slot, want, ctx));
+      return;
+    }
+  }
+  if ((g.limiterFastGain && !near(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0))
+    || (g.lookaheadGain && !near(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0))
+    || (slot.tpGain && !near(slot.tpGain, want.truepeak ? 1 : 0))) {
+    later(slot, 0.02, () => finishBass(g, slot, want, ctx));
+    return;
+  }
+  if (want.room === 'off') {
+    if (!slot.roomWet || near(slot.roomWet, 0)) tearRoom(g, slot);
+  } else if (slot.roomDry && near(slot.roomDry, 0)) {
+    try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+    try { slot.roomDry.disconnect(); } catch (_) {}
+  }
+  if (!want.peaks && slot.split && (!slot.peaksWet || near(slot.peaksWet, 0))) {
+    if (slot.pad.peaksDry && slot.peaksDry && !near(slot.peaksDry, 0)) {
+      dipRemove(slot, ctx, slot.peaksDry, () => setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx), () => finishBass(g, slot, want, ctx));
+      return;
+    }
+    setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
+    if (!want.truepeak) tearPost(g, slot);
+    else {
+      try { g.volumeGain.disconnect(slot.peaks); } catch (_) {}
+      try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+      dropNode(slot.peaks); dropNode(slot.peaksDry); dropNode(slot.peaksWet);
+      slot.peaks = slot.peaksDry = slot.peaksWet = null;
+      slot.split = false;
+      try { g.volumeGain.connect(slot.preLim); } catch (_) {}
+    }
+  }
+  if (want.peaks && slot.peaksDry && near(slot.peaksDry, 0)) {
+    setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
+    try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+    try { slot.peaksDry.disconnect(); } catch (_) {}
+  }
+  if (slot.pad.bypass && near(g.autoBalanceBypassGain, 0)) setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, 0, ctx);
+  else if (slot.pad.bypass && near(g.autoBalanceBypassGain, 1) && !(want.leveler === 'full' || want.leveler === 'slow')) {
+    dipRemove(slot, ctx, g.autoBalanceBypassGain, () => setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, 0, ctx), () => finishBass(g, slot, want, ctx));
+    return;
+  }
+  for (const key of ['fast', 'lookahead', 'truepeak']) {
+    if (!slot.pad[key]) continue;
+    const node = key === 'fast' ? g.limiterFastGain : key === 'lookahead' ? g.lookaheadGain : slot.tpGain;
+    const to = key === 'fast' ? g.limiterOut : key === 'lookahead' ? g.limiterOut : g.limiterOut;
+    if (near(node, 0)) setPad(slot, key, node, to, 0, ctx);
+  }
+  if (!want.truepeak && slot.truepeak && near(slot.tpGain, 0)) {
+    setPad(slot, 'truepeak', slot.tpGain, g.limiterOut, 0, ctx);
+    if (slot.preLim) { try { slot.preLim.disconnect(slot.truepeak); } catch (_) {} }
+    dropNode(slot.truepeak); dropNode(slot.tpGain);
+    slot.truepeak = slot.tpGain = null;
+    if (!want.peaks) tearPost(g, slot);
+  }
+  if (want.peaks && !slot.peaks) want = { ...want, peaks: false, leveler: want.compOff ? 'bypass' : 'full' };
+  if (want.truepeak && !slot.truepeak) want = { ...want, truepeak: false, limiter: g.lookaheadNode ? 'lookahead' : 'fast' };
+  if (want.room !== 'off' && !slot.unmud && !slot.centre) want = { ...want, room: 'off' };
+  rampLeveler(g, levelerTarget(want), 0, ctx);
+  rampGain(g.limiterFastGain, want.limiter === 'fast' ? 1 : 0, 0, ctx);
+  rampGain(g.lookaheadGain, want.limiter === 'lookahead' ? 1 : 0, 0, ctx);
+  rampGain(slot.tpGain, want.truepeak ? 1 : 0, 0, ctx);
+  slot.appliedRoom = want.room;
+  slot.appliedPeaks = !!want.peaks;
+  slot.appliedLimiter = want.truepeak ? 'truepeak' : want.limiter;
+  slot.appliedLeveler = want.leveler;
+  slot.phase = 'idle';
+  slot.key = wantKey(want);
+  syncBassGlobals(slot);
+}
+
+function dipRemove(slot, ctx, node, atZero, after) {
+  rampGain(node, 0, BASS_DIP_DOWN, ctx);
+  later(slot, BASS_DIP_DOWN + 0.004, () => {
+    atZero();
+    rampGain(node, 1, BASS_DIP_UP, ctx);
+    later(slot, BASS_DIP_UP + 0.004, after);
+  });
+}
+
+function liveRoom(g, slot, want, ctx, done) {
+  if (want.room !== 'off' && slot.appliedRoom !== 'off' && slot.appliedRoom !== want.room) {
+    spliceRoomDry(g, slot, ctx, 0);
+    rampGain(slot.roomDry, 1, BASS_FADE, ctx);
+    rampGain(slot.roomWet, 0, BASS_FADE, ctx);
+    later(slot, BASS_FADE + 0.004, () => {
+      if (!wireRoomChain(g, slot, want.room)) { tearRoom(g, slot); done(); return; }
+      rampGain(slot.roomDry, 0, BASS_FADE, ctx);
+      rampGain(slot.roomWet, 1, BASS_FADE, ctx);
+      later(slot, BASS_FADE + 0.004, () => {
+        try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+        slot.appliedRoom = want.room;
+        done();
+      });
+    });
+    return;
+  }
+  if (want.room === 'off') {
+    spliceRoomDry(g, slot, ctx, 0);
+    rampGain(slot.roomDry, 1, BASS_FADE, ctx);
+    rampGain(slot.roomWet, 0, BASS_FADE, ctx);
+    later(slot, BASS_FADE + 0.004, () => { tearRoom(g, slot); slot.appliedRoom = 'off'; done(); });
+    return;
+  }
+  spliceRoomDry(g, slot, ctx, 1);
+  if (!wireRoomChain(g, slot, want.room)) { tearRoom(g, slot); slot.appliedRoom = 'off'; done(); return; }
+  rampGain(slot.roomDry, 0, BASS_FADE, ctx);
+  rampGain(slot.roomWet, 1, BASS_FADE, ctx);
+  later(slot, BASS_FADE + 0.004, () => {
+    try { g.highNode.disconnect(slot.roomDry); } catch (_) {}
+    try { slot.roomDry.disconnect(); } catch (_) {}
+    slot.appliedRoom = want.room;
+    done();
+  });
+}
+
+function livePeaks(g, slot, want, ctx, done) {
+  const fs = ctx.sampleRate || 48000;
+  const N = Math.round(0.005 * fs) + 1;
+  if (want.peaks) {
+    if (!ensurePeaksSplit(g, slot, ctx)) { slot.appliedPeaks = false; done(); return; }
+    const fromN = levelerDelay(slot.appliedLeveler, fs);
+    const arm = () => {
+      if (fromN > 0) setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, fromN, ctx);
+      rampLeveler(g, levelerTarget(want), BASS_FADE, ctx);
+      rampGain(slot.peaksDry, 0, BASS_FADE, ctx);
+      rampGain(slot.peaksWet, 1, BASS_FADE, ctx);
+      later(slot, BASS_FADE + 0.004, () => {
+        setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx);
+        try { g.volumeGain.disconnect(slot.peaksDry); } catch (_) {}
+        try { slot.peaksDry.disconnect(); } catch (_) {}
+        if (slot.pad.bypass) {
+          dipRemove(slot, ctx, g.autoBalanceBypassGain, () => setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, 0, ctx), () => {
+            slot.appliedPeaks = true; slot.appliedLeveler = 'peaks'; done();
+          });
+        } else {
+          slot.appliedPeaks = true; slot.appliedLeveler = 'peaks'; done();
+        }
+      });
+    };
+    // The dry post-master path is audible and shorter than the catch. Dip, then pad, then crossfade.
+    rampGain(slot.peaksDry, 0, BASS_DIP_DOWN, ctx);
+    later(slot, BASS_DIP_DOWN + 0.004, () => {
+      setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, N, ctx);
+      rampGain(slot.peaksDry, 1, BASS_DIP_UP, ctx);
+      later(slot, BASS_DIP_UP + 0.004, arm);
+    });
+    return;
+  }
+  if (!slot.split) { slot.appliedPeaks = false; slot.appliedLeveler = want.leveler; rampLeveler(g, levelerTarget(want), BASS_FADE, ctx); done(); return; }
+  if (!slot.peaksDry) slot.peaksDry = makeGain(ctx, 0);
+  try { g.volumeGain.connect(slot.peaksDry); } catch (_) {}
+  setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, N, ctx);
+  const toN = levelerDelay(want.leveler, fs);
+  const cross = () => {
+    rampGain(slot.peaksWet, 0, BASS_FADE, ctx);
+    rampGain(slot.peaksDry, 1, BASS_FADE, ctx);
+    rampLeveler(g, levelerTarget(want), BASS_FADE, ctx);
+    later(slot, BASS_FADE + 0.004, () => {
+      dipRemove(slot, ctx, slot.peaksDry, () => setPad(slot, 'peaksDry', slot.peaksDry, slot.preLim, 0, ctx), () => {
+        slot.appliedPeaks = false;
+        slot.appliedLeveler = want.leveler;
+        done();
+      });
+    });
+  };
+  if (toN > 0) {
+    dipRemove(slot, ctx, g.autoBalanceBypassGain, () => setPad(slot, 'bypass', g.autoBalanceBypassGain, g.levelerOut, toN, ctx), cross);
+  } else cross();
+}
+
+function limiterGain(g, slot, kind) {
+  if (kind === 'fast') return g.limiterFastGain;
+  if (kind === 'lookahead') return g.lookaheadGain;
+  return slot.tpGain;
+}
+
+function liveTruepeak(g, slot, want, ctx, done) {
+  const fs = ctx.sampleRate || 48000;
+  const from = slot.appliedLimiter || 'fast';
+  const to = want.truepeak ? 'truepeak' : want.limiter;
+  if (to === 'truepeak' && !ensureTruepeak(g, slot, ctx)) { done(); return; }
+  const fromN = limDelay(from, fs);
+  const toN = limDelay(to, fs);
+  const fromNode = limiterGain(g, slot, from);
+  const toNode = limiterGain(g, slot, to);
+  const padKey = to === 'truepeak' ? 'truepeak' : to === 'lookahead' ? 'lookahead' : 'fast';
+  const fromKey = from === 'truepeak' ? 'truepeak' : from === 'lookahead' ? 'lookahead' : 'fast';
+  const dest = g.limiterOut;
+  const cross = () => {
+    rampGain(fromNode, 0, BASS_FADE, ctx);
+    rampGain(toNode, 1, BASS_FADE, ctx);
+    later(slot, BASS_FADE + 0.004, () => {
+      if (slot.pad[fromKey]) setPad(slot, fromKey, fromNode, dest, 0, ctx);
+      if (slot.pad[padKey]) {
+        dipRemove(slot, ctx, toNode, () => setPad(slot, padKey, toNode, dest, 0, ctx), () => {
+          slot.appliedLimiter = to; done();
+        });
+      } else {
+        slot.appliedLimiter = to; done();
+      }
+    });
+  };
+  if (toN < fromN) {
+    setPad(slot, padKey, toNode, dest, fromN - toN, ctx);
+    cross();
+  } else if (fromN < toN) {
+    dipRemove(slot, ctx, fromNode, () => setPad(slot, fromKey, fromNode, dest, toN - fromN, ctx), () => {
+      rampGain(fromNode, 1, BASS_DIP_UP, ctx);
+      later(slot, BASS_DIP_UP + 0.004, cross);
+    });
+  } else cross();
+}
+
+function releaseBassRoom() {
+  clearLater(br);
+  for (const n of [br.unmud, br.centre, br.peaks, br.truepeak, br.roomDry, br.roomWet, br.peaksDry, br.peaksWet, br.tpGain, br.preLim]) dropNode(n);
+  for (const k of Object.keys(br.pad)) if (br.pad[k]) { try { br.pad[k].disconnect(); } catch (_) {} }
+  const timers = br.timers;
+  Object.assign(br, emptyBass());
+  br.timers = timers;
+  br.timers.length = 0;
+  unmudNode = centreNode = bassPeaksNode = truePeakNode = null;
+}
+
+function bassRoomProbe() {
+  const now = audioCtx && typeof audioCtx.currentTime === 'number' ? audioCtx.currentTime : 0;
+  const gv = (n) => n && n.gain ? heldGain(n.gain, now) : null;
+  const sum = (xs) => xs.reduce((a, b) => a + (b || 0), 0);
+  const leveler = [gv(autoBalanceWetGain), gv(autoBalanceBypassGain), gv(bandLevelerGain)];
+  const posts = [gv(br.peaksDry), gv(br.peaksWet)].filter((v) => v != null);
+  const lims = [gv(limiterFastGain), gv(lookaheadGain), gv(br.tpGain)].filter((v) => v != null);
+  const rooms = [gv(br.roomDry), gv(br.roomWet)].filter((v) => v != null);
+  return {
+    unmud: !!unmudNode, centre: !!centreNode, peaks: !!bassPeaksNode, truepeak: !!truePeakNode,
+    room: br.appliedRoom, peaksOn: br.appliedPeaks, limiter: br.appliedLimiter, leveler: br.appliedLeveler,
+    callbacks: br.callbacks, failed: { room: br.roomFailed, peaks: br.peaksFailed, truepeak: br.tpFailed },
+    delays: Object.keys(br.pad).filter((k) => br.pad[k]),
+    error: dynError,
+    gains: { roomDry: gv(br.roomDry), roomWet: gv(br.roomWet), peaksDry: gv(br.peaksDry), peaksWet: gv(br.peaksWet), tp: gv(br.tpGain), wet: gv(autoBalanceWetGain), bypass: gv(autoBalanceBypassGain), band: gv(bandLevelerGain), fast: gv(limiterFastGain), la: gv(lookaheadGain) },
+    sums: { leveler: sum(leveler), post: posts.length ? sum(posts) : null, limiter: sum(lims), room: rooms.length ? sum(rooms) : null }
+  };
+}
+
 function applyRoutingState({ immediate = false } = {}) {
   if (!audioCtx || audioCtx.state === 'closed') return;
   applyRoutingToGraph({
@@ -806,7 +1556,9 @@ function applyRoutingState({ immediate = false } = {}) {
     dspPathGain, directPassThroughGain, autoBalanceWetGain, autoBalanceBypassGain, bandLevelerGain, autoBalanceComp,
     matchWetGain, matchDryGain, lookaheadGain, limiterFastGain, ceilingWarmGain, ceilingCleanGain, pitchWetGain, pitchDryGain,
     bandLevelerNode, matchNode, lookaheadNode,
-    movieMode: currentMovieMode
+    highNode, hpfNode, volumeGain, levelerOut, masterLimiter, limiterOut,
+    movieMode: currentMovieMode,
+    makeDyn: dynMake, wired: true, live: !immediate, _br: br
   }, { immediate });
 }
 
@@ -848,11 +1600,23 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   set(g.directPassThroughGain, isBypass ? 1.0 : 0.0);
 
   // AUTO: off = the dry path; on = the 1.4.0 compressor ("Full band", or "Slow release" = the same with a 0.6 s
-  // release instead of 0.2 s) or the bass-only leveler.
-  const useBand = !isCompBypassed && dyn.leveler === 'bass';
-  set(g.autoBalanceWetGain, !isCompBypassed && !useBand ? 1.0 : 0.0);
-  set(g.autoBalanceBypassGain, isCompBypassed ? 1.0 : 0.0);
-  set(g.bandLevelerGain, useBand ? 1.0 : 0.0);
+  // release instead of 0.2 s) or the bass-only leveler. Bass peaks bypasses the compressor (linear fade below).
+  const slot = g._br || br;
+  const want = bassWant(g, slot);
+  const ownLeveler = !!(want.peaks || slot.appliedPeaks);
+  const ownLimiter = !!(want.truepeak || slot.appliedLimiter === 'truepeak');
+  const useBand = !isCompBypassed && !want.peaks && dyn.leveler === 'bass' && !!g.bandLevelerNode;
+  if (!(ownLeveler && !immediate)) {
+    if (want.peaks && !isCompBypassed) {
+      set(g.autoBalanceWetGain, 0.0);
+      set(g.autoBalanceBypassGain, 1.0);
+      set(g.bandLevelerGain, 0.0);
+    } else {
+      set(g.autoBalanceWetGain, !isCompBypassed && !useBand ? 1.0 : 0.0);
+      set(g.autoBalanceBypassGain, isCompBypassed || want.peaks ? 1.0 : 0.0);
+      set(g.bandLevelerGain, useBand ? 1.0 : 0.0);
+    }
+  }
   if (g.autoBalanceComp) {
     const release = dyn.leveler === 'slow' ? 0.6 : 0.2;
     if (g.autoBalanceComp.release.value !== release) g.autoBalanceComp.release.value = release;
@@ -861,8 +1625,15 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   // MATCH, LIM, CEIL: each a pair of gains, the 1.4.0 stage open by default.
   set(g.matchWetGain, dyn.match ? 1.0 : 0.0);
   set(g.matchDryGain, dyn.match ? 0.0 : 1.0);
-  set(g.lookaheadGain, dyn.limiter === 'lookahead' ? 1.0 : 0.0);
-  set(g.limiterFastGain, dyn.limiter === 'lookahead' ? 0.0 : 1.0);
+  if (!(ownLimiter && !immediate)) {
+    if (want.truepeak) {
+      set(g.lookaheadGain, 0.0);
+      set(g.limiterFastGain, 0.0);
+    } else {
+      set(g.lookaheadGain, want.limiter === 'lookahead' ? 1.0 : 0.0);
+      set(g.limiterFastGain, want.limiter === 'lookahead' ? 0.0 : 1.0);
+    }
+  }
   set(g.ceilingWarmGain, dyn.ceiling === 'warm' ? 1.0 : 0.0);
   set(g.ceilingCleanGain, dyn.ceiling === 'warm' ? 0.0 : 1.0);
 
@@ -872,6 +1643,7 @@ function applyRoutingToGraph(g, { immediate = false } = {}) {
   const pitchOpen = !g.movieMode && shifting && pitchTarget(!!g.movieMode) !== 0;
   set(g.pitchWetGain, pitchOpen ? 1.0 : 0.0);
   set(g.pitchDryGain, pitchOpen ? 0.0 : 1.0);
+  if (g.wired) commitBassRoom(g, { immediate });
 }
 
 // Re-route once the audio clock has passed the hold. A timer runs on the computer's clock and the audio clock lags it by
