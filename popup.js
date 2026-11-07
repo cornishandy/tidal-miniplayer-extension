@@ -36,7 +36,8 @@ const query = new URLSearchParams(window.location.search);
 const isUndocked = query.get('undocked') === 'true';
 const isPanel = query.get('panel') === '1';       // Chrome's side panel (Stay open)
 const isLongLived = isUndocked || isPanel;        // documents that survive clicks elsewhere
-if (isPanel) document.body.classList.add('panel');
+// Share the responsive panel layout with the fallback window; lifecycle flags stay distinct.
+if (isLongLived) document.body.classList.add('panel');
 
 const BANDS = ['hpf', 'bass', 'mid', 'high', 'comp', 'gain', 'pitch'];
 const THEMES = ['theme-cyan', 'theme-amber', 'theme-synthwave', 'theme-matrix', 'theme-oled'];
@@ -1362,6 +1363,12 @@ function renderBandTags() {
         : 'Loudness match is on: the music is kept as loud as the untouched tab. Click to switch it off.';
       return;
     }
+    if (band === 'comp') {
+      tag.title = off
+        ? 'Leveler is off (the selected mode is kept). Click to switch it back on.'
+        : 'Leveler is on. Click to switch it off without losing the selected mode.';
+      return;
+    }
     tag.title = off
       ? `${names[band]} is off (the value is kept). Click to switch it back on.`
       : `${names[band]} is on. Click to switch it off without losing the value.`;
@@ -1518,7 +1525,7 @@ sliderPitch.oninput = (e) => {
   sendAudioParamUpdate({ semitones: parseFloat(e.target.value) });
 };
 
-// − / + nudges; Shift-click = 5× finer
+// − / + nudges; only Pitch supports the 5× finer Shift-click on its native range step.
 document.querySelectorAll('.eq-nudge-btn').forEach(btn => {
   btn.onclick = (e) => {
     e.preventDefault();

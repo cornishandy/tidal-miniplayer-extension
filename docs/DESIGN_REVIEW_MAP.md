@@ -1,5 +1,7 @@
 # Design Review Map
 
+> Historical record: this document preserves dated release details, review decisions and test evidence. For current behavior and usage, see the [README](../README.md). Versions, paths and results below describe their original runs.
+
 The actual surfaces, controls and workflows, with review coverage. Updated as batches are answered. Decisions are recorded in [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md).
 
 Status key: ○ not reviewed · ◐ asked · ● decided · ✔ implemented and verified · ✖ removed

@@ -1,5 +1,7 @@
 # Review Ready: 2026-10-18 (1.5.6: Movie mode Pitch lock & status line; 1.5.5: Movie mode)
 
+> Historical record: this document preserves dated release details, review decisions and test evidence. For current behavior and usage, see the [README](README.md). Versions, paths and results below describe their original runs.
+
 ## Identity
 
 | | |
