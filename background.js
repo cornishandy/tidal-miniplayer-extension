@@ -7,6 +7,15 @@ const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
 const PAGE_SCRIPT_FILES = ['content.js'];
 const PAGE_WORLD_FILES = ['page-bridge.js']; // runs in Tidal's own page world (see the file); Tidal tabs only
 const isTidalUrl = (url) => { try { const h = new URL(url).hostname; return h === 'tidal.com' || h.endsWith('.tidal.com'); } catch (_) { return false; } };
+function isOtherMediaServiceUrl(url) {
+  try {
+    const hostname = new URL(url).hostname;
+    return ['youtube.com', 'spotify.com', 'soundcloud.com', 'music.apple.com', 'netflix.com']
+      .some(domain => hostname === domain || hostname.endsWith('.' + domain));
+  } catch (_) {
+    return false;
+  }
+}
 const reinjectedTabs = new Map(); // tabId -> how many times the page script was re-injected (diagnostics)
 let capturedTabId = null;
 
@@ -928,13 +937,7 @@ async function findMediaTabForPlayer() {
   if (audible) return audible;
 
   // 4. Any media streaming service tab
-  const media = allTabs.find(t => t.url && (
-    t.url.includes('youtube.com') ||
-    t.url.includes('spotify.com') ||
-    t.url.includes('soundcloud.com') ||
-    t.url.includes('music.apple.com') ||
-    t.url.includes('netflix.com')
-  ));
+  const media = allTabs.find(t => isOtherMediaServiceUrl(t.url));
   if (media) return media;
 
   // 5. Active web tab in current focused window
@@ -968,13 +971,7 @@ async function findAudioCaptureTab(preferredTabId = null) {
   if (anyTidal) return anyTidal;
 
   // 4. Other media streaming tabs (YouTube, Spotify, etc.)
-  const media = allTabs.find(t => t.url && (
-    t.url.includes('youtube.com') ||
-    t.url.includes('spotify.com') ||
-    t.url.includes('soundcloud.com') ||
-    t.url.includes('music.apple.com') ||
-    t.url.includes('netflix.com')
-  ));
+  const media = allTabs.find(t => isOtherMediaServiceUrl(t.url));
   if (media) return media;
 
   // 5. Active tab in normal window
