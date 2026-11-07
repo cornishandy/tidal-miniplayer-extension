@@ -376,7 +376,7 @@ let hintHideTimer = null;
 function fitUndockedWindow() {
   if (!isUndocked || !chrome.windows) return;
   const targetW = document.body.offsetWidth || 440;
-  const targetH = document.body.offsetHeight;
+  const targetH = document.querySelector('.popup-container').offsetHeight;
   chrome.windows.getCurrent((win) => {
     if (chrome.runtime.lastError || !win || win.type !== 'popup') return;
     const chromeW = Math.max(0, window.outerWidth - window.innerWidth);

@@ -50,7 +50,7 @@ Only rebuild `build/review-unpacked` when you intend to refresh the build Chrome
 
 `build/review-unpacked` is the review build and, since the cut-over of 2026-10-03 (decision R-24), the everyday extension too. Its path is permanent: an unpacked extension's ID, and with it its saved presets and settings, come from the folder path. Never move or rename it. Every promotion lands there; you click **Reload** on its card in `chrome://extensions`.
 
-- The card shows ID **`gponppchadgoilnlbogcdldbmpdoaeno`** and the current version (see REVIEW_READY).
+- The card shows ID **`gponppchadgoilnlbogcdldbmpdoaeno`** and the installed build’s version. The source version is in [manifest.json](manifest.json); rebuild and reload to use it.
 - If it ever has to be loaded again: `chrome://extensions`, **Developer mode** on, **Load unpacked**, choose `~/Documents/ChatGPT/tidal-miniplayer-extension/build/review-unpacked`; pin it (puzzle piece, then the pin); check **Alt+M** and **Alt+E** at `chrome://extensions/shortcuts`.
 - **Review in a separate profile** (optional): profile menu, **Add**, **Continue without an account**, name it *Extension Review*, and load the same folder there. Same ID, separate settings; sign in to Tidal there for Tidal features.
 
