@@ -1406,6 +1406,16 @@ function sendAudioParamUpdate(delta) {
   const editAtSend = noteSurfaceEdit();
   const gen = presetUiGen;
   currentParams = getParamsFromUI();
+  // Match mergeParamEdit before a Save can read these controls, even with the edit reply pending.
+  const patch = delta && typeof delta === 'object' && !Array.isArray(delta) ? delta : {};
+  const stages = patch.stageBypass;
+  const soundEdit = ['bass', 'hpf', 'mid', 'high', 'gain', 'semitones']
+    .some(key => typeof patch[key] === 'number' && Number.isFinite(patch[key]))
+    || typeof patch.autoBalance === 'boolean'
+    || (stages && typeof stages === 'object' && !Array.isArray(stages)
+      && ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch'].some(key => typeof stages[key] === 'boolean'));
+  if (typeof patch.bypass === 'boolean') currentParams.bypass = patch.bypass;
+  else if (soundEdit) currentParams.bypass = false;
   syncBandCutVisibility();
   chrome.runtime.sendMessage({ type: 'EDIT_PARAMS', params: delta, ...viewTag() }, (res) => {
     if (chrome.runtime.lastError) return;

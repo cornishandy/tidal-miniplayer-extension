@@ -95,7 +95,7 @@ function loadBackground() {
   };
   const boot = () => {
     const sandbox = {
-      console, Math, Number, Object, Array, Error, String, Boolean, Date, Promise, isFinite, Infinity, Map, Set,
+      console, Math, Number, Object, Array, Error, String, Boolean, Date, Promise, isFinite, Infinity, Map, Set, URL,
       setTimeout, clearTimeout, setInterval, clearInterval, chrome
     };
     vm.createContext(sandbox);
@@ -1961,3 +1961,80 @@ for (const [surface, search] of [['popup', ''], ['side panel', '?panel=1']]) {
     assert.equal(p.get('btn-next-preset').disabled, false);
   });
 }
+
+
+// BYP-01: edits must leave Flat's true bypass before any worker reply or Save.
+test('BYP-01: all sliders and band switches leave Flat bypass before immediate Save', async () => {
+  const actions = [
+    ...Object.entries({ bass: 20, hpf: 80, mid: 6, high: 6, gain: 1.5, pitch: 2 })
+      .map(([key, value]) => [key, p => p.slider(key, value)]),
+    ...['hpf', 'bass', 'mid', 'high', 'gain', 'pitch', 'comp']
+      .map(key => [key + ' switch', p => p.get('tag-' + key).onclick()])
+  ];
+  for (const [label, edit] of actions) {
+    const bg = loadBackground(); await bg.ready(); await bg.install(); bg.setOffscreen(true);
+    const p = openPopup(bg); await p.idle();
+    p.select('Flat (Bypass)'); await p.idle();
+    assert.equal(p.state().params.bypass, true);
+    p.held.add('EDIT_PARAMS');
+    edit(p);
+    assert.equal(p.state().params.bypass, false, label + ' local state');
+    p.save('Edited Flat'); // Deliberately do not await the EDIT_PARAMS reply.
+    await p.idle();
+    assert.equal(bg.local.presets['Edited Flat'].bypass, false, label + ' saved state');
+    const updates = bg.offscreenMsgs.filter(m => m.type === 'UPDATE_AUDIO_PARAMS');
+    assert.equal(updates.at(-1).params.bypass, false, label + ' engine');
+    p.releaseAll('EDIT_PARAMS'); await p.idle();
+  }
+});
+
+test('BYP-01: valid deltas clear bypass; invalid patches and explicit boolean bypass are preserved', async () => {
+  const bg = loadBackground(); await bg.ready();
+  const valid = [{ bass: 99 }, { hpf: 80 }, { mid: -6 }, { high: 6 }, { gain: 1.2 },
+    { semitones: 2 }, { autoBalance: false }, { stageBypass: { bass: false } }];
+  const invalid = [null, [], {}, { bass: '20' }, { gain: NaN }, { mid: Infinity },
+    { autoBalance: 1 }, { bypass: 'false' }, { stageBypass: {} },
+    { stageBypass: [] }, { stageBypass: { eq: true, unknown: true, bass: 1 } }, { unknown: 20 }];
+  const merge = patch => bg.sandbox.mergeParamEdit({ ...EQ, bypass: true }, patch);
+  for (const patch of valid) {
+    assert.equal(merge(patch).bypass, false);
+    for (const bypass of [true, false]) assert.equal(merge({ ...patch, bypass }).bypass, bypass);
+  }
+  for (const patch of invalid) assert.equal(merge(patch).bypass, true);
+  const p = openPopup(bg); await p.idle();
+  for (const patch of [...invalid, ...valid, { bass: 20, bypass: true }, { bypass: false }]) {
+    p.run('currentParams.bypass = true');
+    p.sandbox.auditPatch = patch;
+    p.run('sendAudioParamUpdate(auditPatch)');
+    assert.equal(p.state().params.bypass, merge(patch).bypass, 'popup/worker validation agrees');
+    await p.idle();
+  }
+});
+
+// TAB-01: exercise both finders and the shared forwarding consumer.
+test('TAB-01: deceptive URL text never outranks a genuine Tidal host', async () => {
+  const bg = loadBackground(); await bg.ready();
+  const real = { id: 2, url: 'https://listen.tidal.com/album/1', audible: true };
+  let tabs;
+  bg.chrome.tabs.query = async () => tabs;
+  const sent = [];
+  bg.chrome.tabs.sendMessage = (id, command, cb) => { sent.push({ id, command }); cb({ status: 'confirmed' }); };
+  for (const url of ['https://www.google.com/search?q=tidal.com', 'https://nottidal.com/',
+    'https://tidal.com.evil.example/', 'https://example.com/tidal.com', 'not a URL', undefined]) {
+    const fake = { id: 1, url, active: true, audible: true };
+    for (const audible of [true, false]) {
+      tabs = [{ ...fake, audible }, { ...real, audible }];
+      assert.equal((await bg.sandbox.findMediaTabForPlayer()).id, 2);
+      assert.equal((await bg.sandbox.findAudioCaptureTab()).id, 2);
+      for (const command of [{ type: 'TOGGLE_PLAY_PAUSE' }, { type: 'SEEK', time: 20 }, { type: 'GET_TRACK_INFO' }]) {
+        await bg.send({ type: 'FORWARD_PLAYER_COMMAND', command });
+        assert.equal(sent.at(-1).id, 2);
+      }
+    }
+  }
+  tabs = [{ id: 3, active: true, url: 'https://tidal.com/' }, real];
+  assert.equal((await bg.sandbox.findMediaTabForPlayer()).id, 3, 'active genuine host wins');
+  tabs = [{ id: 1, active: true, audible: true, url: 'https://example.com/' }];
+  assert.equal((await bg.sandbox.findMediaTabForPlayer()).id, 1, 'generic media fallback remains');
+  assert.equal((await bg.sandbox.findAudioCaptureTab(1)).id, 1, 'explicit capture remains');
+});

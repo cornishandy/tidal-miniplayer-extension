@@ -5,7 +5,8 @@
   if (window.__TIDAL_MINIPLAYER_INJECTED__) return;
   window.__TIDAL_MINIPLAYER_INJECTED__ = true;
 
-  const isTidal = window.location.hostname.includes('tidal.com');
+  const host = window.location.hostname;
+  const isTidal = host === 'tidal.com' || host.endsWith('.tidal.com');
   let currentTrackInfo = null;
 
   // The speed control went away in 1.4.0 (pitch is shifted in the DSP graph now). A Tidal tab left at
