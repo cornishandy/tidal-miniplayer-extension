@@ -41,14 +41,15 @@ class PhysicsView {
   // Which bands are off. Accepts the legacy `eq` flag (whole 3-band EQ) from older saved presets.
   bypassOf(p = this.params) {
     const b = p.stageBypass || {};
+    const all = p.bypass === true;
     return {
-      hpf: !!b.hpf,
-      bass: !!(b.bass || b.eq),
-      mid: !!(b.mid || b.eq),
-      high: !!(b.high || b.eq),
-      comp: !p.autoBalance || !!b.comp,
-      gain: !!b.gain,
-      pitch: !!(b.pitch || b.speed)
+      hpf: all || !!b.hpf,
+      bass: all || !!(b.bass || b.eq),
+      mid: all || !!(b.mid || b.eq),
+      high: all || !!(b.high || b.eq),
+      comp: all || !p.autoBalance || !!b.comp,
+      gain: all || !!b.gain,
+      pitch: all || !!(b.pitch || b.speed)
     };
   }
 

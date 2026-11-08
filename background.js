@@ -7,6 +7,15 @@ const FALLBACK_WINDOW_URL = 'popup.html?undocked=true';
 const PAGE_SCRIPT_FILES = ['content.js'];
 const PAGE_WORLD_FILES = ['page-bridge.js']; // runs in Tidal's own page world (see the file); Tidal tabs only
 const isTidalUrl = (url) => { try { const h = new URL(url).hostname; return h === 'tidal.com' || h.endsWith('.tidal.com'); } catch (_) { return false; } };
+function isOtherMediaServiceUrl(url) {
+  try {
+    const hostname = new URL(url).hostname;
+    return ['youtube.com', 'spotify.com', 'soundcloud.com', 'music.apple.com', 'netflix.com']
+      .some(domain => hostname === domain || hostname.endsWith('.' + domain));
+  } catch (_) {
+    return false;
+  }
+}
 const reinjectedTabs = new Map(); // tabId -> how many times the page script was re-injected (diagnostics)
 let capturedTabId = null;
 
@@ -319,21 +328,30 @@ function mergeParamEdit(stored, delta) {
   }
   const patch = delta && typeof delta === 'object' && !Array.isArray(delta) ? delta : {};
   const ranges = { bass: [0, 56], hpf: [20, 200], mid: [-24, 24], high: [-24, 24], gain: [0.5, 2.5], semitones: [-12, 12] };
+  let soundEdit = false;
   for (const [key, [min, max]] of Object.entries(ranges)) {
     if (typeof patch[key] === 'number' && Number.isFinite(patch[key])) {
       merged[key] = Math.min(max, Math.max(min, patch[key]));
+      soundEdit = true;
     }
   }
-  for (const key of ['autoBalance', 'bypass']) {
-    if (typeof patch[key] === 'boolean') merged[key] = patch[key];
+  if (typeof patch.autoBalance === 'boolean') {
+    merged.autoBalance = patch.autoBalance;
+    soundEdit = true;
   }
   if (patch.stageBypass && typeof patch.stageBypass === 'object' && !Array.isArray(patch.stageBypass)) {
     const stages = { ...(merged.stageBypass || {}) };
     for (const key of ['hpf', 'bass', 'mid', 'high', 'gain', 'pitch']) {
-      if (typeof patch.stageBypass[key] === 'boolean') stages[key] = patch.stageBypass[key];
+      if (typeof patch.stageBypass[key] === 'boolean') {
+        stages[key] = patch.stageBypass[key];
+        soundEdit = true;
+      }
     }
     merged.stageBypass = stages;
   }
+  // A valid sound edit leaves Flat's master bypass; an explicit switch wins.
+  if (typeof patch.bypass === 'boolean') merged.bypass = patch.bypass;
+  else if (soundEdit) merged.bypass = false;
   return merged;
 }
 
@@ -899,13 +917,13 @@ async function findMediaTabForPlayer() {
   if (!allTabs || allTabs.length === 0) return null;
 
   // 1. Any Tidal tab: first active/audible, then any open Tidal tab
-  const activeTidal = allTabs.find(t => t.active && t.url && t.url.includes('tidal.com'));
+  const activeTidal = allTabs.find(t => t.active && isTidalUrl(t.url));
   if (activeTidal) return activeTidal;
 
-  const audibleTidal = allTabs.find(t => t.audible && t.url && t.url.includes('tidal.com'));
+  const audibleTidal = allTabs.find(t => t.audible && isTidalUrl(t.url));
   if (audibleTidal) return audibleTidal;
 
-  const anyTidal = allTabs.find(t => t.url && t.url.includes('tidal.com'));
+  const anyTidal = allTabs.find(t => isTidalUrl(t.url));
   if (anyTidal) return anyTidal;
 
   // 2. Currently captured tab (if active capture)
@@ -919,13 +937,7 @@ async function findMediaTabForPlayer() {
   if (audible) return audible;
 
   // 4. Any media streaming service tab
-  const media = allTabs.find(t => t.url && (
-    t.url.includes('youtube.com') ||
-    t.url.includes('spotify.com') ||
-    t.url.includes('soundcloud.com') ||
-    t.url.includes('music.apple.com') ||
-    t.url.includes('netflix.com')
-  ));
+  const media = allTabs.find(t => isOtherMediaServiceUrl(t.url));
   if (media) return media;
 
   // 5. Active web tab in current focused window
@@ -947,7 +959,7 @@ async function findAudioCaptureTab(preferredTabId = null) {
   }
 
   // 1. Audible Tidal tab
-  const audibleTidal = allTabs.find(t => t.audible && t.url && t.url.includes('tidal.com'));
+  const audibleTidal = allTabs.find(t => t.audible && isTidalUrl(t.url));
   if (audibleTidal) return audibleTidal;
 
   // 2. Any currently audible tab across all windows
@@ -955,17 +967,11 @@ async function findAudioCaptureTab(preferredTabId = null) {
   if (audible) return audible;
 
   // 3. Any open Tidal tab (even if paused right now)
-  const anyTidal = allTabs.find(t => t.url && t.url.includes('tidal.com'));
+  const anyTidal = allTabs.find(t => isTidalUrl(t.url));
   if (anyTidal) return anyTidal;
 
   // 4. Other media streaming tabs (YouTube, Spotify, etc.)
-  const media = allTabs.find(t => t.url && (
-    t.url.includes('youtube.com') ||
-    t.url.includes('spotify.com') ||
-    t.url.includes('soundcloud.com') ||
-    t.url.includes('music.apple.com') ||
-    t.url.includes('netflix.com')
-  ));
+  const media = allTabs.find(t => isOtherMediaServiceUrl(t.url));
   if (media) return media;
 
   // 5. Active tab in normal window

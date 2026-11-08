@@ -224,7 +224,8 @@ button {
 }
 
 .progress {
-  flex: 0 0 100%;
+  /* Include the negative side margins so the outer size fills its own flex row. */
+  flex: 0 0 calc(100% + 24px);
   height: 2px;
   background: #2a2a35;
   margin: 5px -12px -5px;
