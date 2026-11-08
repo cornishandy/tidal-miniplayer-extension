@@ -174,8 +174,8 @@ test('screen: progress starts after 400 ms only, then confirmed playback clears 
 test('screen: all exhausted routes show the exact approved text', () => {
   for (const [reason, text] of [
     ['seek', "This page isn't allowing seeking right now"],
-    ['helper', 'Reload the Tidal tab once, then try again'],
-    ['next', "Tidal didn't move to the next track"]
+    ['helper', 'Reload the tab once, then try again'],
+    ['next', "The page didn't move to the next track"]
   ]) {
     const p = screen();
     p.run('handleJump(30)');
@@ -191,17 +191,17 @@ test('screen: missing, failed, malformed, runtime-error and never-returning repl
     const p = screen();
     p.run('handleJump(30)');
     p.reply(res);
-    assert.equal(p.hint.textContent, "The Tidal tab isn't reachable. Open it and try again");
+    assert.equal(p.hint.textContent, "Can't reach the tab. Reload it and try again");
     assert.equal(p.run('currentTrackInfo.currentTime'), 5);
   }
   const p = screen();
   p.run('handleJump(30)');
   p.reply(confirmed, { message: 'Port closed' });
-  assert.equal(p.hint.textContent, "The Tidal tab isn't reachable. Open it and try again");
+  assert.equal(p.hint.textContent, "Can't reach the tab. Reload it and try again");
   const q = screen();
   q.run('handleJump(30)');
   await q.time.advance(10000);
-  assert.equal(q.hint.textContent, "The Tidal tab isn't reachable. Open it and try again");
+  assert.equal(q.hint.textContent, "Can't reach the tab. Reload it and try again");
   q.reply(confirmed);
   assert.equal(q.run('currentTrackInfo.currentTime'), 5);
 });
@@ -210,16 +210,16 @@ test('screen: held repeats explain the wait without a second command; start and 
   const p = screen();
   p.run('currentTrackInfo.currentTime = 45; handleJump(30); handleJump(30)');
   assert.equal(p.calls.length, 1);
-  assert.equal(p.hint.textContent, 'Waiting for the next track');
+  assert.equal(p.hint.textContent, 'Waiting for the track to change');
   await p.time.advance(500);
-  assert.equal(p.hint.textContent, 'Waiting for the next track');
+  assert.equal(p.hint.textContent, 'Waiting for the track to change');
   p.reply({ status: 'confirmed', success: true, next: 'button', title: 'Second', currentTime: 0, duration: 60 });
   assert.equal(p.hint.hidden, true);
   p.run('handleJump(-15)');
   assert.equal(p.hint.textContent, 'Already at the start');
   assert.equal(p.calls.length, 1);
   p.run('currentTrackInfo.duration = 0; handleJump(30)');
-  assert.equal(p.hint.textContent, 'Reload the Tidal tab once, then try again');
+  assert.equal(p.hint.textContent, 'Reload the tab once, then try again');
   assert.equal(p.calls.length, 1);
 });
 
@@ -358,4 +358,91 @@ test('S1: repeated identical hints each keep their full lifetime and a persisten
   assert.equal(p.hint.hidden, false);
   p.run('showHint("")');
   assert.equal(p.hint.hidden, true);
+});
+
+test('Fable 1.5.12 #1: whole-second playing reads cannot confirm a refused backward jump from 1 s', async () => {
+  const p = transport({ routes: { bar: () => true } });
+  p.state.isPlaying = true;
+  let samples = 0;
+  p.ctx.getTrackInfo = () => {
+    if (p.time.now() > 0) samples++;
+    return { ...p.state, currentTime: Math.floor(1 + p.time.now() / 1000) };
+  };
+  const result = p.run('seekAudio(0)');
+  await p.time.advance(1200);
+  assert.equal((await result).status, 'exhausted');
+  assert.equal(samples, 6);
+  assert.deepEqual(p.calls, ['bar', 'session', 'element']);
+});
+
+test('Fable 1.5.12 #1: actual backward movement still confirms with whole-second and precise reads', async () => {
+  for (const from of [0.2, 1.3, 15.2]) {
+    for (const rounded of [false, true]) {
+      if (rounded && from < 1) continue;
+      let base = from, at = 0;
+      const p = transport({ routes: { bar: (_s, target) => { base = target; at = p.time.now(); return true; } } });
+      p.state.isPlaying = true;
+      p.ctx.getTrackInfo = () => {
+        const position = base + (p.time.now() - at) / 1000;
+        return { ...p.state, currentTime: rounded ? Math.floor(position) : position };
+      };
+      const result = p.run(`seekAudio(${Math.max(0, Math.floor(from) - 15)})`);
+      await p.time.advance(1200);
+      assert.equal((await result).status, 'confirmed', `${from}, rounded=${rounded}`);
+      assert.deepEqual(p.calls, ['bar']);
+    }
+  }
+});
+
+test('Fable 1.5.12 #2: helper, unreachable and Next hints work on non-Tidal tabs', () => {
+  for (const [action, response, expected] of [
+    ['currentTrackInfo.duration = 0; handleJump(30)', null, 'Reload the tab once, then try again'],
+    ['handleJump(30)', { success: false }, "Can't reach the tab. Reload it and try again"],
+    ['handleNext()', { status: 'exhausted', reason: 'next' }, "The page didn't move to the next track"]
+  ]) {
+    const p = screen();
+    p.run("currentTrackInfo.artist = '127.0.0.1'; " + action);
+    if (response) p.reply(response);
+    assert.equal(p.hint.textContent, expected);
+    assert.doesNotMatch(p.hint.textContent, /Tidal/);
+    assert.equal(p.run('currentTrackInfo.currentTime'), 5);
+  }
+});
+
+test('Fable 1.5.12 #3: only a missing media tab asks to open one; failed re-injection asks to reload', () => {
+  for (const [error, expected] of [
+    ['No media tab found', 'No media tab found. Open one and try again'],
+    ['Could not establish connection. Receiving end does not exist.', "Can't reach the tab. Reload it and try again"]
+  ]) {
+    const p = screen();
+    p.run('handleJump(30)');
+    p.reply({ success: false, error });
+    assert.equal(p.hint.textContent, expected);
+    assert.equal(p.run('currentTrackInfo.currentTime'), 5);
+  }
+});
+
+test('Fable 1.5.12 #4: Previous holds a jump with direction-neutral wording', async () => {
+  const p = screen();
+  p.run('handlePrev(); handleJump(30)');
+  assert.equal(p.calls.length, 1);
+  assert.equal(p.calls[0].m.command.type, 'PREV_TRACK');
+  assert.equal(p.hint.textContent, 'Waiting for the track to change');
+  await p.time.advance(2000);
+  p.run('handleJump(30)');
+  assert.equal(p.calls.length, 2);
+  assert.equal(p.calls[1].m.command.type, 'SEEK_AUDIO');
+});
+
+test('Fable 1.5.12 #5: confirmed same-title Next releases the hold immediately', () => {
+  const p = screen();
+  p.run('handleNext()');
+  p.reply({ status: 'confirmed', success: true, next: 'button', title: 'First', currentTime: 0, duration: 60 });
+  p.run('handleJump(30)');
+  assert.equal(p.calls.length, 2);
+  assert.equal(p.calls[1].m.command.type, 'SEEK_AUDIO');
+  assert.equal(p.calls[1].m.command.time, 30);
+  assert.equal(p.hint.hidden, true);
+  p.reply(confirmed);
+  assert.equal(p.run('currentTrackInfo.currentTime'), 35);
 });
